@@ -1,0 +1,41 @@
+From 34bf744728f7034ddb149ac167d4fe0d96d12b5a Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Wed, 23 Oct 2024 12:46:59 +0530
+Subject: [PATCH 3/5] Upstream: wifi: ath12k: fix the skb allocation size for rx path
+
+Currently, skb allocated for the RX path is 2048 + 128 bytes. However,
+the additional 128-byte alignment is unnecessary since 2048 bytes is already
+aligned to 128 bytes and RXDMA buffer ring expects 2048 bytes only.
+Therefore, remove the extra 128 bytes from the allocation size to ensure
+it meets the requirements for the recycler slab and unwanted memory
+usage.
+
+Patch-dependency: None
+
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index aefa85a..d33f220 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -295,12 +295,9 @@ void ath12k_dp_rx_bufs_replenish(struct ath12k_base *ab,
+ 
+ 	while (num_remain > 0) {
+ #ifdef CPTCFG_MAC80211_SFE_SUPPORT
+-		skb = netdev_alloc_skb_fast(NULL,
+-					    DP_RX_BUFFER_SIZE +\
+-					    DP_RX_BUFFER_ALIGN_SIZE);
++		skb = netdev_alloc_skb_fast(NULL, DP_RX_BUFFER_SIZE);
+ #else
+-		skb = dev_alloc_skb(DP_RX_BUFFER_SIZE +
+-				    DP_RX_BUFFER_ALIGN_SIZE);
++		skb = dev_alloc_skb(DP_RX_BUFFER_SIZE);
+ #endif
+ 		if (unlikely(!skb))
+ 			break;
+-- 
+2.34.1
+

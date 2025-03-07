@@ -1,0 +1,122 @@
+From 5197341341b1a9de100c63002605e331fc54043c Mon Sep 17 00:00:00 2001
+From: Rathees Kumar R Chinannan <quic_rrchinan@quicinc.com>
+Date: Mon, 9 Sep 2024 12:44:35 +0530
+Subject: [PATCH] wifi: nl80211: Add NL80211 attributes for multi MBSSID group
+ configuration
+
+Add NL80211 attributes to support multi MBSSID group configuration
+in AP mode.
+
+- NL80211_MBSSID_CONFIG_ATTR_MAX_MBSSID_GROUPS Used to advertise
+the maximum mbssid groups supported by the driver.
+- NL80211_MBSSID_CONFIG_ATTR_MAX_BEACON_SIZE: Used to advertise
+the maximum beacon size supported by the driver
+
+On multi MBSSID group mode, driver should advertise maximum
+allowed MBSSID groups and max beacon size. These data can be used by
+application to determine the number of vaps allowed per MBSSID group
+and check the feasibility of adding all non-TX VAPs of that group on
+MBSSID element while generating beacon.
+
+Patch-dependency: none
+
+Signed-off-by: Rathees Kumar R Chinannan <quic_rrchinan@quicinc.com>
+---
+ include/net/cfg80211.h       | 11 +++++++++++
+ include/uapi/linux/nl80211.h | 12 ++++++++++++
+ net/wireless/nl80211.c       | 13 +++++++++++++
+ 3 files changed, 36 insertions(+)
+
+diff --git a/include/net/cfg80211.h b/include/net/cfg80211.h
+index 11286f7..b1d1f19 100644
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -5906,6 +5906,14 @@ struct ieee80211_chans_per_hw {
+  *     for each of the underlying hw.
+  * @num_hw: number of underlying hw for which the channels list are advertised
+  *     in @hw_chans.
++ *
++ * @mbssid_max_ngroups: maximum number of MBSSID groups supported by the
++ *	driver in a multi MBSSID group mode. This field must be set to a
++ *	non-zero value by the driver to advertise the maximum allowed MBSSID
++ *	groups.
++ * @max_beacon_size: maximum size of the beacon frame supported by the
++ *	driver. This field must be set to a non-zero value by the driver to
++ *	advertise the maximum allowed size for beacon frame.
+  */
+ struct wiphy {
+ 	struct mutex mtx;
+@@ -6061,6 +6069,9 @@ struct wiphy {
+ 	struct ieee80211_chans_per_hw **hw_chans;
+ 	int num_hw;
+ 
++	u8 mbssid_max_ngroups;
++	u16 max_beacon_size;
++
+ 	char priv[] __aligned(NETDEV_ALIGN);
+ };
+ 
+diff --git a/include/uapi/linux/nl80211.h b/include/uapi/linux/nl80211.h
+index 021f57a..3c7b45a 100644
+--- a/include/uapi/linux/nl80211.h
++++ b/include/uapi/linux/nl80211.h
+@@ -8089,6 +8089,16 @@ enum nl80211_sar_specs_attrs {
+  * 	is an MLD. The link id must be valid in the wdev of given Transmitting interface
+  * 	index.
+  *
++ * @NL80211_MBSSID_CONFIG_ATTR_MAX_MBSSID_GROUPS: Used by the kernel
++ *	to advertise the maximum mbssid groups (u8) supported by the driver.
++ *	Driver should indicate this to the userspace
++ *	by setting wiphy->mbssid_max_ngroups to a non-zero value.
++ *
++ * @NL80211_MBSSID_CONFIG_ATTR_MAX_BEACON_SIZE: Used by the kernel
++ *	to advertise the maximum beacon size (u16) supported by the driver.
++ *	Driver should indicate this to the userspace
++ *	by setting wiphy->max_beacon_size to a non-zero value.
++ *
+  * @__NL80211_MBSSID_CONFIG_ATTR_LAST: Internal
+  * @NL80211_MBSSID_CONFIG_ATTR_MAX: highest attribute
+  */
+@@ -8101,6 +8111,8 @@ enum nl80211_mbssid_config_attributes {
+ 	NL80211_MBSSID_CONFIG_ATTR_TX_IFINDEX,
+ 	NL80211_MBSSID_CONFIG_ATTR_EMA,
+ 	NL80211_MBSSID_CONFIG_ATTR_TX_LINK_ID,
++	NL80211_MBSSID_CONFIG_ATTR_MAX_MBSSID_GROUPS,
++	NL80211_MBSSID_CONFIG_ATTR_MAX_BEACON_SIZE,
+ 
+ 	/* keep last */
+ 	__NL80211_MBSSID_CONFIG_ATTR_LAST,
+diff --git a/net/wireless/nl80211.c b/net/wireless/nl80211.c
+index 15bb85d..944d11e 100644
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -477,6 +477,8 @@ nl80211_mbssid_config_policy[NL80211_MBSSID_CONFIG_ATTR_MAX + 1] = {
+ 	[NL80211_MBSSID_CONFIG_ATTR_EMA] = { .type = NLA_FLAG },
+ 	[NL80211_MBSSID_CONFIG_ATTR_TX_LINK_ID] = NLA_POLICY_RANGE(NLA_U8, 0,
+ 							IEEE80211_MLD_MAX_NUM_LINKS),
++	[NL80211_MBSSID_CONFIG_ATTR_MAX_MBSSID_GROUPS] = { .type = NLA_U8 },
++	[NL80211_MBSSID_CONFIG_ATTR_MAX_BEACON_SIZE] = { .type = NLA_U16 },
+ };
+ 
+ static const struct nla_policy
+@@ -2519,6 +2521,17 @@ static int nl80211_put_mbssid_support(struct wiphy *wiphy, struct sk_buff *msg)
+ 		       wiphy->ema_max_profile_periodicity))
+ 		goto fail;
+ 
++	if (wiphy->mbssid_max_ngroups &&
++	    nla_put_u8(msg,
++		       NL80211_MBSSID_CONFIG_ATTR_MAX_MBSSID_GROUPS,
++		       wiphy->mbssid_max_ngroups))
++		goto fail;
++
++	if (wiphy->max_beacon_size &&
++	    nla_put_u16(msg,
++			NL80211_MBSSID_CONFIG_ATTR_MAX_BEACON_SIZE,
++			wiphy->max_beacon_size))
++		goto fail;
+ 	nla_nest_end(msg, config);
+ 	return 0;
+ 
+-- 
+2.34.1
+

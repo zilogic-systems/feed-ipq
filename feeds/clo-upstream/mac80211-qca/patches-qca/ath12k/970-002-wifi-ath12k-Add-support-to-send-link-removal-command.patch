@@ -1,0 +1,163 @@
+From c0fcb172f7b0c0050a7e224a445a97418e7361c9 Mon Sep 17 00:00:00 2001
+From: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+Date: Fri, 9 Aug 2024 15:16:51 +0530
+Subject: [PATCH 2/4] wifi: ath12k: Add support to send link removal command to
+ firmware
+
+For supporting ML reconfigure, new WMI command WMI_MLO_LINK_REMOVAL_CMDID is
+required to pass reconfigure ML element and the AP removal timer from driver to
+firmware.
+
+Add the handling for sending this WMI command, also add new mac80211 ops to
+receive event from the kernel.
+
+Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 29 +++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.c | 40 +++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.h | 12 ++++++++
+ 3 files changed, 81 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 1bbf14b..dd8cd2c 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -17913,6 +17913,34 @@ exit:
+ 	return ret;
+ }
+ 
++static int ath12k_mac_op_link_reconfig_remove(struct ieee80211_hw *hw,
++					      struct ieee80211_vif *vif,
++					      const struct cfg80211_link_reconfig_removal_params *params)
++{
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
++	struct ath12k_link_vif *arvif;
++	struct ath12k *ar;
++	int ret = -EINVAL;
++
++	mutex_lock(&ah->conf_mutex);
++	arvif = ahvif->link[params->link_id];
++	if (!arvif)
++		goto exit;
++
++	ar = arvif->ar;
++
++	mutex_lock(&ar->conf_mutex);
++	ret = ath12k_wmi_mlo_reconfig_link_removal(ar, arvif->vdev_id,
++						   params->reconfigure_elem,
++						   params->elem_len);
++	mutex_unlock(&ar->conf_mutex);
++
++exit:
++	mutex_unlock(&ah->conf_mutex);
++	return ret;
++}
++
+ static const struct ieee80211_ops ath12k_ops = {
+ 	.tx				= ath12k_mac_op_tx,
+ 	.wake_tx_queue			= ieee80211_handle_wake_tx_queue,
+@@ -17963,6 +17991,7 @@ static const struct ieee80211_ops ath12k_ops = {
+ 	.cancel_remain_on_channel       = ath12k_mac_op_cancel_remain_on_channel,
+ 	.get_txpower			= ath12k_mac_op_get_txpower,
+ 	.set_radar_background		= ath12k_mac_op_set_radar_background,
++	.link_reconfig_remove		= ath12k_mac_op_link_reconfig_remove,
+ };
+ 
+ static void ath12k_mac_update_ch_list(struct ath12k *ar,
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
+index cdb0b40..6f5541a 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -16216,6 +16216,46 @@ int ath12k_wmi_mlo_teardown(struct ath12k *ar, bool umac_reset)
+ 	return ret;
+ }
+ 
++int ath12k_wmi_mlo_reconfig_link_removal(struct ath12k *ar, u32 vdev_id,
++					 u8 *reconfig_ml_ie,
++					 size_t reconfig_ml_ie_len)
++{
++	struct ath12k_wmi_pdev *wmi = ar->wmi;
++	struct wmi_mlo_link_removal_cmd_fixed_param *cmd;
++	struct wmi_tlv *reconfig_ie_tlv;
++	struct sk_buff *skb;
++	int ret, len;
++	u32 reconfig_ie_len_aligned = roundup(reconfig_ml_ie_len,
++					      sizeof(u32));
++	void *ptr;
++
++	len = TLV_HDR_SIZE + sizeof(*cmd) + reconfig_ie_len_aligned;
++	skb = ath12k_wmi_alloc_skb(wmi->wmi_ab, len);
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (struct wmi_mlo_link_removal_cmd_fixed_param *)skb->data;
++	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_MLO_LINK_REMOVAL_CMD_FIXED_PARAM,
++						 sizeof(*cmd));
++	cmd->vdev_id = cpu_to_le32(vdev_id);
++	cmd->reconfig_ml_ie_num_bytes_valid = cpu_to_le32(reconfig_ml_ie_len);
++
++	ptr = skb->data + sizeof(*cmd);
++
++	reconfig_ie_tlv = ptr;
++	reconfig_ie_tlv->header = ath12k_wmi_tlv_hdr(WMI_TAG_ARRAY_BYTE,
++						     reconfig_ie_len_aligned);
++	memcpy(reconfig_ie_tlv->value, reconfig_ml_ie, reconfig_ml_ie_len);
++
++	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_MLO_LINK_REMOVAL_CMDID);
++	if (ret) {
++		ath12k_warn(ar->ab, "failed to send WMI_MLO_LINK_REMOVAL_CMDID");
++		dev_kfree_skb(skb);
++	}
++
++	return ret;
++}
++
+ bool ath12k_wmi_is_mvr_supported(struct ath12k_base *ab)
+ {
+ 	struct ath12k_wmi_base *wmi_ab = &ab->wmi_ab;
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
+index a2bfacc..2345e13 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -852,6 +852,8 @@ enum wmi_tlv_cmd_id {
+ 	WMI_MLO_READY_CMDID,
+ 	WMI_MLO_TEARDOWN_CMDID,
+ 	WMI_MLO_PEER_TID_TO_LINK_MAP_CMDID,
++	/* WMI cmd for dynamically deleting a link from a MLD VAP */
++	WMI_MLO_LINK_REMOVAL_CMDID,
+ 	/** Service Aware WiFi (SAWF) **/
+ 	/** configure or reconfigure the parameters for a service class **/
+ 	WMI_SAWF_SERVICE_CLASS_CFG_CMDID = WMI_TLV_CMD(WMI_GRP_SAWF),
+@@ -2240,6 +2242,7 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_CTRL_PATH_CMD_FIXED_PARAM = 0x442,
+ 	WMI_TAG_CTRL_PATH_EVENT_FIXED_PARAM,
+ 	WMI_TAG_PRB_RESP_TMPL_ML_INFO_CMD = 0x460,
++	WMI_TAG_MLO_LINK_REMOVAL_CMD_FIXED_PARAM = 0x464,
+ 	WMI_TAG_PDEV_DFS_RADAR_FLAGS = 0x4b4,
+ 	WMI_TAG_MAX
+ };
+@@ -8772,6 +8775,12 @@ struct wmi_afc_cmd_fixed_param {
+ } __packed;
+ #define ATH12K_FW_STATS_BUF_SIZE (1024 * 1024)
+ 
++struct wmi_mlo_link_removal_cmd_fixed_param {
++	__le32 tlv_header;
++	__le32 vdev_id;
++	__le32 reconfig_ml_ie_num_bytes_valid;
++}__packed;
++
+ void ath12k_wmi_init_qcn9274(struct ath12k_base *ab,
+ 			     struct ath12k_wmi_resource_config_arg *config);
+ void ath12k_wmi_init_wcn7850(struct ath12k_base *ab,
+@@ -8988,4 +8997,7 @@ int ath12k_wmi_config_peer_ppeds_routing(struct ath12k *ar,
+ void ath12k_wmi_peer_chan_width_switch_work(struct work_struct *work);
+ int ath12k_wmi_set_latency(struct ath12k *ar, struct ath12k_latency_params *params);
+ int ath12k_wmi_pdev_get_ani_level(struct ath12k *ar, u32 param_id, u8 pdev_id);
++int ath12k_wmi_mlo_reconfig_link_removal(struct ath12k *ar, u32 vdev_id,
++					 u8 *reconfig_ml_ie,
++					 size_t reconfig_ml_ie_len);
+ #endif
+-- 
+2.34.1
+

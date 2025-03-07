@@ -1,0 +1,95 @@
+From 178e9d6adc4356c2f1659f575ecea626e7fbd05a Mon Sep 17 00:00:00 2001
+From: Johannes Berg <johannes.berg@intel.com>
+Date: Mon, 29 Jan 2024 19:57:30 +0100
+Subject: [PATCH] wifi: mac80211: fix unsolicited broadcast probe config
+
+There's a bug in ieee80211_set_unsol_bcast_probe_resp(), it tries
+to return BSS_CHANGED_UNSOL_BCAST_PROBE_RESP (which has the value
+1<<31) in an int, which makes it negative and considered an error.
+Fix this by passing the changed flags to set separately.
+
+Fixes: 3b1c256eb4ae ("wifi: mac80211: fixes in FILS discovery updates")
+Reviewed-by: Jeff Johnson <quic_jjohnson@quicinc.com>
+Link: https://msgid.link/20240129195729.965b0740bf80.I6bc6f5236863f686c17d689be541b1dd2633c417@changeid
+Signed-off-by: Johannes Berg <johannes.berg@intel.com>
+---
+ net/mac80211/cfg.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -5,7 +5,7 @@
+  * Copyright 2006-2010	Johannes Berg <johannes@sipsolutions.net>
+  * Copyright 2013-2015  Intel Mobile Communications GmbH
+  * Copyright (C) 2015-2017 Intel Deutschland GmbH
+- * Copyright (C) 2018-2022 Intel Corporation
++ * Copyright (C) 2018-2024 Intel Corporation
+  */
+ 
+ #include <linux/ieee80211.h>
+@@ -1129,7 +1129,8 @@ static int
+ ieee80211_set_unsol_bcast_probe_resp(struct ieee80211_sub_if_data *sdata,
+ 				     struct cfg80211_unsol_bcast_probe_resp *params,
+ 				     struct ieee80211_link_data *link,
+-				     struct ieee80211_bss_conf *link_conf)
++				     struct ieee80211_bss_conf *link_conf,
++				     u64 *changed)
+ {
+ 	struct unsol_bcast_probe_resp_data *new, *old = NULL;
+ 
+@@ -1156,6 +1157,7 @@ notify_ubpr:
+ 
+ 	link_conf->unsol_bcast_probe_resp_interval = params->interval;
+ 
++	*changed |= BSS_CHANGED_UNSOL_BCAST_PROBE_RESP;
+ 	return 0;
+ }
+ 
+@@ -1713,10 +1715,9 @@ static int ieee80211_start_ap(struct wip
+ 
+ 	err = ieee80211_set_unsol_bcast_probe_resp(sdata,
+ 						   &params->unsol_bcast_probe_resp,
+-						   link, link_conf);
++						   link, link_conf, &changed);
+ 	if (err < 0)
+ 		goto error;
+-	changed |= BSS_CHANGED_UNSOL_BCAST_PROBE_RESP;
+ 
+ 	ieee80211_set_critical_update(sdata, link_id, &params->beacon.cu_params, true);
+ 	err = drv_start_ap(sdata->local, sdata, link_conf);
+@@ -1823,10 +1824,9 @@ static int ieee80211_update_ap(struct wi
+ 
+ 	err = ieee80211_set_unsol_bcast_probe_resp(sdata,
+ 						   &params->unsol_bcast_probe_resp,
+-						   link, link_conf);
++						   link, link_conf, &changed);
+ 	if (err < 0)
+ 		return err;
+-	changed |= BSS_CHANGED_UNSOL_BCAST_PROBE_RESP;
+ 
+ 	ieee80211_set_critical_update(sdata, link->link_id,
+ 				      &params->beacon.cu_params, true);
+@@ -4592,10 +4592,9 @@ __ieee80211_channel_switch(struct wiphy
+ 	ch_switch.count = params->count;
+ 
+ 	err = ieee80211_set_unsol_bcast_probe_resp(sdata, &params->unsol_bcast_probe_resp,
+-						   link, link_conf);
++						   link, link_conf, &changed);
+ 	if (err)
+ 		goto out;
+-	changed |= BSS_CHANGED_UNSOL_BCAST_PROBE_RESP;
+ 	link_conf->elemid_added = params->beacon_csa.cu_params.elemid_added_bmap ? true : false;
+ 	link->u.ap.after_beacon_cu =
+ 		params->beacon_after.cu_params.elemid_modified_bmap ? true : false;
+@@ -5744,10 +5743,9 @@ ieee80211_color_change(struct wiphy *wip
+ 		params->beacon_next.cu_params.elemid_added_bmap ? true : false;
+ 
+ 	err = ieee80211_set_unsol_bcast_probe_resp(sdata, &params->unsol_bcast_probe_resp,
+-						   link, link_conf);
++						   link, link_conf, &changed);
+ 	if (err)
+ 		goto out;
+-	changed |= BSS_CHANGED_UNSOL_BCAST_PROBE_RESP;
+ 
+ 	cfg80211_color_change_started_notify(sdata->dev, params->count,
+ 					    link_id);

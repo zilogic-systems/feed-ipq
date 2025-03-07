@@ -1,0 +1,166 @@
+From 933756ec29d0b4227d6bfab249b2514064ef0cc4 Mon Sep 17 00:00:00 2001
+From: Vasanthakumar Thiagarajan <quic_vthiagar@quicinc.com>
+Date: Sat, 8 Oct 2022 14:09:36 +0530
+Subject: [PATCH 2/3] nl80211: Send multi-hw channel list and interface 
+ combination to user space
+
+Signed-off-by: Vasanthakumar Thiagarajan <quic_vthiagar@quicinc.com>
+---
+ include/net/cfg80211.h       |  18 ++---
+ include/uapi/linux/nl80211.h |  98 ++++++++++++++++++++++++++-
+ net/wireless/nl80211.c       | 125 ++++++++++++++++++++++++++++++++++-
+ 3 files changed, 230 insertions(+), 11 deletions(-)
+
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -1643,6 +1643,71 @@ nla_put_failure:
+ 	return -ENOBUFS;
+ }
+ 
++static int
++nl80211_put_per_hw_iface_combinations(struct wiphy *wiphy, struct sk_buff *msg,
++				      const struct ieee80211_iface_combination *c)
++{
++	struct nlattr *hw_combis;
++	int i;
++
++	hw_combis = nla_nest_start(msg, NL80211_IFACE_COMB_PER_HW_COMB);
++	if (!hw_combis)
++		return -ENOBUFS;
++
++	for (i = 0; i < c->n_hw_list; i++) {
++		struct nlattr *hw_combi, *limits;
++		int l;
++
++		hw_combi = nla_nest_start(msg, i + 1);
++		if (!hw_combi)
++			return -ENOBUFS;
++
++		if (nla_put_u8(msg, NL80211_IFACE_COMB_PER_HW_COMB_HW_IDX,
++			       c->iface_hw_list[i].hw_chans_idx))
++			return -ENOBUFS;
++
++		limits = nla_nest_start(msg,
++					NL80211_IFACE_COMB_PER_HW_COMB_LIMITS);
++		if (!limits)
++			return -ENOBUFS;
++
++		for (l = 0; l < c->iface_hw_list->n_limits; l++) {
++			struct nlattr *limit;
++
++			limit = nla_nest_start(msg, l + 1);
++			if (!limit)
++				return -ENOBUFS;
++
++			if (nla_put_u16(msg, NL80211_IFACE_LIMIT_MAX,
++					c->iface_hw_list[i].limits[l].max))
++				return -ENOBUFS;
++
++			if (nla_put_u16(msg, NL80211_IFACE_LIMIT_TYPES,
++					c->iface_hw_list[i].limits[l].types))
++				return -ENOBUFS;
++
++			nla_nest_end(msg, limit);
++		}
++		nla_nest_end(msg, limits);
++
++		if (nla_put_u32(msg,
++				NL80211_IFACE_COMB_PER_HW_COMB_NUM_CHANNELS,
++				c->iface_hw_list[i].num_different_channels))
++			return -ENOBUFS;
++
++		if (nla_put_u16(msg,
++				NL80211_IFACE_COMB_PER_HW_COMB_MAXIMUM,
++				c->iface_hw_list[i].max_interfaces))
++			return -ENOBUFS;
++
++		nla_nest_end(msg, hw_combi);
++	}
++
++	nla_nest_end(msg, hw_combis);
++
++	return 0;
++}
++
+ static int nl80211_put_iface_combinations(struct wiphy *wiphy,
+ 					  struct sk_buff *msg,
+ 					  bool large)
+@@ -1706,6 +1771,9 @@ static int nl80211_put_iface_combination
+ 				c->beacon_int_min_gcd))
+ 			goto nla_put_failure;
+ 
++		if (large && nl80211_put_per_hw_iface_combinations(wiphy, msg, c))
++			goto nla_put_failure;
++
+ 		nla_nest_end(msg, nl_combi);
+ 	}
+ 
+@@ -2413,6 +2481,54 @@ fail:
+ 	return -ENOBUFS;
+ }
+ 
++static int nl80211_put_multi_hw_support(struct wiphy *wiphy,
++                                       struct sk_buff *msg)
++{
++       struct nlattr *hw_macs, *hw_mac;
++       struct nlattr *chans, *chan;
++       int i, c;
++
++       if (!wiphy->num_hw)
++               return 0;
++
++       hw_macs = nla_nest_start(msg, NL80211_ATTR_MULTI_HW_MACS);
++       if (!hw_macs)
++               return -ENOBUFS;
++
++       for (i = 0; i < wiphy->num_hw; i++) {
++               hw_mac = nla_nest_start(msg, i + 1);
++               if (!hw_mac)
++                       return -ENOBUFS;
++
++               if (nla_put_u8(msg, NL80211_MULTI_HW_MAC_ATTR_IDX, i))
++                       return -ENOBUFS;
++
++               chans = nla_nest_start(msg,
++                                      NL80211_MULTI_HW_MAC_ATTR_CHAN_LIST);
++               if (!chans)
++                       return -ENOBUFS;
++
++               for (c = 0; c < wiphy->hw_chans[i]->n_chans; c++) {
++                       chan = nla_nest_start(msg, c + 1);
++                       if (!chan)
++                               return -ENOBUFS;
++
++                       if (nla_put_u32(msg,
++                                       NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_FREQ,
++                                       wiphy->hw_chans[i]->chans[c].center_freq))
++                               return -ENOBUFS;
++
++                       nla_nest_end(msg, chan);
++               }
++               nla_nest_end(msg, chans);
++
++               nla_nest_end(msg, hw_mac);
++       }
++
++       nla_nest_end(msg, hw_macs);
++       return 0;
++}
++
+ static int
+ nl80211_put_ru_punct_supp_bw(struct cfg80211_registered_device *rdev,
+ 			     struct sk_buff *msg)
+@@ -3040,6 +3156,13 @@ static int nl80211_send_wiphy(struct cfg
+ 			goto nla_put_failure;
+ 
+ 		/* done */
++		state->split_start++;
++		break;
++	 case 17:
++		 if (rdev->wiphy.flags & WIPHY_FLAG_SUPPORTS_MLO)
++			nla_put_flag(msg, NL80211_ATTR_MLO_SUPPORT);
++		 if (nl80211_put_multi_hw_support(&rdev->wiphy, msg))
++			goto nla_put_failure;
+ 		state->split_start = 0;
+ 		break;
+ 	}

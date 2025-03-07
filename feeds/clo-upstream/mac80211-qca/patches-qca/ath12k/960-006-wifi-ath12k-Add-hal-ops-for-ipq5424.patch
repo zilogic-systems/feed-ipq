@@ -1,0 +1,28 @@
+From 43f06b08a45d17ae0f745e0266a6882cdc246426 Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Fri, 3 May 2024 15:01:45 +0530
+Subject: [PATCH] wifi: ath12k: Add hal ops for ipq5424
+
+- Added hal operation api
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/hw.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/hw.c b/drivers/net/wireless/ath/ath12k/hw.c
+index 31edce7..93ba322 100644
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -2342,6 +2342,8 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+ 
+ 		.wmi_init = ath12k_wmi_init_ipq5332,
+ 
++		.hal_ops = &hal_qcn6432_ops,
++
+ 		.supports_ap_ps = true,
+ 		.credit_flow = false,
+ 		.alloc_cacheable_memory = true,
+-- 
+2.34.1
+

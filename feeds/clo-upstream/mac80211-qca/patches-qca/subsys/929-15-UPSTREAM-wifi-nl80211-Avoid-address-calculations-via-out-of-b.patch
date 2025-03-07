@@ -1,0 +1,66 @@
+From 838c7b8f1f278404d9d684c34a8cb26dc41aaaa1 Mon Sep 17 00:00:00 2001
+From: Kees Cook <keescook@chromium.org>
+Date: Wed, 24 Apr 2024 15:01:01 -0700
+Subject: [PATCH] wifi: nl80211: Avoid address calculations via out of bounds
+ array indexing
+
+Before request->channels[] can be used, request->n_channels must be set.
+Additionally, address calculations for memory after the "channels" array
+need to be calculated from the allocation base ("request") rather than
+via the first "out of bounds" index of "channels", otherwise run-time
+bounds checking will throw a warning.
+
+Reported-by: Nathan Chancellor <nathan@kernel.org>
+Fixes: e3eac9f32ec0 ("wifi: cfg80211: Annotate struct cfg80211_scan_request with __counted_by")
+Signed-off-by: Kees Cook <keescook@chromium.org>
+Tested-by: Nathan Chancellor <nathan@kernel.org>
+Link: https://msgid.link/20240424220057.work.819-kees@kernel.org
+Signed-off-by: Johannes Berg <johannes.berg@intel.com>
+---
+ net/wireless/nl80211.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -10017,6 +10017,7 @@ static int nl80211_trigger_scan(struct s
+ 	size_t ie_len, size;
+ 	bool chandef_found = false;
+ 	bool freq_info_provided = true;
++	size_t ssids_offset, ie_offset;
+ 
+ 	wiphy = &rdev->wiphy;
+ 
+@@ -10070,12 +10071,15 @@ static int nl80211_trigger_scan(struct s
+ 		return -EINVAL;
+ 
+ 	size = struct_size(request, channels, n_channels);
++	ssids_offset = size;
+ 	size = size_add(size, array_size(sizeof(*request->ssids), n_ssids));
++	ie_offset = size;
+ 	size = size_add(size, ie_len);
+ 	size = size_add(size, sizeof(*request->chandef));
+ 	request = kzalloc(size, GFP_KERNEL);
+ 	if (!request)
+ 		return -ENOMEM;
++	request->n_channels = n_channels;
+ 
+ 	if (chandef_found) {
+ 		request->chandef = &chandef;
+@@ -10084,14 +10088,10 @@ static int nl80211_trigger_scan(struct s
+ 	}
+ 
+ 	if (n_ssids)
+-		request->ssids = (void *)&request->channels[n_channels];
++		request->ssids = (void *)request + ssids_offset;
+ 	request->n_ssids = n_ssids;
+-	if (ie_len) {
+-		if (n_ssids)
+-			request->ie = (void *)(request->ssids + n_ssids);
+-		else
+-			request->ie = (void *)(request->channels + n_channels);
+-	}
++	if (ie_len)
++		request->ie = (void *)request + ie_offset;
+ 
+ 	i = 0;
+ 	if (scan_freqs) {

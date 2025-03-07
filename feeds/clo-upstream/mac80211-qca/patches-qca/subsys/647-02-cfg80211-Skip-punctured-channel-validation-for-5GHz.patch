@@ -1,0 +1,286 @@
+From 830eb6a14ee7641f3dd5899d67d23f5ecaeef4bd Mon Sep 17 00:00:00 2001
+From: Karthik M <quic_karm@quicinc.com>
+Date: Fri, 24 Jun 2022 11:33:20 +0530
+Subject: [PATCH] cfg80211: Skip punctured channel validation for 5GHz
+
+Avoid channel validation of sub channels that are punctured.
+5G 240Mhz channel is 320-80 channel. Avoid validating punctured
+80Mhz channel in the 320Mhz bandwidth
+
+Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+Signed-off-by: Karthik M <quic_karm@quicinc.com>
+---
+ include/net/cfg80211.h |  2 +-
+ net/mac80211/vht.c     |  8 +++---
+ net/wireless/chan.c    | 72 ++++++++++++++++++++++++++++++++++++++------------
+ net/wireless/reg.c     |  3 ++-
+ 4 files changed, 63 insertions(+), 22 deletions(-)
+
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -5087,7 +5087,7 @@ struct ieee80211_iface_combination {
+ 	 * @radar_detect_widths:
+ 	 * bitmap of channel widths supported for radar detection
+ 	 */
+-	u8 radar_detect_widths;
++	u32 radar_detect_widths;
+ 
+ 	/**
+ 	 * @radar_detect_regions:
+--- a/net/mac80211/vht.c
++++ b/net/mac80211/vht.c
+@@ -353,8 +353,12 @@ ieee80211_sta_cap_rx_bw(struct link_sta_
+ 		rcu_read_lock();
+ 		link_conf = rcu_dereference(sdata->vif.link_conf[link_id]);
+ 
++		/* TODO: 5GHz is reusing the same PHY capability
++		 * to advertise the 320MHz support. Removind band
++		 * specific check for now.
++		 */
+ 		if (eht_cap->has_eht &&
+-		    link_conf->chandef.chan->band == NL80211_BAND_6GHZ) {
++		    link_conf->chandef.chan->band != NL80211_BAND_6GHZ) {
+ 			info = eht_cap->eht_cap_elem.phy_cap_info[0];
+ 
+ 			if (info & IEEE80211_EHT_PHY_CAP0_320MHZ_IN_6GHZ) {
+--- a/net/wireless/chan.c
++++ b/net/wireless/chan.c
+@@ -15,6 +15,12 @@
+ #include "core.h"
+ #include "rdev-ops.h"
+ 
++/* 5GHz 320MHz support */
++#define FIXED_PUNCTURE_PATTERN 0xF000
++#define CENTER_FREQ_5G_240MHZ  5650
++#define DISABLED_SUB_CHAN(freq, start_freq, ru_punct_bitmap) \
++ ((1 << (freq - start_freq)/MHZ_TO_KHZ(20)) & ru_punct_bitmap)
++
+ static bool cfg80211_valid_60g_freq(u32 freq)
+ {
+ 	return freq >= 58320 && freq <= 70200;
+@@ -629,7 +635,8 @@ static u32 cfg80211_get_end_freq(u32 cen
+ 
+ static int cfg80211_get_chans_dfs_required(struct wiphy *wiphy,
+ 					    u32 center_freq,
+-					    u32 bandwidth)
++					    u32 bandwidth,
++					    u32 ru_punct_bitmap)
+ {
+ 	struct ieee80211_channel *c;
+ 	u32 freq, start_freq, end_freq;
+@@ -638,6 +645,8 @@ static int cfg80211_get_chans_dfs_requir
+ 	end_freq = cfg80211_get_end_freq(center_freq, bandwidth);
+ 
+ 	for (freq = start_freq; freq <= end_freq; freq += MHZ_TO_KHZ(20)) {
++		if (DISABLED_SUB_CHAN(freq, start_freq, ru_punct_bitmap))
++			continue;
+ 		c = ieee80211_get_channel_khz(wiphy, freq);
+ 		if (!c)
+ 			return -EINVAL;
+@@ -670,7 +679,7 @@ int cfg80211_chandef_dfs_required(struct
+ 
+ 		ret = cfg80211_get_chans_dfs_required(wiphy,
+ 					ieee80211_chandef_to_khz(chandef),
+-					width);
++					width, chandef->ru_punct_bitmap);
+ 		if (ret < 0)
+ 			return ret;
+ 		else if (ret > 0)
+@@ -681,7 +690,7 @@ int cfg80211_chandef_dfs_required(struct
+ 
+ 		ret = cfg80211_get_chans_dfs_required(wiphy,
+ 					MHZ_TO_KHZ(chandef->center_freq2),
+-					width);
++					width, chandef->ru_punct_bitmap);
+ 		if (ret < 0)
+ 			return ret;
+ 		else if (ret > 0)
+@@ -706,9 +715,20 @@ int cfg80211_chandef_dfs_required(struct
+ }
+ EXPORT_SYMBOL(cfg80211_chandef_dfs_required);
+ 
++bool cfg80211_valid_240mhz_freq(const struct cfg80211_chan_def *chandef)
++{
++	if (chandef->width == NL80211_CHAN_WIDTH_320 &&
++	    chandef->center_freq1 == CENTER_FREQ_5G_240MHZ &&
++	    ((chandef->ru_punct_bitmap & FIXED_PUNCTURE_PATTERN) == FIXED_PUNCTURE_PATTERN)) {
++		return true;
++	}
++	return false;
++}
++
+ static int cfg80211_get_chans_dfs_usable(struct wiphy *wiphy,
+ 					 u32 center_freq,
+-					 u32 bandwidth)
++					 u32 bandwidth,
++					 u32 ru_punct_bitmap)
+ {
+ 	struct ieee80211_channel *c;
+ 	u32 freq, start_freq, end_freq;
+@@ -724,6 +744,8 @@ static int cfg80211_get_chans_dfs_usable
+ 	 * (require CAC). Allow DFS and non-DFS channel mix.
+ 	 */
+ 	for (freq = start_freq; freq <= end_freq; freq += MHZ_TO_KHZ(20)) {
++		if (DISABLED_SUB_CHAN(freq, start_freq, ru_punct_bitmap))
++			continue;
+ 		c = ieee80211_get_channel_khz(wiphy, freq);
+ 		if (!c)
+ 			return -EINVAL;
+@@ -758,7 +780,7 @@ bool cfg80211_chandef_dfs_usable(struct
+ 
+ 	r1 = cfg80211_get_chans_dfs_usable(wiphy,
+ 					   MHZ_TO_KHZ(chandef->center_freq1),
+-					   width);
++					   width, chandef->ru_punct_bitmap);
+ 
+ 	if (r1 < 0)
+ 		return false;
+@@ -768,7 +790,7 @@ bool cfg80211_chandef_dfs_usable(struct
+ 		WARN_ON(!chandef->center_freq2);
+ 		r2 = cfg80211_get_chans_dfs_usable(wiphy,
+ 					MHZ_TO_KHZ(chandef->center_freq2),
+-					width);
++					width, chandef->ru_punct_bitmap);
+ 		if (r2 < 0)
+ 			return false;
+ 		break;
+@@ -953,7 +975,8 @@ bool cfg80211_any_wiphy_oper_chan(struct
+ 
+ static bool cfg80211_get_chans_dfs_available(struct wiphy *wiphy,
+ 					     u32 center_freq,
+-					     u32 bandwidth)
++					     u32 bandwidth,
++					     u32 ru_punct_bitmap)
+ {
+ 	struct ieee80211_channel *c;
+ 	u32 freq, start_freq, end_freq;
+@@ -971,6 +994,8 @@ static bool cfg80211_get_chans_dfs_avail
+ 	 * had gone through CAC return false
+ 	 */
+ 	for (freq = start_freq; freq <= end_freq; freq += MHZ_TO_KHZ(20)) {
++		if (DISABLED_SUB_CHAN(freq, start_freq, ru_punct_bitmap))
++			continue;
+ 		c = ieee80211_get_channel_khz(wiphy, freq);
+ 		if (!c)
+ 			return false;
+@@ -1045,7 +1070,7 @@ static bool cfg80211_chandef_dfs_availab
+ 
+ 	r = cfg80211_get_chans_dfs_available(wiphy,
+ 					     MHZ_TO_KHZ(chandef->center_freq1),
+-					     width);
++					     width, chandef->ru_punct_bitmap);
+ 
+ 	/* If any of channels unavailable for cf1 just return */
+ 	if (!r)
+@@ -1056,7 +1081,7 @@ static bool cfg80211_chandef_dfs_availab
+ 		WARN_ON(!chandef->center_freq2);
+ 		r = cfg80211_get_chans_dfs_available(wiphy,
+ 					MHZ_TO_KHZ(chandef->center_freq2),
+-					width);
++					width, chandef->ru_punct_bitmap);
+ 		break;
+ 	default:
+ 		WARN_ON(chandef->center_freq2);
+@@ -1068,7 +1093,8 @@ static bool cfg80211_chandef_dfs_availab
+ 
+ static unsigned int cfg80211_get_chans_dfs_cac_time(struct wiphy *wiphy,
+ 						    u32 center_freq,
+-						    u32 bandwidth)
++						    u32 bandwidth,
++						    u32 ru_punct_bitmap)
+ {
+ 	struct ieee80211_channel *c;
+ 	u32 start_freq, end_freq, freq;
+@@ -1078,6 +1104,8 @@ static unsigned int cfg80211_get_chans_d
+ 	end_freq = cfg80211_get_end_freq(center_freq, bandwidth);
+ 
+ 	for (freq = start_freq; freq <= end_freq; freq += MHZ_TO_KHZ(20)) {
++		if (DISABLED_SUB_CHAN(freq, start_freq, ru_punct_bitmap))
++			continue;
+ 		c = ieee80211_get_channel_khz(wiphy, freq);
+ 		if (!c)
+ 			return 0;
+@@ -1111,14 +1139,14 @@ cfg80211_chandef_dfs_cac_time(struct wip
+ 
+ 	t1 = cfg80211_get_chans_dfs_cac_time(wiphy,
+ 					     MHZ_TO_KHZ(chandef->center_freq1),
+-					     width);
++					     width, chandef->ru_punct_bitmap);
+ 
+ 	if (!chandef->center_freq2)
+ 		return t1;
+ 
+ 	t2 = cfg80211_get_chans_dfs_cac_time(wiphy,
+ 					     MHZ_TO_KHZ(chandef->center_freq2),
+-					     width);
++					     width, chandef->ru_punct_bitmap);
+ 
+ 	return max(t1, t2);
+ }
+@@ -1126,7 +1154,8 @@ EXPORT_SYMBOL(cfg80211_chandef_dfs_cac_t
+ 
+ static bool cfg80211_secondary_chans_ok(struct wiphy *wiphy,
+ 					u32 center_freq, u32 bandwidth,
+-					u32 prohibited_flags)
++					u32 prohibited_flags,
++					u32 ru_punct_bitmap)
+ {
+ 	struct ieee80211_channel *c;
+ 	u32 freq, start_freq, end_freq;
+@@ -1135,6 +1164,8 @@ static bool cfg80211_secondary_chans_ok(
+ 	end_freq = cfg80211_get_end_freq(center_freq, bandwidth);
+ 
+ 	for (freq = start_freq; freq <= end_freq; freq += MHZ_TO_KHZ(20)) {
++		if (DISABLED_SUB_CHAN(freq, start_freq, ru_punct_bitmap))
++			continue;
+ 		c = ieee80211_get_channel_khz(wiphy, freq);
+ 		if (!c || c->flags & prohibited_flags)
+ 			return false;
+@@ -1313,10 +1344,14 @@ bool cfg80211_chandef_usable(struct wiph
+ 		prohibited_flags |= IEEE80211_CHAN_NO_320MHZ;
+ 		width = 320;
+ 
+-		if (chandef->chan->band != NL80211_BAND_6GHZ)
++		if ((chandef->chan->band != NL80211_BAND_6GHZ) &&
++		    (!cfg80211_valid_240mhz_freq(chandef)))
+ 			return false;
+ 
+-		sband = wiphy->bands[NL80211_BAND_6GHZ];
++		if (cfg80211_valid_240mhz_freq(chandef))
++			sband = wiphy->bands[NL80211_BAND_5GHZ];
++		else
++			sband = wiphy->bands[NL80211_BAND_6GHZ];
+ 		if (!sband)
+ 			return false;
+ 
+@@ -1360,14 +1395,16 @@ bool cfg80211_chandef_usable(struct wiph
+ 
+ 	if (!cfg80211_secondary_chans_ok(wiphy,
+ 					 ieee80211_chandef_to_khz(chandef),
+-					 width, prohibited_flags))
++					 width, prohibited_flags,
++					 chandef->ru_punct_bitmap))
+ 		return false;
+ 
+ 	if (!chandef->center_freq2)
+ 		return true;
+ 	return cfg80211_secondary_chans_ok(wiphy,
+ 					   MHZ_TO_KHZ(chandef->center_freq2),
+-					   width, prohibited_flags);
++					   width, prohibited_flags,
++					   chandef->ru_punct_bitmap);
+ }
+ EXPORT_SYMBOL(cfg80211_chandef_usable);
+ 
+--- a/net/wireless/reg.c
++++ b/net/wireless/reg.c
+@@ -1760,7 +1760,8 @@ static uint32_t reg_rule_to_chan_bw_flag
+ 			bw_flags |= IEEE80211_CHAN_NO_80MHZ;
+ 		if (max_bandwidth_khz < MHZ_TO_KHZ(160))
+ 			bw_flags |= IEEE80211_CHAN_NO_160MHZ;
+-		if (max_bandwidth_khz < MHZ_TO_KHZ(320))
++		if ((max_bandwidth_khz < MHZ_TO_KHZ(320)) &&
++		    (max_bandwidth_khz < MHZ_TO_KHZ(240)))
+ 			bw_flags |= IEEE80211_CHAN_NO_320MHZ;
+ 	}
+ 	return bw_flags;

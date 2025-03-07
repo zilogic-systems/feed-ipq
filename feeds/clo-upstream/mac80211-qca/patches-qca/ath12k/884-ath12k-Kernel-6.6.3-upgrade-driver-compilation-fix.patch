@@ -1,0 +1,101 @@
+From b8a98e07ca23ca15c17e0f2ef52f8749a9d8034a Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Tue, 2 Apr 2024 15:33:13 +0530
+Subject: [PATCH] ath12k: Compilation fixes for backport 6.6
+
+1. Updated the enum values for fw_recovery_support, bw and ahvif->vdev_type
+   to fix Enum mismatch errors
+2. vm_flags_set API was used to assign vm_flags in kernel-6.6.3,
+3. Modified the ath12k_mac_he_gi_to_nl80211_he_gi type from u32 to 
+   Enum nl80211_he_gi to avoid compilation errors
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/debugfs.c |  3 ++-
+ drivers/net/wireless/ath/ath12k/dp_tx.c   |  2 +-
+ drivers/net/wireless/ath/ath12k/mac.c     | 20 +++++++++++++++++++-
+ drivers/net/wireless/ath/ath12k/pktlog.c  |  5 ++++-
+ drivers/net/wireless/ath/ath12k/mac.h     |  2 +-
+ drivers/net/wireless/ath/ath12k/ahb.c     |  4 ++--
+ 6 files changed, 29 insertions(+), 7 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -2153,7 +2153,8 @@ static ssize_t ath12k_debug_write_fw_rec
+ 			}
+ 		}
+ 	} else {
+-		ab->fw_recovery_support = value ? true : false;
++		ab->fw_recovery_support = value ? ATH12K_FW_RECOVERY_ENABLE_AUTO :
++						  ATH12K_FW_RECOVERY_DISABLE;
+ 		ath12k_debug_multipd_wmi_pdev_set_param(ab, ab->fw_recovery_support);
+ 	}
+ 
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -1031,7 +1031,7 @@ void ath12k_dp_tx_update_txcompl(struct
+ 	struct ath12k_per_peer_tx_stats *peer_stats = &ar->cached_stats;
+ 	enum hal_tx_rate_stats_pkt_type pkt_type;
+ 	enum hal_tx_rate_stats_sgi sgi;
+-	enum hal_tx_rate_stats_bw bw;
++	enum ath12k_supported_bw bw;
+ 	struct ath12k_peer *peer;
+ 	struct ath12k_link_sta *arsta;
+ 	u16 rate, ru_tones;
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -11268,7 +11268,7 @@ static int ath12k_mac_op_add_interface(s
+ 	}
+ 	memset(ahvif, 0, sizeof(*ahvif));
+ 
+-	ahvif->vdev_type = vif->type;
++	ahvif->vdev_type = (enum wmi_vdev_type)vif->type;
+ 	ahvif->vif = vif;
+ 	ahvif->ah = ah;
+ 
+--- a/drivers/net/wireless/ath/ath12k/pktlog.c
++++ b/drivers/net/wireless/ath/ath12k/pktlog.c
+@@ -202,8 +202,11 @@ static int ath12k_pktlog_mmap(struct fil
+ 		pr_err("Can't allocate pktlog buf\n");
+ 		return -ENOMEM;
+ 	}
+-
++#if LINUX_VERSION_IS_LESS(6, 6, 3)
+ 	vma->vm_flags |= VM_LOCKED;
++#else
++	vm_flags_set(vma, VM_LOCKED);
++#endif
+ 	vma->vm_ops = &pktlog_vmops;
+ 
+ 	return 0;
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -143,7 +143,7 @@ void ath12k_mac_radio_drain_tx(struct at
+ void ath12k_mac_peer_cleanup_all(struct ath12k *ar);
+ int ath12k_mac_tx_mgmt_pending_free(int buf_id, void *skb, void *ctx);
+ enum rate_info_bw ath12k_mac_bw_to_mac80211_bw(enum ath12k_supported_bw bw);
+-u32 ath12k_mac_he_gi_to_nl80211_he_gi(u8 sgi);
++enum nl80211_he_gi ath12k_mac_he_gi_to_nl80211_he_gi(u8 sgi);
+ enum nl80211_he_ru_alloc ath12k_mac_phy_he_ru_to_nl80211_he_ru_alloc(u16 ru_phy);
+ enum nl80211_he_ru_alloc ath12k_mac_he_ru_tones_to_nl80211_he_ru_alloc(u16 ru_tones);
+ enum nl80211_eht_ru_alloc ath12k_mac_eht_ru_tones_to_nl80211_eht_ru_alloc(u16 ru_tones);
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -927,7 +927,7 @@ static int ath12k_ahb_fw_resources_init(
+ 
+ 	ret = iommu_map(iommu_dom, ab_ahb->fw.msa_paddr,
+ 			ab_ahb->fw.msa_paddr, ab_ahb->fw.msa_size,
+-			IOMMU_READ | IOMMU_WRITE);
++			IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
+ 	if (ret) {
+ 		ath12k_err(ab, "failed to map firmware region: %d\n", ret);
+ 		goto err_iommu_detach;
+@@ -935,7 +935,7 @@ static int ath12k_ahb_fw_resources_init(
+ 
+ 	ret = iommu_map(iommu_dom, ab_ahb->fw.ce_paddr,
+ 			ab_ahb->fw.ce_paddr, ab_ahb->fw.ce_size,
+-			IOMMU_READ | IOMMU_WRITE);
++			IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
+ 	if (ret) {
+ 		ath12k_err(ab, "failed to map firmware CE region: %d\n", ret);
+ 		goto err_iommu_unmap;

@@ -1,0 +1,51 @@
+From 5a30f6090b170887ee46805f7107ac4f89e0e1c1 Mon Sep 17 00:00:00 2001
+From: Aloka Dixit <quic_alokad@quicinc.com>
+Date: Wed, 8 Dec 2021 13:52:25 -0800
+Subject: [PATCH] ath12k: configure RU puncturing bitmap
+
+Configure the RU puncturing bitmap as part of VDEV start/restart
+and peer association commands in AP mode.
+
+Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c |  8 ++++++--
+ drivers/net/wireless/ath/ath12k/wmi.c |  2 ++
+ drivers/net/wireless/ath/ath12k/wmi.h | 11 +++++++++--
+ 3 files changed, 17 insertions(+), 4 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -947,6 +947,8 @@ static int ath12k_mac_monitor_vdev_start
+ 
+ 	arg.channel.passive |= !!(chandef->chan->flags & IEEE80211_CHAN_NO_IR);
+ 
++	arg.punct_bitmap = 0xFFFFFFFF;
++
+ 	reinit_completion(&ar->vdev_setup_done);
+ 	reinit_completion(&ar->vdev_delete_done);
+ 
+@@ -2626,6 +2628,7 @@ static void ath12k_peer_assoc_h_eht(stru
+ 	max_nss = max(max_nss, (uint8_t)eht_nss);
+ 
+ 	arg->peer_nss = min(sta->deflink.rx_nss, max_nss);
++	arg->punct_bitmap = ~def.ru_punct_bitmap;
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
+ 		   "mac he peer %pM nss %d mcs cnt %d\n",
+@@ -6602,6 +6605,7 @@ ath12k_mac_vdev_start_restart(struct ath
+ 	arg.channel.max_power = chandef->chan->max_power * 2;
+ 	arg.channel.max_reg_power = chandef->chan->max_reg_power * 2;
+ 	arg.channel.max_antenna_gain = chandef->chan->max_antenna_gain * 2;
++	arg.punct_bitmap = ~chandef->ru_punct_bitmap;
+ 
+ 	arg.pref_tx_streams = ar->num_tx_chains;
+ 	arg.pref_rx_streams = ar->num_rx_chains;
+@@ -6626,7 +6630,7 @@ ath12k_mac_vdev_start_restart(struct ath
+ 
+ 	ath12k_dbg(ab, ATH12K_DBG_MAC,
+ 		   "mac vdev %d start center_freq %d phymode %s punct_bitmap 0x%x\n",
+-		   arg.vdev_id, arg.freq,
++		   arg.vdev_id, arg.channel.freq,
+ 		   ath12k_mac_phymode_str(arg.mode), arg.punct_bitmap);
+ 
+ 	ret = ath12k_wmi_vdev_start(ar, &arg, restart);

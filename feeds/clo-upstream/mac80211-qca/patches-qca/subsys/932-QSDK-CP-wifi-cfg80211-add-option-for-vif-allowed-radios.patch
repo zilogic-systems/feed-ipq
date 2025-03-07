@@ -1,0 +1,189 @@
+From b4d4c14f6c0fd585ef5460070e427e9b15b9f127 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Wed, 13 Nov 2024 13:47:08 +0530
+Subject: [PATCH] QSDK:CP: wifi: cfg80211: add option for vif allowed radios
+
+This allows users to prevent a vif from affecting radios other than the
+configured ones. This can be useful in cases where e.g. an AP is running
+on one radio, and triggering a scan on another radio should not disturb it.
+
+Changing the allowed radios list for a vif is supported, but only while
+it is down.
+
+While it is possible to achieve the same by always explicitly specifying
+a frequency list for scan requests and ensuring that the wrong channel/band
+is never accidentally set on an unrelated interface, this change makes
+multi-radio wiphy setups a lot easier to deal with for CLI users.
+
+By itself, this patch only enforces the radio mask for scanning requests
+and remain-on-channel. Follow-up changes build on this to limit configured
+frequencies.
+
+patch-work: None
+patch-dependency: None
+
+Link: https://lore.kernel.org/all/eefcb218780f71a1549875d149f1196486762756.1728462320.git-series.nbd@nbd.name/
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
+---
+ include/net/cfg80211.h       |  1 +
+ include/uapi/linux/nl80211.h |  4 +++
+ net/wireless/nl80211.c       | 50 ++++++++++++++++++++++++++++++++----
+ 3 files changed, 50 insertions(+), 5 deletions(-)
+
+diff --git a/include/net/cfg80211.h b/include/net/cfg80211.h
+index 3f3c7ff..3d9f7fc 100644
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -6682,6 +6682,7 @@ struct wireless_dev {
+ 	bool is_netdev_going_down; /*Indicates netdev going down - wdev specific*/
+ 	u8 ppe_vp_type;
+ 	bool link_removal_flag;
++	u32 radio_mask;
+ };
+ 
+ static inline const u8 *wdev_address(struct wireless_dev *wdev)
+diff --git a/include/uapi/linux/nl80211.h b/include/uapi/linux/nl80211.h
+index 3464a1b..48718b7 100644
+--- a/include/uapi/linux/nl80211.h
++++ b/include/uapi/linux/nl80211.h
+@@ -2918,6 +2918,8 @@ enum nl80211_commands {
+  *	nested item, it contains attributes defined in
+  *	&enum nl80211_if_combination_attrs.
+  *
++ * @NL80211_ATTR_VIF_RADIO_MASK: Bitmask of allowed radios (u32).
++ *	A value of 0 means all radios.
+  * @NL80211_ATTR_WIPHY_ANTENNA_GAIN: Configured antenna gain. Used to reduce
+  *	transmit power to stay within regulatory limits. u32, dBi.
+  *
+@@ -3540,6 +3542,8 @@ enum nl80211_attrs {
+ 	NL80211_ATTR_WIPHY_RADIOS,
+ 	NL80211_ATTR_WIPHY_INTERFACE_COMBINATIONS,
+ 
++	NL80211_ATTR_VIF_RADIO_MASK,
++
+ 	NL80211_ATTR_WIPHY_ANTENNA_GAIN,
+ 
+ 	NL80211_ATTR_HE_MUEDCA_PARAMS,
+diff --git a/net/wireless/nl80211.c b/net/wireless/nl80211.c
+index 1d7cfd6..bd016e8 100644
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -907,6 +907,7 @@ static const struct nla_policy nl80211_policy[NUM_NL80211_ATTR] = {
+ 	[NL80211_ATTR_AP_REMOVAL_COUNT] = { .type = NLA_U32 },
+ 	[NL80211_ATTR_TSF] = { .type = NLA_U64 },
+ 	[NL80211_ATTR_WIPHY_ANTENNA_GAIN] = { .type = NLA_U32 },
++	[NL80211_ATTR_VIF_RADIO_MASK] = { .type = NLA_U32 },
+ };
+ 
+ /* policy for the key attributes */
+@@ -4348,7 +4349,8 @@ static int nl80211_send_iface(struct sk_buff *msg, u32 portid, u32 seq, int flag
+ 	    nla_put_u32(msg, NL80211_ATTR_GENERATION,
+ 			rdev->devlist_generation ^
+ 			(cfg80211_rdev_list_generation << 2)) ||
+-	    nla_put_u8(msg, NL80211_ATTR_4ADDR, wdev->use_4addr))
++	    nla_put_u8(msg, NL80211_ATTR_4ADDR, wdev->use_4addr) ||
++	    nla_put_u32(msg, NL80211_ATTR_VIF_RADIO_MASK, wdev->radio_mask))
+ 		goto nla_put_failure;
+ 
+ 	wdev_lock(wdev);
+@@ -4676,6 +4678,29 @@ static int nl80211_valid_4addr(struct cfg80211_registered_device *rdev,
+ 	return -EOPNOTSUPP;
+ }
+ 
++static int nl80211_parse_vif_radio_mask(struct genl_info *info,
++					u32 *radio_mask)
++{
++	struct cfg80211_registered_device *rdev = info->user_ptr[0];
++	struct nlattr *attr = info->attrs[NL80211_ATTR_VIF_RADIO_MASK];
++	u32 mask, allowed;
++
++	if (!attr) {
++		*radio_mask = 0;
++		return 0;
++	}
++
++	allowed = BIT(rdev->wiphy.num_hw) - 1;
++	mask = nla_get_u32(attr);
++	if (mask & ~allowed)
++		return -EINVAL;
++	if (!mask)
++		mask = allowed;
++	*radio_mask = mask;
++
++	return 1;
++}
++
+ static int nl80211_set_interface(struct sk_buff *skb, struct genl_info *info)
+ {
+ 	struct cfg80211_registered_device *rdev = info->user_ptr[0];
+@@ -4684,6 +4709,8 @@ static int nl80211_set_interface(struct sk_buff *skb, struct genl_info *info)
+ 	enum nl80211_iftype otype, ntype;
+ 	struct net_device *dev = info->user_ptr[1];
+ 	bool change = false;
++	struct wireless_dev *wdev = dev->ieee80211_ptr;
++	u32 radio_mask = 0;
+ 
+ 	memset(&params, 0, sizeof(params));
+ 
+@@ -4743,6 +4770,12 @@ static int nl80211_set_interface(struct sk_buff *skb, struct genl_info *info)
+ 	if (err > 0)
+ 		change = true;
+ 
++	err = nl80211_parse_vif_radio_mask(info, &radio_mask);
++	if (err < 0)
++		return err;
++	if (err && netif_running(dev))
++		return -EBUSY;
++
+ 	if (change)
+ 		err = cfg80211_change_iface(rdev, dev, ntype, &params);
+ 	else
+@@ -4751,11 +4784,10 @@ static int nl80211_set_interface(struct sk_buff *skb, struct genl_info *info)
+ 	if (!err && params.use_4addr != -1)
+ 		dev->ieee80211_ptr->use_4addr = params.use_4addr;
+ 
+-	if (change && !err) {
+-		struct wireless_dev *wdev = dev->ieee80211_ptr;
+-
++	if (radio_mask)
++		wdev->radio_mask = radio_mask;
++	if (change && !err)
+ 		nl80211_notify_iface(rdev, wdev, NL80211_CMD_SET_INTERFACE);
+-	}
+ 
+ 	return err;
+ }
+@@ -4766,6 +4798,7 @@ static int _nl80211_new_interface(struct sk_buff *skb, struct genl_info *info)
+ 	struct vif_params params;
+ 	struct wireless_dev *wdev;
+ 	struct sk_buff *msg;
++	u32 radio_mask;
+ 	int err;
+ 	enum nl80211_iftype type = NL80211_IFTYPE_UNSPECIFIED;
+ 
+@@ -4803,6 +4836,10 @@ static int _nl80211_new_interface(struct sk_buff *skb, struct genl_info *info)
+ 	if (err < 0)
+ 		return err;
+ 
++	err = nl80211_parse_vif_radio_mask(info, &radio_mask);
++	if (err < 0)
++		return err;
++
+ 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+ 	if (!msg)
+ 		return -ENOMEM;
+@@ -4848,6 +4885,9 @@ static int _nl80211_new_interface(struct sk_buff *skb, struct genl_info *info)
+ 		break;
+ 	}
+ 
++	if (radio_mask)
++		wdev->radio_mask = radio_mask;
++
+ 	if (nl80211_send_iface(msg, info->snd_portid, info->snd_seq, 0,
+ 			       rdev, wdev, NL80211_CMD_NEW_INTERFACE) < 0) {
+ 		nlmsg_free(msg);
+-- 
+2.34.1
+

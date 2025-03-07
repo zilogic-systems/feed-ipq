@@ -1,0 +1,131 @@
+From 253a898bc812f89d88335d1d66aade559ea5b674 Mon Sep 17 00:00:00 2001
+From: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+Date: Mon, 12 Aug 2024 16:08:28 +0530
+Subject: [PATCH] QSDK: DP: wifi: ath12k: Rearrange pointers references to 
+improve cache miss
+
+Rearrange pointers reference in tx path to improve cache miss.
+This change helps in CPU optimization which results in better
+usage of recycler.
+
+Patch Dependency : 718-f-ath12k-Add-ath12k_dp_tx_direct-for-faster-tx-process.patch
+                   719-d-ath12k-Optimize-tx-descriptor-updates.-Avoid-FIELD_P.patch
+
+Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h  |  1 +
+ drivers/net/wireless/ath/ath12k/dp.c    |  1 +
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 28 ++++++++++++-------------
+ 3 files changed, 15 insertions(+), 15 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -138,7 +138,6 @@ struct ath12k_skb_cb {
+ 	dma_addr_t paddr;
+ 	u8 eid;
+ 	struct ieee80211_vif *vif;
+-	dma_addr_t paddr_ext_desc;
+ 	u32 cipher;
+ 	u8 flags;
+ 	u8 link_id;
+@@ -410,6 +409,7 @@ struct ath12k_vif_cache {
+ };
+ 
+ struct ath12k_vif_tcl_desc_template {
++	u8 mac_id;
+ 	u32 info0;
+ 	u32 info1;
+ 	u32 info2;
+--- a/drivers/net/wireless/ath/ath12k/dp.c
++++ b/drivers/net/wireless/ath/ath12k/dp.c
+@@ -1599,6 +1599,7 @@ void ath12k_dp_vdev_tx_attach(struct ath
+ 	arvif->bank_id = ath12k_dp_tx_get_bank_profile(ab, arvif, &ab->dp, arvif->vdev_id_check_en);
+ 	arvif->splitphy_ds_bank_id = DP_INVALID_BANK_ID;
+ 
++	arvif->desc.mac_id = arvif->pdev_idx;
+ 	arvif->desc.info0 = FIELD_PREP(HAL_TCL_DATA_CMD_INFO0_BANK_ID,
+ 				       arvif->bank_id);
+ 	arvif->desc.info1 = FIELD_PREP(HAL_TCL_DATA_CMD_INFO1_CMD_NUM,
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -283,17 +283,17 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 	struct ath12k_dp *dp = arvif->dp;
+ 	struct ath12k_vif_tcl_desc_template *desc = &arvif->desc;
+ 	struct ath12k_tx_desc_info *tx_desc = NULL;
+-	struct ath12k_skb_cb *skb_cb = ATH12K_SKB_CB(skb);
+ 	struct hal_srng *tcl_ring;
+ 	void *hal_tcl_desc;
+ 	struct hal_tcl_data_cmd tcl_desc;
+ 	u8 hal_ring_id, ring_id;
+ #ifdef CPTCFG_ATH12K_SAWF
+-	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
++	struct ieee80211_tx_info *info;
+ 	struct ath12k_peer *peer;
+ #endif
+ 	dma_addr_t paddr;
+-	int ret;
++	int ret, len;
++	bool is_from_recycler;
+ 
+ 	ring_id = smp_processor_id();
+ 
+@@ -307,25 +307,23 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 	dmac_clean_range_no_dsb(skb->data, skb->data + DP_TX_SFE_BUFFER_SIZE);
+ 	paddr = (dma_addr_t)virt_to_phys(skb->data);
+ 
+-	tx_desc->skb = skb;
+-	tx_desc->mac_id = arvif->pdev_idx;
+-	tx_desc->flags = 0;
+-
+-#ifdef CPTCFG_MAC80211_SFE_SUPPORT
++	len = skb->len;
++	is_from_recycler = skb->is_from_recycler;
+ 	/* the edma driver uses this flags to optimize the cache invalidation */
+ 	skb->fast_recycled = 1;
+-	if (skb->is_from_recycler)
++
++	tx_desc->flags = 0;
++	if (is_from_recycler)
+ 		tx_desc->flags |= DP_TX_DESC_FLAG_FAST;
+-#endif
+ 
+-	skb_cb->vif = arvif->ahvif->vif;
+-	skb_cb->paddr =  paddr;
++	tx_desc->skb = skb;
++	tx_desc->mac_id = desc->mac_id;
+ 
+ 	tcl_desc.buf_addr_info.info0 = (u32)paddr;
+         tcl_desc.buf_addr_info.info1 = (tx_desc->desc_id << 12);
+         tcl_desc.info0 =  desc->info0;
+         tcl_desc.info1 =  desc->info1;
+-        tcl_desc.info2 =  skb->len;
++        tcl_desc.info2 =  len;
+ 
+ 	tcl_desc.info2 |= TX_IP_CHECKSUM;
+         tcl_desc.info3 = desc->info3;
+@@ -336,6 +334,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+         if (u32_get_bits(skb->mark, SAWF_TAG_ID) == SAWF_VALID_TAG) {
+                 u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
+                 tx_desc->timestamp = ktime_get_real();
++		info = IEEE80211_SKB_CB(skb);
+ 
+                 if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+                         u32 meta_data_flags;
+@@ -398,7 +397,6 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 
+ fail_remove_tx_buf:
+ 	ath12k_dp_tx_release_txbuf(dp, tx_desc, ring_id);
+-	arvif->link_stats.tx_dropped++;
+ 
+ 	return ret;
+ }
+@@ -650,8 +648,7 @@ skip_htt_meta:
+ 
+ 		ti.data_len = skb_ext_desc->len;
+ 		ti.type = HAL_TCL_DESC_TYPE_EXT_DESC;
+-
+-		skb_cb->paddr_ext_desc = ti.paddr;
++		
+ 		tx_desc->skb_ext_desc = skb_ext_desc;
+ 	}
+ 

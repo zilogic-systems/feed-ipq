@@ -1,0 +1,198 @@
+From 21d9c5aa6cd8ee886dab0432f2415acc4a6ec4e6 Mon Sep 17 00:00:00 2001
+From: Harshitha Prem <quic_hprem@quicinc.com>
+Date: Wed, 25 Sep 2024 12:39:36 +0530
+Subject: [PATCH] QSDK: CP: wifi: Advertise wiphy multi-radio attribute
+
+Add changes to populate wiphy's multi-radio attribute with frequency
+range and hardware index derived from multi hardware information
+advertised from driver.
+
+Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
+---
+ net/wireless/nl80211.c | 87 ++++++++++++++++++++++++------------------
+ 1 file changed, 49 insertions(+), 38 deletions(-)
+
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -1700,14 +1700,27 @@ nla_put_failure:
+ 	return -ENOBUFS;
+ }
+ 
+-static int nl80211_put_ifcomb_data(struct sk_buff *msg, bool large, int idx,
++static int nl80211_put_ifcomb_data(struct sk_buff *msg, bool large, int attr,
+ 				   const struct ieee80211_iface_combination *c,
+-				   u16 nested)
++				   u16 nested, int idx)
+ {
+ 	struct nlattr *nl_combi, *nl_limits;
+ 	int i;
++	u32 num_different_channels;
++	u16 max_interfaces, max, types;
++	u8 n_limits;
++
++	if (idx >= 0) {
++		n_limits = c->iface_hw_list[idx].n_limits;
++		num_different_channels = c->iface_hw_list[idx].num_different_channels;
++		max_interfaces = c->iface_hw_list[idx].max_interfaces;
++	} else {
++		n_limits = c->n_limits;
++		num_different_channels = c->num_different_channels;
++		max_interfaces = c->max_interfaces;
++	}
+ 
+-	nl_combi = nla_nest_start_noflag(msg, idx | nested);
++	nl_combi = nla_nest_start_noflag(msg, attr | nested);
+ 	if (!nl_combi)
+ 		goto nla_put_failure;
+ 
+@@ -1716,18 +1729,26 @@ static int nl80211_put_ifcomb_data(struc
+ 	if (!nl_limits)
+ 		goto nla_put_failure;
+ 
+-	for (i = 0; i < c->n_limits; i++) {
++	for (i = 0; i < n_limits; i++) {
+ 		struct nlattr *nl_limit;
+ 
++		if (idx >= 0) {
++			max = c->iface_hw_list[idx].limits[i].max;
++			types = c->iface_hw_list[idx].limits[i].types;
++		} else {
++			max = c->limits[i].max;
++			types = c->limits[i].types;
++		}
++
+ 		nl_limit = nla_nest_start_noflag(msg, i + 1);
+ 		if (!nl_limit)
+ 			goto nla_put_failure;
+ 
+-		if (nla_put_u32(msg, NL80211_IFACE_LIMIT_MAX, c->limits[i].max))
++		if (nla_put_u32(msg, NL80211_IFACE_LIMIT_MAX, max))
+ 			goto nla_put_failure;
+ 
+ 		if (nl80211_put_iftypes(msg, NL80211_IFACE_LIMIT_TYPES,
+-					c->limits[i].types))
++					types))
+ 			goto nla_put_failure;
+ 		nla_nest_end(msg, nl_limit);
+ 	}
+@@ -1738,9 +1759,9 @@ static int nl80211_put_ifcomb_data(struc
+ 	    nla_put_flag(msg, NL80211_IFACE_COMB_STA_AP_BI_MATCH))
+ 		goto nla_put_failure;
+ 	if (nla_put_u32(msg, NL80211_IFACE_COMB_NUM_CHANNELS,
+-			c->num_different_channels) ||
++			num_different_channels) ||
+ 	    nla_put_u32(msg, NL80211_IFACE_COMB_MAXNUM,
+-			c->max_interfaces))
++			max_interfaces))
+ 		goto nla_put_failure;
+ 	if (large &&
+ 	    (nla_put_u32(msg, NL80211_IFACE_COMB_RADAR_DETECT_WIDTHS,
+@@ -1765,25 +1786,17 @@ static int nl80211_put_iface_combination
+ 					  int attr, int radio,
+ 					  bool large, u16 nested)
+ {
+-	const struct ieee80211_iface_combination *c;
+ 	struct nlattr *nl_combis;
+-	int i, n;
++	int i;
+ 
+ 	nl_combis = nla_nest_start_noflag(msg, attr | nested);
+ 	if (!nl_combis)
+ 		goto nla_put_failure;
+ 
+-	if (radio >= 0) {
+-		c = wiphy->radio[0].iface_combinations;
+-		n = wiphy->radio[0].n_iface_combinations;
+-	} else {
+-		c = wiphy->iface_combinations;
+-		n = wiphy->n_iface_combinations;
+-	}
+-
+-	for (i = 0; i < n; i++)
+-		if (nl80211_put_ifcomb_data(msg, large, i + 1,
+-					    &c[i], nested))
++	for (i = 0; i < wiphy->n_iface_combinations; i++)
++		if (nl80211_put_ifcomb_data(msg, large, i,
++					    &wiphy->iface_combinations[i],
++					    nested, radio))
+ 			goto nla_put_failure;
+ 
+ 	nla_nest_end(msg, nl_combis);
+@@ -2565,9 +2578,8 @@ nl80211_put_ru_punct_supp_bw(struct cfg8
+ 
+ static int nl80211_put_radio(struct wiphy *wiphy, struct sk_buff *msg, int idx)
+ {
+-	const struct wiphy_radio *r = &wiphy->radio[idx];
++	struct ieee80211_chans_per_hw *hw_chans = wiphy->hw_chans[idx];
+ 	struct nlattr *radio, *freq;
+-	int i;
+ 
+ 	radio = nla_nest_start(msg, idx);
+ 	if (!radio)
+@@ -2576,27 +2588,23 @@ static int nl80211_put_radio(struct wiph
+ 	if (nla_put_u32(msg, NL80211_WIPHY_RADIO_ATTR_INDEX, idx))
+ 		goto nla_put_failure;
+ 
+-	for (i = 0; i < r->n_freq_range; i++) {
+-		const struct wiphy_radio_freq_range *range = &r->freq_range[i];
+ 
+-		freq = nla_nest_start(msg, NL80211_WIPHY_RADIO_ATTR_FREQ_RANGE);
+-		if (!freq)
+-			goto nla_put_failure;
++	freq = nla_nest_start(msg, NL80211_WIPHY_RADIO_ATTR_FREQ_RANGE);
++	if (!freq)
++		goto nla_put_failure;
+ 
+-		if (nla_put_u32(msg, NL80211_WIPHY_RADIO_FREQ_ATTR_START,
+-				range->start_freq) ||
+-		    nla_put_u32(msg, NL80211_WIPHY_RADIO_FREQ_ATTR_END,
+-				range->end_freq))
+-			goto nla_put_failure;
++	if (nla_put_u32(msg, NL80211_WIPHY_RADIO_FREQ_ATTR_START,
++			MHZ_TO_KHZ(hw_chans->chans[0].center_freq - 10)) ||
++	    nla_put_u32(msg, NL80211_WIPHY_RADIO_FREQ_ATTR_END,
++			MHZ_TO_KHZ(hw_chans->chans[hw_chans->n_chans - 1].center_freq + 10)))
++		goto nla_put_failure;
+ 
+-		nla_nest_end(msg, freq);
+-	}
++	nla_nest_end(msg, freq);
+ 
+-	for (i = 0; i < r->n_iface_combinations; i++)
+-		if (nl80211_put_ifcomb_data(msg, true,
+-					    NL80211_WIPHY_RADIO_ATTR_INTERFACE_COMBINATION,
+-					    &r->iface_combinations[i],
+-					    NLA_F_NESTED))
++	if (nl80211_put_ifcomb_data(msg, true,
++				    NL80211_WIPHY_RADIO_ATTR_INTERFACE_COMBINATION,
++				    &wiphy->iface_combinations[0],
++				    NLA_F_NESTED, idx))
+ 			goto nla_put_failure;
+ 
+ 	nla_nest_end(msg, radio);
+@@ -2612,14 +2620,14 @@ static int nl80211_put_radios(struct wip
+ 	struct nlattr *radios;
+ 	int i;
+ 
+-	if (!wiphy->n_radio)
++	if (!wiphy->num_hw)
+ 		return 0;
+ 
+ 	radios = nla_nest_start(msg, NL80211_ATTR_WIPHY_RADIOS);
+ 	if (!radios)
+ 		return -ENOBUFS;
+ 
+-	for (i = 0; i < wiphy->n_radio; i++)
++	for (i = 0; i < wiphy->num_hw; i++)
+ 		if (nl80211_put_radio(wiphy, msg, i))
+ 			goto fail;
+ 
+@@ -2933,7 +2941,7 @@ static int nl80211_send_wiphy(struct cfg
+ 
+ 		if (nl80211_put_iface_combinations(&rdev->wiphy, msg,
+ 						   NL80211_ATTR_INTERFACE_COMBINATIONS,
+-						   rdev->wiphy.n_radio ? 0 : -1,
++						   rdev->wiphy.num_hw ? 0 : -1,
+ 						   state->split, 0))
+ 			goto nla_put_failure;
+ 

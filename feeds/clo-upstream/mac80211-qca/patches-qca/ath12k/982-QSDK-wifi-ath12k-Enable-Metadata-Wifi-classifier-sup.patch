@@ -1,0 +1,749 @@
+From 0d6e0fc4cfcb3fe9b3185648ab7b32dd3524333d Mon Sep 17 00:00:00 2001
+From: Girish Kumar M P <quic_gmp@quicinc.com>
+Date: Mon, 4 Nov 2024 16:11:35 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: Enable Metadata Wifi classifier support
+
+wifi classifier metadata
+----------------------------------------------------------------------
+| tag  | mlo_key_valid| sawf_valid| reserved| mlo key| peer_id| msduq |
+|8 bits|   1 bit      |  1 bit    | 1 bit   | 5 bits | 10 bit | 6 bits|
+----------------------------------------------------------------------
+
+Previously SAWF populated peer_id and msduq and returned to ECM 
+classifier as u16 data and MLO case peer lookup required in 
+TX path for fetching valid link id
+
+Wifi classifier is populated with the above the data based on SAWF and
+MLO, which is returned to ECM classifer as u32 metadata common for both
+the case.
+
+In case of both Sawf_param_valid and mlo_param valid, wifi classifier is
+is filled based on the data from mlo_params instead of sawf_param and
+returned to ECM classifier.
+
+In this case both the SAWF and MLO data co-exist in a same Wifi
+classifer data.
+
+Wifi classifier optimized the Peer lookup in the Fast TX path significantly
+and added Peer lookup in SAWF Path.
+
+Dependency Patch: 750-01-ath12k-Add-SAWF-support.patch
+
+KPI Readings
+MLO [5G EHT160Mhz + 6G EHT320Mhz]
+UDP DL 6753 Mbps [Without the change]
+UDP DL 6823 Mbps [With the Change]
+
+Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/accel_cfg.c | 190 ++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/core.h      |  30 ++++
+ drivers/net/wireless/ath/ath12k/dp_tx.c     |  48 +++--
+ drivers/net/wireless/ath/ath12k/mac.c       | 114 ++++++------
+ drivers/net/wireless/ath/ath12k/ppe.h       |   1 +
+ drivers/net/wireless/ath/ath12k/sawf.c      |  41 ++++-
+ drivers/net/wireless/ath/ath12k/sawf.h      |  10 +-
+ drivers/net/wireless/ath/ath_accel_cfg.c    |   9 +
+ include/ath/ath_dp_accel_cfg.h              |  67 ++++++-
+ include/ath/ath_sawf.h                      |   6 +-
+ net/mac80211/tx.c                           |  23 +--
+ 11 files changed, 448 insertions(+), 91 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/accel_cfg.c
++++ b/drivers/net/wireless/ath/ath12k/accel_cfg.c
+@@ -7,6 +7,7 @@
+ #include "accel_cfg.h"
+ #include "core.h"
+ #include "peer.h"
++#include "sawf.h"
+ #include <linux/module.h>
+ #include <linux/if_vlan.h>
+ 
+@@ -88,8 +89,197 @@ unlock_n_fail:
+ 	return false;
+ }
+ 
++static inline
++u32 ath_encode_mlo_metadata(u8 link_id)
++{
++	u32 mlo_metadata;
++
++	mlo_metadata =	u32_encode_bits(ATH12K_MLO_METADATA_VALID,
++					ATH12K_MLO_METADATA_VALID_MASK) |
++			u32_encode_bits(ATH12K_MLO_METADATA_TAG,
++					ATH12K_MLO_METADATA_TAG_MASK) |
++			u32_encode_bits(link_id,
++					ATH12K_MLO_METADATA_LINKID_MASK);
++	return mlo_metadata;
++}
++
++/**
++ * ath12k_get_ingress_mlo_dev_info() - Retrieve node id
++ * @ndev: pointer to corresponding net_device
++ * @peer_mac: peer mac address
++ * @link_id: Buffer to fill link id
++ * @node_id: Buffer to fill the node id
++ * Return: true - success, false - failure
++ */
++void ath12k_get_ingress_mlo_dev_info(struct net_device *ndev,
++				     const u8 *peer_mac,
++					    u8 *node_id, u8 *link_id)
++{
++	struct	wireless_dev *wdev;
++	struct	ath12k_vif *ahvif;
++	struct	ieee80211_sta *sta;
++	struct	ath12k_sta *ahsta;
++	struct	ath12k_link_vif *arvif;
++	struct	ath12k_base *ab;
++	struct	ieee80211_hw *hw;
++	struct	ieee80211_vif *vif;
++
++	wdev = ndev->ieee80211_ptr;
++	if (!wdev) {
++		/*
++		 * If the netdev is vlan, it may not have ieee80211_ptr.
++		 * In that case fetch the ieee80211_ptr from its top most parent
++		 */
++		if (is_vlan_dev(ndev)) {
++			struct net_device *parent_ndev =
++					vlan_dev_real_dev(ndev);
++
++			if (parent_ndev)
++				wdev = parent_ndev->ieee80211_ptr;
++
++			if (!wdev)
++				return;
++		} else
++			return;
++	}
++
++	hw = wiphy_to_ieee80211_hw(wdev->wiphy);
++	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
++		return;
++
++	vif = wdev_to_ieee80211_vif_vlan(wdev, false);
++
++	if (!vif)
++		return;
++
++	ahvif = ath12k_vif_to_ahvif(vif);
++	if (!ahvif)
++		return;
++
++	if (ahvif->vdev_type != WMI_VDEV_TYPE_STA &&
++	    ahvif->vdev_type != WMI_VDEV_TYPE_AP)
++		return;
++
++	if (ahvif->vdev_type == WMI_VDEV_TYPE_STA) {
++		sta = ieee80211_find_sta(vif, vif->cfg.ap_addr);
++
++		if (!sta) {
++			ath12k_warn(NULL, "ieee80211_sta is null");
++			return;
++		}
++	} else if (ahvif->vdev_type == WMI_VDEV_TYPE_AP) {
++		sta = ieee80211_find_sta(vif, peer_mac);
++		if (!sta) {
++			sta = wdev_to_ieee80211_vlan_sta(wdev);
++			if (!sta)
++				return;
++		}
++	}
++	ahsta = ath12k_sta_to_ahsta(sta);
++
++	rcu_read_lock();
++	arvif  = (!sta->mlo) ? rcu_dereference(ahvif->link[ahsta->deflink.link_id]) :
++				rcu_dereference(ahvif->link[ahsta->primary_link_id]);
++
++	*link_id = (!sta->mlo) ? ahsta->deflink.link_id : ahsta->primary_link_id;
++
++	ab = arvif->ab;
++
++	/* Update DS node_id only if the chipset support DS */
++	if (ahvif->ppe_vp_type != PPE_VP_USER_TYPE_DS ||
++	    !test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
++		goto unlock;
++
++	/*
++	 * In splitphy mlo case, the vp number might get mapped to
++	 * wrong lmac_id causing a traffic halt. Address this issue
++	 * by adding a work around to fallback to sfe mode, in case
++	 * the requested peer has a pdev with incompatible primary lmac id
++	 */
++	if (ab->num_radios > 1) {
++		int idx = arvif->ppe_vp_profile_idx;
++		int link_id;
++		struct ath12k_link_vif *iter_arvif;
++
++		for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++			iter_arvif = ahvif->link[link_id];
++			if (!iter_arvif || iter_arvif == arvif || ab != iter_arvif->ab)
++				continue;
++			if (iter_arvif->ppe_vp_profile_idx < idx) {
++				ab->ppe.ppeds_stats.splitphy_fallbacks++;
++				goto unlock;
++			}
++		}
++	}
++
++	*node_id = ab->ppe.ds_node_id;
++
++unlock:
++	rcu_read_unlock();
++	return;
++}
++
++/**
++ * ath12k_get_metadata_info() - Retrieve ds node id
++ * @ndev: pointer to corresponding net_device
++ * @peer_mac: peer mac address
++ * @node_id: Buffer to fill the node id
++ * @link_id: Buffer to fill link id
++ * Return: true - success, false - failure
++ */
++
++u32 ath12k_get_metadata_info(struct ath_dp_metadata_param *md_param)
++{
++	struct net_device *dest_dev = NULL;
++	u32 metadata = 0;
++	u16 msduq_peer = SAWF_PEER_MSDUQ_INVALID;
++	u8 *dest_mac = NULL;
++	u8 link_id = ATH12k_MLO_LINK_ID_INVALID;
++	u8 node_id = ATH12k_DS_NODE_ID_INVALID;
++
++	if (md_param->is_mlo_param_valid) {
++		dest_dev = md_param->mlo_param.in_dest_dev;
++		dest_mac = md_param->mlo_param.in_dest_mac;
++	}
++
++	if (md_param->is_sawf_param_valid) {
++		if (!md_param->is_mlo_param_valid) {
++			dest_dev = md_param->sawf_param.netdev;
++			dest_mac = md_param->sawf_param.peer_mac;
++		}
++	}
++
++	if (!dest_dev || !dest_mac)
++		return metadata;
++
++	ath12k_get_ingress_mlo_dev_info(dest_dev, dest_mac, &node_id, &link_id);
++
++	/* Update node_id only in case of DS Mode and return metadata */
++	if (node_id != ATH12k_DS_NODE_ID_INVALID) {
++		md_param->mlo_param.out_ppe_ds_node_id = node_id;
++		return metadata;
++	}
++
++	/* Encode MLO metadata only if link_id updated */
++	if (link_id != ATH12k_MLO_LINK_ID_INVALID)
++		metadata |= ath_encode_mlo_metadata(link_id);
++
++	if (md_param->is_sawf_param_valid) {
++		msduq_peer = ath12k_sawf_get_msduq_peer(dest_dev, dest_mac,
++							md_param->sawf_param.service_id, md_param->sawf_param.dscp,
++					md_param->sawf_param.rule_id);
++
++		/* Encode SAWF metadata only if msduq_id updated */
++		if (msduq_peer != SAWF_PEER_MSDUQ_INVALID)
++			metadata |= ath_encode_sawf_metadata(msduq_peer);
++	}
++
++	return metadata;
++}
++
+ static const struct ath_dp_accel_cfg_ops ath_dp_accel_cfg_ops_obj = {
+ 	.ppeds_get_node_id = ath12k_ds_get_node_id,
++	.get_metadata_info = ath12k_get_metadata_info,
+ };
+ 
+ /**
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -94,6 +94,26 @@ extern bool ath12k_debug_critical;
+ #define ATH12K_SSR_PREPARE_SHUTDOWN QCOM_SSR_NOTIFY_CRASH
+ #endif
+ 
++/*
++ * Wifi classifier metadata
++ * ----------------------------------------------------------------------------
++ * | TAG    | mlo_key_valid| sawf_valid| reserved| MLO key | peer_id | MSDUQ   |
++ * |(8 bits)|   (1 bit)    |  (1 bit)  | (1 bit) | (5 bits)| (10 bit)| (6 bits)|
++ * ----------------------------------------------------------------------------
++ */
++
++/**
++ ** MLO metadata related information.
++ **/
++#define ATH12K_SAWF_VALID 1
++#define ATH12K_MLO_METADATA_VALID 1
++#define ATH12K_MLO_METADATA_VALID_MASK BIT(23)
++#define ATH12K_MLO_METADATA_TAG 0xAA
++#define ATH12K_MLO_METADATA_TAG_MASK GENMASK(31, 24)
++#define ATH12K_MLO_METADATA_LINKID_MASK GENMASK(20, 16)
++#define ATH12k_MLO_LINK_ID_INVALID 0xFF
++#define ATH12k_DS_NODE_ID_INVALID 0xFF
++
+ enum ath12k_bdf_search {
+     ATH12K_BDF_SEARCH_DEFAULT,
+     ATH12K_BDF_SEARCH_BUS_AND_BOARD,
+@@ -1893,6 +1913,16 @@ struct ath12k_dcs_wlan_interference {
+ 	struct wmi_dcs_wlan_interference_stats info;
+ };
+ 
++struct ath12k_skb_mark {
++	u32 msduq	: 6;
++	u32 peer_id	: 10;
++	u32 linkid	: 5;
++	u32 reserved	: 1;
++	u32 sawf	: 1;
++	u32 mlo		: 1;
++	u32 tag		: 8;
++};
++
+ int ath12k_core_qmi_firmware_ready(struct ath12k_base *ab);
+ int ath12k_core_pre_init(struct ath12k_base *ab);
+ int ath12k_core_init(struct ath12k_base *ath12k);
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -15,10 +15,9 @@
+ #include <asm/cacheflush.h>
+ 
+ #ifdef CPTCFG_ATH12K_SAWF
+-static inline u32 ath12k_sawf_get_tcl_metadata_update(u32 sk_buff_mark)
++static inline u32 ath12k_sawf_get_tcl_metadata_update(u32 sk_buff_mark, u32 svc_id)
+ {
+ 	u32 tcl_metadata = 0;
+-	u32 svc_id = u32_get_bits(sk_buff_mark, SAWF_SERVICE_CLASS_ID);
+ 
+ 	tcl_metadata = u32_encode_bits(HTT_TCL_META_DATA_TYPE_SVC_ID_BASED,
+ 				       HTT_TCL_META_DATA_TYPE_MISSION) |
+@@ -297,7 +296,6 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 
+ 	ring_id = smp_processor_id();
+ 
+-
+ 	tx_desc = ath12k_dp_tx_assign_buffer(dp, ring_id);
+ 	if (unlikely(!tx_desc)) {
+ 		ab->soc_stats.tx_err.txbuf_na[ring_id]++;
+@@ -331,38 +329,46 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+         tcl_desc.info5 = 0;
+ #ifdef CPTCFG_ATH12K_SAWF
+         /* SAWF */
+-        if (u32_get_bits(skb->mark, SAWF_TAG_ID) == SAWF_VALID_TAG) {
+-                u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
++	if (skb->mark & SAWF_VALID_MASK) {
++		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
++		u16 peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
+                 tx_desc->timestamp = ktime_get_real();
+ 		info = IEEE80211_SKB_CB(skb);
+ 
+                 if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+-                        u32 meta_data_flags;
+-                        tcl_desc.info3 |= ath12k_sawf_get_tcl_cmd_info3_update(msduq_id);
+-                        meta_data_flags =
+-                                        ath12k_sawf_get_tcl_metadata_update(skb->mark);
+-                        tcl_desc.info1 = u32_encode_bits(meta_data_flags,
+-                                                         HAL_TCL_DATA_CMD_INFO1_CMD_NUM);
+-                }
++			u32 meta_data_flags, q_id, tid, svc_id;
+ 
+-                if (unlikely(ath12k_debugfs_is_sawf_stats_enabled(ar) & ATH12K_SAWF_STATS_BASIC)) {
+-                        u16 peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
+-                        u32 len = skb_headlen(skb);
+-                        spin_lock_bh(&ab->base_lock);
+-                        peer = ath12k_peer_find_by_peer_list_index(ar, peer_id);
+-                        if (unlikely(!peer || !peer->sta))
+-                                ath12k_dbg(ab, ATH12K_DBG_SAWF,
+-                                           "peer_id %u not found \n", peer_id);
+-                        else
+-                                ath12k_sawf_tx_enqueue_peer_stats(ab, peer, msduq_id, len);
+-                        spin_unlock_bh(&ab->base_lock);
++			rcu_read_lock();
++			peer = ath12k_peer_find_by_peer_list_index(ar, peer_id);
++			if (unlikely(!peer)) {
++				ath12k_dbg(ab, ATH12K_DBG_SAWF,
++					   "peer_id %u not found\n", peer_id);
++				rcu_read_unlock();
++			} else {
++				tcl_desc.info3 |= ath12k_sawf_get_tcl_cmd_info3_update(msduq_id);
++				tid = u32_get_bits(msduq_id, MSDUQID_TID_MASK);
++				q_id = u32_get_bits(msduq_id, MSDUQID_Q_MASK) - ab->default_msduq_per_tid;
++				svc_id = peer->sawf_ctx_peer.msduq_table[tid][q_id].svc_id;
++				meta_data_flags = ath12k_sawf_get_tcl_metadata_update(skb->mark, svc_id);
++				tcl_desc.info1 = u32_encode_bits(meta_data_flags,
++								 HAL_TCL_DATA_CMD_INFO1_CMD_NUM);
++				rcu_read_unlock();
++				if (unlikely(ath12k_debugfs_is_sawf_stats_enabled(ar) & ATH12K_SAWF_STATS_BASIC)) {
++					u32 len = skb_headlen(skb);
++
++					spin_lock_bh(&ab->base_lock);
++					if (likely(peer))
++						ath12k_sawf_tx_enqueue_peer_stats(ab, peer, msduq_id, len);
++					spin_unlock_bh(&ab->base_lock);
++				}
++			}
+                 }
+                 /* Store the NWDELAY to skb->mark which can be fetched
+                  * during tx completion
+                  */
+                 if (info->sawf.nw_delay > SAWF_NW_DELAY_MAX)
+                         info->sawf.nw_delay = SAWF_NW_DELAY_MAX;
+-                skb->mark = (SAWF_VALID_TAG << SAWF_TAG_SHIFT) | (info->sawf.nw_delay << SAWF_NW_DELAY_SHIFT) | msduq_id;
++		skb->mark = u32_encode_bits((u32_get_bits(skb->mark, SAWF_NW_TAG_SHIFT)), SAWF_TAG_ID) | (info->sawf.nw_delay << SAWF_NW_DELAY_SHIFT) | msduq_id;
+         }
+ #endif
+ 
+@@ -501,11 +507,23 @@ int ath12k_dp_tx(struct ath12k *ar, stru
+ 	 * Global Seq Number - Multicast, SAWF - Unicast
+ 	 */
+ #ifdef CPTCFG_ATH12K_SAWF
+-	if (u32_get_bits(skb->mark, SAWF_TAG_ID) == SAWF_VALID_TAG) {
+-		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
++	if (skb->mark & SAWF_VALID_MASK) {
++		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID), q_id, tid, svc_id;
++		u16 peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
+ 		if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+-			ti.meta_data_flags =
+-				ath12k_sawf_get_tcl_metadata_update(skb->mark);
++			rcu_read_lock();
++			peer = ath12k_peer_find_by_peer_list_index(ar, peer_id);
++			if (unlikely(!peer))
++				ath12k_dbg(ab, ATH12K_DBG_SAWF,
++					   "peer_id %u not found\n", peer_id);
++			else {
++				tid = u32_get_bits(msduq_id, MSDUQID_TID_MASK);
++				q_id = u32_get_bits(msduq_id, MSDUQID_Q_MASK) - ab->default_msduq_per_tid;
++				svc_id = peer->sawf_ctx_peer.msduq_table[tid][q_id].svc_id;
++				ti.meta_data_flags =
++					ath12k_sawf_get_tcl_metadata_update(skb->mark, svc_id);
++			}
++			rcu_read_unlock();
+ 		}
+ 	} else if (gsn_valid && !skip_meta_data_flag) {
+ #else
+@@ -699,7 +717,7 @@ skip_htt_meta:
+ 
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	/* SAWF */
+-	if (u32_get_bits(skb->mark, SAWF_TAG_ID) == SAWF_VALID_TAG) {
++	if (skb->mark & SAWF_VALID_MASK) {
+ 		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
+ 
+ 		if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+@@ -725,7 +743,7 @@ skip_htt_meta:
+ 		 */
+ 		if (info->sawf.nw_delay > SAWF_NW_DELAY_MAX)
+ 			info->sawf.nw_delay = SAWF_NW_DELAY_MAX;
+-		skb->mark = (SAWF_VALID_TAG << SAWF_TAG_SHIFT) | (info->sawf.nw_delay << SAWF_NW_DELAY_SHIFT) | msduq_id;
++		skb->mark = u32_encode_bits((u32_get_bits(skb->mark, SAWF_NW_TAG_SHIFT)), SAWF_TAG_ID) | (info->sawf.nw_delay << SAWF_NW_DELAY_SHIFT) | msduq_id;
+ 	}
+ #endif /* CPTCFG_ATH12K_SAWF */
+ 
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -11188,7 +11188,7 @@ static void ath12k_mac_op_tx(struct ieee
+ 	info = IEEE80211_SKB_CB(skb);
+ 	vif = info->control.vif;
+ 	info_flags = info->flags;
+-
++	link = u32_get_bits(info->control.flags, IEEE80211_TX_CTRL_MLO_LINK);
+ 	ahvif = ath12k_vif_to_ahvif(vif);
+ 
+ 	if (ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR) {
+@@ -11201,12 +11201,11 @@ static void ath12k_mac_op_tx(struct ieee
+ 	memset(skb_cb, 0, sizeof(*skb_cb));
+ 	skb_cb->vif = vif;
+ 
+-	if (control)
++        if (control)
+                 sta = control->sta;
+ 
+ 	/* handle only for MLO case, use deflink for non MLO case */
+ 	if (vif->valid_links) {
+-		link = u32_get_bits(info->control.flags, IEEE80211_TX_CTRL_MLO_LINK);
+ 		link = ath12k_mac_get_tx_link(sta, vif, link, skb, info_flags);
+ 
+ 		if (link >= ATH12K_NUM_MAX_LINKS ||
+@@ -11229,10 +11228,10 @@ static void ath12k_mac_op_tx(struct ieee
+ 	 *   Place this structure as the first member of arvif.
+ 	 *   For example,
+ 	 *   struct ath12k_link_vif_fast {
+-	 *   	u8 addr[ETH_LEN];
+-	 *   	u8 pad[2];
+-	 *   	u64 tbtt_offset;
+-	 *	Ensure the total size is a multiple of typical cache line size, 64
++	 *      u8 addr[ETH_LEN];
++	 *      u8 pad[2];
++	 *      u64 tbtt_offset;
++	 *      Ensure the total size is a multiple of typical cache line size, 64
+ 	 *   } ____cacheline_aligned;
+ 	 */
+ 	rcu_read_lock();
+--- a/drivers/net/wireless/ath/ath12k/ppe.h
++++ b/drivers/net/wireless/ath/ath12k/ppe.h
+@@ -57,6 +57,7 @@ struct ath12k_ppeds_stats {
+ 	u32 num_rx_desc_freed;
+ 	u32 num_rx_desc_realloc;
+ 	u32 tqm_rel_reason[HAL_WBM_TQM_REL_REASON_MAX];
++	u32 splitphy_fallbacks;
+ };
+ 
+ struct ath12k_ppeds_napi {
+--- a/drivers/net/wireless/ath/ath12k/sawf.c
++++ b/drivers/net/wireless/ath/ath12k/sawf.c
+@@ -733,6 +733,41 @@ u16 ath12k_sawf_get_msduq(struct ieee802
+ 	return peer_msduq;
+ }
+ 
++u16 ath12k_sawf_get_msduq_peer(struct net_device *dev, u8 *peer_mac,
++			       u32 service_id, u32 dscp, u32 rule_id)
++{
++	struct wireless_dev	*wdev;
++	struct ieee80211_vif	*vif;
++	struct ieee80211_hw	*hw;
++
++	wdev = dev->ieee80211_ptr;
++	if (!wdev)
++		return SAWF_PEER_MSDUQ_INVALID;
++
++	hw = wiphy_to_ieee80211_hw(wdev->wiphy);
++	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
++		return SAWF_PEER_MSDUQ_INVALID;
++
++	vif = wdev_to_ieee80211_vif(wdev);
++	if (!vif)
++		return SAWF_PEER_MSDUQ_INVALID;
++
++	return ath12k_sawf_get_msduq(vif, peer_mac, service_id, dscp, rule_id);
++}
++
++u32 ath_encode_sawf_metadata(u16 msduq_id)
++{
++	u32 sawf_metadata = 0;
++
++	sawf_metadata =	u32_encode_bits(SAWF_VALID,
++					SAWF_VALID_MASK) |
++			u32_encode_bits(SAWF_VALID_TAG,
++					SAWF_TAG_ID) |
++			u32_encode_bits(msduq_id,
++					SAWF_PEER_MSDUQ_ID);
++
++	return sawf_metadata;
++}
+ int ath12k_sawf_htt_h2t_def_q_map_req(struct ath12k_base *ab,
+ 				      u8 svc_id,
+ 				      u16 peer_id)
+@@ -1553,8 +1588,9 @@ void ath12k_sawf_stats_update(struct ath
+ 	if (!ts || !peer_ctx)
+ 		return;
+ 
+-	if (u32_get_bits(skb->mark, SAWF_TAG_ID) != SAWF_VALID_TAG)
++	if (!(skb->mark & SAWF_VALID_NW_TAG))
+ 		return;
++
+ 	sawf_stats = &peer->sawf_stats;
+ 	if (!sawf_stats) {
+ 		ath12k_err(ab, "sawf stats not available\n");
+--- a/drivers/net/wireless/ath/ath12k/sawf.h
++++ b/drivers/net/wireless/ath/ath12k/sawf.h
+@@ -24,17 +24,21 @@ struct telemetry_sawfdelay_stats;
+ /**
+  ** SAWF_metadata related information.
+  **/
+-#define SAWF_VALID_TAG 0xAA
++#define SAWF_VALID_TAG	0xAA
+ #define SAWF_TAG_SHIFT	0x18
+ 
+ /* Skb mark for SAWF */
+ #define SAWF_MSDUQ_ID			GENMASK(5, 0)
+ #define SAWF_PEER_ID			GENMASK(15, 6)
+-#define SAWF_SERVICE_CLASS_ID		GENMASK(23, 16)
++#define SAWF_PEER_MSDUQ_ID		GENMASK(15, 0)
+ #define SAWF_TAG_ID			GENMASK(31, 24)
+ #define SAWF_NW_DELAY			GENMASK(23, 6)
+ #define SAWF_NW_DELAY_SHIFT		0x6
+ #define SAWF_NW_DELAY_MAX		0x3FFFF
++#define SAWF_NW_TAG_SHIFT		GENMASK(23, 16)
++#define SAWF_VALID			1
++#define SAWF_VALID_MASK			BIT(22)
++#define SAWF_VALID_NW_TAG		BIT(30)
+ 
+ #define TID_FROM_Q_ID			GENMASK(2, 0)
+ #define FLOW_OVERRIDE_FROM_Q_ID		BIT(3)
+@@ -839,6 +843,10 @@ void ath12k_send_ul_configs(struct work_
+ u16 ath12k_sawf_get_msduq(struct ieee80211_vif *vif,
+ 			  u8 *peer_mac, u32 service_id,
+ 			  u32 dscp, u32 rule_id);
++u16 ath12k_sawf_get_msduq_peer(struct net_device *dev,
++			       u8 *peer_mac, u32 service_id,
++			  u32 dscp, u32 rule_id);
++u32 ath_encode_sawf_metadata(u16 msduq_peer);
+ void ath12k_sawf_config_ul(struct ieee80211_vif *dest_vif, u8 *dst_mac,
+ 			   struct ieee80211_vif *src_vif,  u8 *src_mac,
+ 			   u8 fw_service_id, u8 rv_service_id,
+--- a/drivers/net/wireless/ath/ath_accel_cfg.c
++++ b/drivers/net/wireless/ath/ath_accel_cfg.c
+@@ -67,3 +67,12 @@ bool ath_dp_accel_cfg_fetch_ds_node_id(s
+ 						&info->out_ppe_ds_node_id);
+ }
+ EXPORT_SYMBOL(ath_dp_accel_cfg_fetch_ds_node_id);
++
++u32 ath_get_metadata_info(struct ath_dp_metadata_param *dp_metadata_param)
++{
++	if (!ath_dp_accel_cfg_cb)
++		return false;
++
++	return ath_dp_accel_cfg_cb->get_metadata_info(dp_metadata_param);
++}
++EXPORT_SYMBOL(ath_get_metadata_info);
+--- a/include/ath/ath_dp_accel_cfg.h
++++ b/include/ath/ath_dp_accel_cfg.h
+@@ -8,6 +8,68 @@
+ #include <linux/if_vlan.h>
+ #include <net/mac80211.h>
+ 
++/*
++ * wifi classifier metadata
++ * ----------------------------------------------------------------------------
++ * | tag    | mlo_key_valid| sawf_valid| reserved| mlo key | peer_id | msduq   |
++ * |(8 bits)|   (1 bit)    |  (1 bit)  | (1 bit) | (5 bits)| (10 bit)| (6 bits)|
++ * ----------------------------------------------------------------------------
++ */
++
++
++/**
++ * struct mlo_param - mlo metadata params
++ * @in_dest_Dev: input parameter netdev handle
++ * @in_dest_mac: input parameter peer mac address
++ * @out_ppe_ds_node_id: output parameter ds node id
++ */
++
++struct  mlo_param {
++	struct net_device *in_dest_dev;
++	u8      *in_dest_mac;
++	u8      out_ppe_ds_node_id;
++};
++
++/**
++ * struct sawf_param - sawf metadata params
++ * @netdev : Netdevice
++ * @peer_mac : Destination peer mac address
++ * @service_id : Service class id
++ * @dscp : Differentiated Services Code Point
++ * @rule_id : Rule id
++ * @sawf_rule_type: Rule type
++ * @pcp: pcp value
++ * @valid_flag: flag to indicate if pcp is valid or not
++ * @mcast_flag: flag to indicate if query is for multicast
++ */
++
++struct  sawf_param {
++	struct net_device *netdev;
++	u8      *peer_mac,
++		sawf_rule_type,
++		mcast_flag:1;
++	u32     service_id,
++		dscp,
++		rule_id,
++		pcp,
++		valid_flag;
++};
++
++/**
++ * struct ath_dp_metadata_param - wifi classifier metadata
++ * @mlo_param: mlo metadata info
++ * @sawf_param: sawf param
++ */
++
++struct	ath_dp_metadata_param {
++	uint8_t is_mlo_param_valid:1,
++		is_sawf_param_valid:1,
++		reserved:6;
++	struct	mlo_param	mlo_param;
++	struct	sawf_param	sawf_param;
++};
++
++
+ /**
+  * struct ath_dp_accel_cfg_ops - dp accelerator configuraton ops
+  * @ppeds_get_node_id: fetch ds node id from ath driver for given peer mac
+@@ -17,6 +79,7 @@ struct ath_dp_accel_cfg_ops {
+ 	bool (*ppeds_get_node_id)(struct ieee80211_vif *vif,
+ 				  struct wireless_dev *wdev,
+ 				  const u8 *peer_mac, u8 *node_id);
++	uint32_t (*get_metadata_info)(struct ath_dp_metadata_param *md_param);
+ };
+ 
+ /**
+@@ -24,7 +87,6 @@ struct ath_dp_accel_cfg_ops {
+  * @in_dest_dev: input parameter netdev handle
+  * @in_dest_mac: input parameter peer mac address
+  * @out_ppe_ds_node_id: output parameter ds node id
+- *
+  */
+ struct ath_dp_accel_cfg {
+ 	struct net_device *in_dest_dev;
+@@ -38,6 +100,7 @@ struct ath_dp_accel_cfg {
+  *
+  * Return: 0 - success, failure otherwise
+  */
++
+ int ath_dp_accel_cfg_ops_callback_register(const struct ath_dp_accel_cfg_ops *ath_cb);
+ 
+ /**
+@@ -54,4 +117,6 @@ void ath_dp_accel_cfg_ops_callback_unreg
+  * Return: true - success, false - failure
+  */
+ bool ath_dp_accel_cfg_fetch_ds_node_id(struct ath_dp_accel_cfg *info);
++
++u32 ath_get_metadata_info(struct ath_dp_metadata_param *dp_metadata_param);
+ #endif
+--- a/include/ath/ath_sawf.h
++++ b/include/ath/ath_sawf.h
+@@ -32,6 +32,7 @@ struct ath_dl_params {
+ 	u32 rule_id;
+ };
+ 
++
+ struct ath_ul_params {
+ 	struct net_device *dst_dev;
+ 	struct net_device *src_dev;
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -4950,8 +4950,6 @@ netdev_tx_t ieee80211_subif_start_xmit_8
+ 	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev), *orig_sdata;
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+ 	struct ieee80211_tx_control control = {};
+-	struct sta_info *sta;
+-	struct ieee80211_sta *pubsta = NULL;
+ 	bool perf_mode = sdata->local->hw.perf_mode;
+ 
+ #ifdef CPTCFG_MAC80211_ATHMEMDEBUG
+@@ -4969,25 +4967,8 @@ netdev_tx_t ieee80211_subif_start_xmit_8
+ 						      IEEE80211_TX_CTRL_MLO_LINK);
+ 		info->flags = IEEE80211_TX_CTL_HW_80211_ENCAP;
+ 
+-		if (hweight16(sdata->vif.valid_links) > 1) {
+-			rcu_read_lock();
+-
+-			if (ieee80211_lookup_ra_sta(orig_sdata, skb, &sta)) {
+-				kfree_skb(skb);
+-				goto out;
+-			}
+-
+-			if (!IS_ERR_OR_NULL(sta) && sta->uploaded)
+-				pubsta = &sta->sta;
+-
+-			control.sta = pubsta;
+-			drv_tx(sdata->local, &control,  skb);
+-out:
+-			rcu_read_unlock();
+-		} else {
+-			control.sta = NULL;
+-			drv_tx(sdata->local, &control,  skb);
+-		}
++		control.sta = NULL;
++		drv_tx(sdata->local, &control,  skb);
+ 
+ 		return NETDEV_TX_OK;
+ 	}

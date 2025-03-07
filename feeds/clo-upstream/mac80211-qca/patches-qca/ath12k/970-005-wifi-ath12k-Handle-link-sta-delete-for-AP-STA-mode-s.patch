@@ -1,0 +1,317 @@
+From 9ac3ab2edb8c3a39df69ab61a1969bacdac4e440 Mon Sep 17 00:00:00 2001
+From: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+Date: Sat, 10 Aug 2024 00:23:59 +0530
+Subject: [PATCH] wifi: ath12k: Handle link sta delete for AP/STA mode(s)
+
+As part of ML link reconfiguration framework, userspace will send link
+sta delete command to kernel to remove only the link station associated
+to the affected link. In-order to achieve that, mac80211 will send
+change_sta_links to the driver. Currently, we don't have support to
+delete a link dynamically in change_sta_links ops, hence the command is
+silently ignored by sending success to mac80211.
+
+Add support to delete the station peer dynamically it its AP mode and
+remove the link station structure from ahsta if its station mode.
+
+[Note: If primary link is getting removed, then we are not handling the
+link removal, instead we will be disassociating the entire MLD
+association due to limitation]
+
+Patch-work: None
+Patch-dependency: Initial MLO patche series
+
+Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 142 ++++++++++++++++----------
+ 1 file changed, 89 insertions(+), 53 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -7823,7 +7823,13 @@ static void ath12k_mac_station_post_remo
+ 	kfree(arsta->rx_stats);
+ 	arsta->rx_stats = NULL;
+ 	ath12k_mac_ap_ps_recalc(ar);
+-	ahsta->ahvif = NULL;
++
++	/*
++	 * Remove ahvif reference only when all the links from ahsta is removed
++	 */
++	if (hweight16(ahsta->links_map) <= 1)
++		ahsta->ahvif = NULL;
++
+ }
+ 
+ static int ath12k_mac_station_add(struct ath12k *ar,
+@@ -8891,86 +8897,147 @@ static int ath12k_mac_op_change_sta_link
+ 	struct ath12k_hw *ah = hw->priv;
+ 	struct ath12k *ar;
+ 	struct ath12k_link_vif *arvif;
+-	struct ath12k_link_sta *arsta;
++	struct ath12k_link_sta *arsta, *tmp_arsta;
+ 	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
+ 	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
+ 	unsigned long valid_links;
+-	u8 link_id, num_devices = ah->ag->num_chip;
++	u16 removed_link_map;
++	u8 link_id, num_devices = ah->ag->num_chip, tmp_link_id;
+ 	int ret = 0;
+ 
+ 	if (!sta->valid_links)
+ 		return -EINVAL;
+ 
+-	/* FW doesnt support removal of one of link stas. All sta would be removed during ML STA
+-	 * delete in sta_state(), hence link sta removal is not handled here.
+-	 */
+-	if (new_links < old_links)
+-		return 0;
+-
+ 	mutex_lock(&ah->conf_mutex);
+ 
+-	if (ahsta->ml_peer_id == ATH12K_MLO_PEER_ID_INVALID) {
+-		ath12k_err(NULL, "unable to add link for ml sta %pM", sta->addr);
+-		mutex_unlock(&ah->conf_mutex);
+-		return -EINVAL;
+-	}
++	if (new_links > old_links) {
++		if (ahsta->ml_peer_id == ATH12K_MLO_PEER_ID_INVALID) {
++			ath12k_err(NULL, "unable to add link for ml sta %pM", sta->addr);
++			mutex_unlock(&ah->conf_mutex);
++			return -EINVAL;
++		}
+ 
+-	/* this op is expected only after initial sta insertion with default link */
+-	WARN_ON(ahsta->links_map == 0);
++		/* this op is expected only after initial sta insertion with default link */
++		WARN_ON(ahsta->links_map == 0);
+ 
+-	if ((test_bit(ahvif->primary_link_id, &sta->valid_links))) {
+-		arvif = ahvif->link[ahvif->primary_link_id];
+-		if (arvif->ar->ab->hw_params->is_plink_preferable) {
+-			ahsta->primary_link_id = ahvif->primary_link_id;
+-		} else {
+-			ahsta->primary_link_id = ahsta->assoc_link_id;
+-			arvif = ahvif->link[ahsta->assoc_link_id];
+-			if (!arvif->ar->ab->hw_params->is_plink_preferable) {
+-				for_each_set_bit(link_id, &sta->valid_links,
+-						 IEEE80211_MLD_MAX_NUM_LINKS) {
+-					if (link_id != ahsta->primary_link_id) {
+-						ahsta->primary_link_id = link_id;
+-						break;
++		if ((test_bit(ahvif->primary_link_id, &sta->valid_links))) {
++			arvif = ahvif->link[ahvif->primary_link_id];
++			if (arvif->ar->ab->hw_params->is_plink_preferable) {
++				ahsta->primary_link_id = ahvif->primary_link_id;
++			} else {
++				ahsta->primary_link_id = ahsta->assoc_link_id;
++				arvif = ahvif->link[ahsta->assoc_link_id];
++				if (!arvif->ar->ab->hw_params->is_plink_preferable) {
++					for_each_set_bit(link_id, &sta->valid_links,
++							 IEEE80211_MLD_MAX_NUM_LINKS) {
++						if (link_id != ahsta->primary_link_id) {
++							ahsta->primary_link_id = link_id;
++							break;
++						}
+ 					}
+ 				}
+ 			}
+ 		}
+-	}
+ 
+-	valid_links = new_links;
+-	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
+-		if (ahsta->links_map & BIT(link_id))
+-			continue;
++		valid_links = new_links;
++		for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
++			if (ahsta->links_map & BIT(link_id))
++				continue;
+ 
+-		arvif = ahvif->link[link_id];
+-		arsta = ath12k_mac_alloc_assign_link_sta(ah, ahsta, ahvif, link_id);
++			arvif = ahvif->link[link_id];
++			arsta = ath12k_mac_alloc_assign_link_sta(ah, ahsta, ahvif, link_id);
+ 
+-		if (!arvif || !arsta) {
+-			ath12k_err(NULL, "Failed to alloc/assign link sta");
+-			continue;
++			if (!arvif || !arsta) {
++				ath12k_err(NULL, "Failed to alloc/assign link sta");
++				continue;
++			}
++
++			ar = arvif->ar;
++			if (!ar) {
++				ath12k_err(NULL,
++					   "Failed to get ar to change sta links\n");
++				continue;
++			}
++
++			mutex_lock(&ar->conf_mutex);
++			ret = ath12k_mac_station_add(ar, arvif, arsta);
++			if (ret) {
++				mutex_unlock(&ar->conf_mutex);
++				ath12k_warn(ar->ab, "Failed to add station: %pM for VDEV: %d\n",
++					    arsta->addr, arvif->vdev_id);
++				ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
++				break;
++			}
++			mutex_unlock(&ar->conf_mutex);
+ 		}
+ 
+-		ar = arvif->ar;
+-		if (!ar) {
+-			ath12k_err(NULL,
+-				   "Failed to get ar to change sta links\n");
+-			continue;
++		ath12k_mac_assign_middle_link_id(sta, ahsta, num_devices);
++	} else {
++		removed_link_map = old_links ^ new_links;
++
++		if (hweight16(removed_link_map) > 1) {
++			mutex_unlock(&ah->conf_mutex);
++			return -EINVAL;
+ 		}
+ 
+-		mutex_lock(&ar->conf_mutex);
+-		ret = ath12k_mac_station_add(ar, arvif, arsta);
+-		if (ret) {
+-			mutex_unlock(&ar->conf_mutex);
+-			ath12k_warn(ar->ab, "Failed to add station: %pM for VDEV: %d\n",
+-				    arsta->addr, arvif->vdev_id);
+-			ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
+-			break;
++		link_id = ffs(removed_link_map) - 1;
++
++		arvif = ahvif->link[link_id];
++		arsta = ahsta->link[link_id];
++
++		if (!arsta) {
++			mutex_unlock(&ah->conf_mutex);
++			return -EINVAL;
+ 		}
+-		mutex_unlock(&ar->conf_mutex);
+-	}
+ 
+-	ath12k_mac_assign_middle_link_id(sta, ahsta, num_devices);
++		if (vif->type == NL80211_IFTYPE_AP) {
++			if (!arvif) {
++				mutex_unlock(&ah->conf_mutex);
++				return -EINVAL;
++			}
++			ar = arvif->ar;
++
++			if (ahsta->primary_link_id == link_id) {
++				mutex_unlock(&ah->conf_mutex);
++			 	/* WAR: send low_ack if its primary link id is
++				 * getting removed, until primary UMAC
++				 * migration is supported
++				 */
++				ieee80211_report_low_ack(sta, ATH12K_REPORT_LOW_ACK_NUM_PKT);
++				return -EINVAL;
++			}
+ 
++			if (ath12k_station_unauthorize(ar, arvif, arsta) ||
++			    ath12k_station_disassoc(ar, arvif, arsta) ||
++			    ath12k_mac_station_remove(ar, arvif, arsta))
++				ath12k_warn(ar->ab, "Failed to remove station: %pM for VDEV: %d\n",
++					    arsta->addr, arvif->vdev_id);
++		} else if (vif->type == NL80211_IFTYPE_STATION) {
++			if (ath12k_mac_free_unassign_link_sta(ahsta->ahvif->ah, arsta->ahsta,
++							      arsta->link_id))
++				    ath12k_warn(NULL, "Failed to remove station: %pM\n",
++						arsta->addr);
++		}
++
++		/* If the link that is getting removed is the assoc link id of
++		 * the station, then move the contents of the next link to
++		 * deflink and free the moved link memory
++		 */
++		if (ahsta->assoc_link_id != ahsta->primary_link_id &&
++		    ahsta->assoc_link_id == link_id &&
++		    hweight32(ahsta->links_map) >= 1) {
++			tmp_link_id = ffs(ahsta->links_map) - 1;
++
++			tmp_arsta = ahsta->link[tmp_link_id];
++			if (tmp_arsta) {
++				memcpy(&ahsta->deflink, tmp_arsta,
++				       sizeof(*tmp_arsta));
++				ahsta->assoc_link_id = tmp_arsta->link_id;
++				ahsta->link[tmp_link_id] = &ahsta->deflink;
++				kfree(tmp_arsta);
++			}
++		}
++	}
+ 	mutex_unlock(&ah->conf_mutex);
+ 
+ 	return ret;
+@@ -15167,7 +15234,11 @@ ath12k_mac_unassign_vif_chanctx_handle(s
+ 	}
+ 
+ stop_primary:
+-	ath12k_bss_disassoc(ar, arvif, true);
++	if (ahvif->vdev_type == WMI_VDEV_TYPE_STA &&
++	    ab->hw_params->vdev_start_delay)
++		ath12k_bss_disassoc(ar, arvif, true);
++	else
++		ath12k_bss_disassoc(ar, arvif, false);
+ 
+ 	ret = ath12k_mac_vdev_stop(arvif);
+ 	if (ret)
+@@ -17957,6 +18028,19 @@ exit:
+ 	return ret;
+ }
+ 
++static bool ath12k_mac_op_removed_link_is_primary(struct ieee80211_sta *sta,
++		u16 removed_links)
++{
++	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
++	u16 link_id;
++
++	for_each_set_bit(link_id, &removed_links, ATH12K_NUM_MAX_LINKS)
++		if (ahsta->primary_link_id == link_id)
++			return true;
++
++	return false;
++}
++
+ static const struct ieee80211_ops ath12k_ops = {
+ 	.tx				= ath12k_mac_op_tx,
+ 	.wake_tx_queue			= ieee80211_handle_wake_tx_queue,
+@@ -18008,6 +18092,7 @@ static const struct ieee80211_ops ath12k
+ 	.get_txpower			= ath12k_mac_op_get_txpower,
+ 	.set_radar_background		= ath12k_mac_op_set_radar_background,
+ 	.link_reconfig_remove		= ath12k_mac_op_link_reconfig_remove,
++	.removed_link_is_primary	= ath12k_mac_op_removed_link_is_primary,
+ };
+ 
+ static void ath12k_mac_update_ch_list(struct ath12k *ar,
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -6177,15 +6177,20 @@ void ath12k_debugfs_remove_interface(str
+ 		return;
+ 	}
+ 
+-	debugfs_remove(ahvif->debugfs_primary_link);
+-	ahvif->debugfs_primary_link = NULL;
++	/*
++	 * Remove ahvif debugfs only when all the link is going to be removed.
++	 */
++	if (hweight16(ahvif->links_map) <= 1) {
++		debugfs_remove(ahvif->debugfs_primary_link);
++		ahvif->debugfs_primary_link = NULL;
+ 
+-	debugfs_remove(ahvif->debugfs_rfs_core_mask);
+-	ahvif->debugfs_rfs_core_mask = NULL;
++		debugfs_remove(ahvif->debugfs_rfs_core_mask);
++		ahvif->debugfs_rfs_core_mask = NULL;
+ 
+-	if (ahvif->debugfs_linkstats) {
+-		debugfs_remove(ahvif->debugfs_linkstats);
+-		ahvif->debugfs_linkstats = NULL;
++		if (ahvif->debugfs_linkstats) {
++			debugfs_remove(ahvif->debugfs_linkstats);
++			ahvif->debugfs_linkstats = NULL;
++		}
+ 	}
+ 
+ 	if (!arvif->debugfs_twt)

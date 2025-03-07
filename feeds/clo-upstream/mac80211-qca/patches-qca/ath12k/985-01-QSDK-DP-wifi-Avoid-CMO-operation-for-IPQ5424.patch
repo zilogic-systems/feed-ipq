@@ -1,0 +1,271 @@
+From 063a336bd08766a8ccd47c8abf5e8531b7bcdff2 Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Tue, 3 Dec 2024 16:05:26 +0530
+Subject: [PATCH 1/3] QSDK:DP:wifi: Avoid CMO operation for IPQ5424
+
+IO-Coherency is supported in IPQ5424 to avoid CMO(Cache Maintanence
+Operation) for KPI improvement. So, cache invalidation and flush
+operation which are required to sync the cache and DDR is handled
+by hardware feature. Hence, avoid CMO operation wherever
+dmac_inv_range_no_dsb, dsb and dmac_clean_range_no_dsb API are used.
+
+patch-dependency: 982-QSDK-wifi-ath12k-configure-secure-reg-for-io-coherency.patch
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h   | 23 +++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/dbring.c |  2 ++
+ drivers/net/wireless/ath/ath12k/dp_rx.c  | 10 ++++++----
+ drivers/net/wireless/ath/ath12k/dp_tx.c  | 13 ++++++++-----
+ drivers/net/wireless/ath/ath12k/hal.c    | 15 +++++++++------
+ drivers/net/wireless/ath/ath12k/ppe.c    | 12 ++++++------
+ 6 files changed, 54 insertions(+), 21 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 0a6b18b..864af8a 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -35,6 +35,9 @@
+ #include "power_boost.h"
+ #include "hal_rx.h"
+ #include "ppe.h"
++#ifndef CONFIG_IO_COHERENCY
++#include <asm/cacheflush.h>
++#endif
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ #include <ppe_ds_wlan.h>
+ #include <ppe_vp_public.h>
+@@ -2079,6 +2082,26 @@ ath12k_get_arvif_from_link_id(struct ath12k_vif *ahvif, int link_id)
+ 					 lockdep_is_held(&ahvif->ah->conf_mutex));
+ }
+ 
++static inline void
++ath12k_core_dma_inv_range_no_dsb(const void *start, const void *end) {
++#ifndef CONFIG_IO_COHERENCY
++        dmac_inv_range_no_dsb(start, end);
++#endif
++}
++
++static inline void ath12k_core_dsb(void){
++#ifndef CONFIG_IO_COHERENCY
++        dsb(st);
++#endif
++}
++
++static inline void
++ath12k_core_dma_clean_range_no_dsb(const void *start, const void *end) {
++#ifndef CONFIG_IO_COHERENCY
++	dmac_clean_range_no_dsb(start, end);
++#endif
++}
++
+ int ath12k_pci_init(void);
+ void ath12k_pci_exit(void);
+ #ifdef CPTCFG_ATH12K_AHB
+diff --git a/drivers/net/wireless/ath/ath12k/dbring.c b/drivers/net/wireless/ath/ath12k/dbring.c
+index b419eaa..830502a 100644
+--- a/drivers/net/wireless/ath/ath12k/dbring.c
++++ b/drivers/net/wireless/ath/ath12k/dbring.c
+@@ -84,7 +84,9 @@ int ath12k_dbring_bufs_replenish(struct ath12k *ar,
+ 
+ 	buff->paddr = paddr;
+ 
++#ifndef CONFIG_IO_COHERENCY
+ 	dma_sync_single_for_device(ab->dev, paddr, ring->buf_sz, DMA_FROM_DEVICE);
++#endif
+ 	cookie = u32_encode_bits(ar->pdev_idx, DP_DIR_BUF_COOKIE_PDEV_ID) |
+ 		 u32_encode_bits(buf_id, DP_DIR_BUF_COOKIE_BUF_ID);
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index ac578a6..d850da0 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -303,7 +303,8 @@ void ath12k_dp_rx_bufs_replenish(struct ath12k_base *ab,
+ 			break;
+ 
+ 		if (unlikely(!skb->fast_recycled))
+-			dmac_inv_range_no_dsb(skb->data, skb->data + (skb->len + skb_tailroom(skb)));
++			ath12k_core_dma_inv_range_no_dsb(skb->data,
++							 skb->data + (skb->len + skb_tailroom(skb)));
+ 
+ 		paddr = dma_map_single_attrs(ab->dev, skb->data,
+ 					     skb->len + skb_tailroom(skb),
+@@ -318,7 +319,7 @@ void ath12k_dp_rx_bufs_replenish(struct ath12k_base *ab,
+ 		num_remain--;
+ 	}
+ 
+-	dsb(st);
++	ath12k_core_dsb();
+ 	spin_lock_bh(&srng->lock);
+ 	ath12k_hal_srng_access_begin(ab, srng);
+ 	while ((skb = __skb_dequeue(&skb_list))) {
+@@ -3775,8 +3776,9 @@ try_again:
+ 		ath12k_hal_srng_access_end(ab, srng);
+ 		return -EINVAL;
+ 	}
++#ifndef CONFIG_IO_COHERENCY
+ 	ath12k_hal_srng_dst_invalidate_entry(ab, srng, valid_entries);
+-
++#endif
+ 	l_pf_reo_desc = ath12k_hal_srng_dst_prefetch_reo_desc(srng);
+ 
+ 	while (likely((rx_desc = ath12k_hal_srng_dst_get_next_cache_entry(ab, srng)))) {
+@@ -3833,7 +3835,7 @@ try_again:
+ 
+ 		chip_id = src_ab->chip_id;
+ 
+-		dmac_inv_range_no_dsb(desc_info->skb_data, desc_info->skb_data + DP_RX_BUFFER_SIZE);
++		ath12k_core_dma_inv_range_no_dsb(desc_info->skb_data, desc_info->skb_data + DP_RX_BUFFER_SIZE);
+ 		dma_unmap_single_attrs(src_ab->dev, desc_info->paddr, DP_RX_BUFFER_SIZE,
+ 				       DMA_FROM_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+ 		desc_info->skb = NULL;
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index e696008..02ce66d 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -302,7 +302,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 		return -ENOSPC;
+ 	}
+ 
+-	dmac_clean_range_no_dsb(skb->data, skb->data + DP_TX_SFE_BUFFER_SIZE);
++	ath12k_core_dma_clean_range_no_dsb(skb->data, skb->data + DP_TX_SFE_BUFFER_SIZE);
+ 	paddr = (dma_addr_t)virt_to_phys(skb->data);
+ 
+ 	len = skb->len;
+@@ -392,7 +392,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 	ab->soc_stats.tx_unicast[ring_id]++;
+ 
+ 	memcpy(hal_tcl_desc, &tcl_desc, sizeof(tcl_desc));
+-	dsb(st);
++	ath12k_core_dsb();
+ 	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
+ 	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+@@ -626,7 +626,7 @@ skip_htt_meta:
+ 	}
+ 
+ 
+-	dmac_clean_range_no_dsb(skb->data, skb->data + skb->len);
++	ath12k_core_dma_clean_range_no_dsb(skb->data, skb->data + skb->len);
+ 	ti.paddr = (dma_addr_t)virt_to_phys(skb->data);
+ 
+ 	tx_desc->skb = skb;
+@@ -661,7 +661,8 @@ skip_htt_meta:
+ 		}
+ 
+ 
+-		dmac_clean_range_no_dsb(skb_ext_desc->data, skb_ext_desc->data + skb_ext_desc->len);
++		ath12k_core_dma_clean_range_no_dsb(skb_ext_desc->data,
++						   skb_ext_desc->data + skb_ext_desc->len);
+ 		ti.paddr = (dma_addr_t)virt_to_phys(skb_ext_desc->data);
+ 
+ 		ti.data_len = skb_ext_desc->len;
+@@ -747,7 +748,7 @@ skip_htt_meta:
+ 	}
+ #endif /* CPTCFG_ATH12K_SAWF */
+ 
+-	dsb(st);
++	ath12k_core_dsb();
+ 	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
+ 	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+@@ -1611,7 +1612,9 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 	if (valid_entries > budget)
+ 		valid_entries = budget;
+ 
++#ifndef CONFIG_IO_COHERENCY
+ 	ath12k_hal_srng_dst_invalidate_entry(ab, status_ring, valid_entries);
++#endif
+ 	skb_queue_head_init(&free_list_head);
+ 
+ 	while (budget && (tx_status = (struct hal_wbm_completion_ring_tx *)ath12k_hal_srng_dst_get_next_cache_entry(ab, status_ring))) {
+diff --git a/drivers/net/wireless/ath/ath12k/hal.c b/drivers/net/wireless/ath/ath12k/hal.c
+index f10cc38..f902844 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -1838,9 +1838,11 @@ void ath12k_hal_srng_prefetch_desc(struct ath12k_base *ab,
+ 	/* prefetch only if desc is available */
+ 	desc = ath12k_hal_srng_dst_peek(ab, srng);
+ 	if (likely(desc)) {
++#ifndef CONFIG_IO_COHERENCY
+ 		dma_sync_single_for_cpu(ab->dev, virt_to_phys(desc),
+ 				        (srng->entry_size * sizeof(u32)),
+ 					DMA_FROM_DEVICE);
++#endif
+ 		prefetch(desc);
+ 	}
+ }
+@@ -1940,18 +1942,19 @@ void ath12k_hal_srng_ppeds_dst_inv_entry(struct ath12k_base *ab,
+ 	desc = srng->ring_base_vaddr + tp;
+ 	if (hp > tp) {
+ 		last_desc = ((void *)desc + entries * srng->entry_size * sizeof(u32));
+-		dmac_inv_range_no_dsb((void *)desc,
+-				      (void *)last_desc);
++		ath12k_core_dma_inv_range_no_dsb((void *)desc,
++						 (void *)last_desc);
+ 	} else {
+ 		remaining_entries = srng->ring_size - tp;
+ 		last_desc = ((void *)desc + remaining_entries * sizeof(u32));
+-		dmac_inv_range_no_dsb((void *)desc, (void *)last_desc);
++		ath12k_core_dma_inv_range_no_dsb((void *)desc, (void *)last_desc);
+ 
+ 		last_desc = ((void *)srng->ring_base_vaddr + hp * sizeof(u32));
+-		dmac_inv_range_no_dsb((void *)srng->ring_base_vaddr, (void *)last_desc);
++		ath12k_core_dma_inv_range_no_dsb((void *)srng->ring_base_vaddr,
++						 (void *)last_desc);
+ 	}
+ 
+-	dsb(st);
++	ath12k_core_dsb();
+ }
+ #endif
+ 
+@@ -2367,7 +2370,7 @@ int ath12k_hal_srng_setup_idx(struct ath12k_base *ab, enum hal_ring_type type,
+ 	       (srng->entry_size * srng->num_entries) << 2);
+ 
+ 	if (srng->flags & HAL_SRNG_FLAGS_CACHED) {
+-		dmac_inv_range_no_dsb(srng->ring_base_vaddr,
++		ath12k_core_dma_inv_range_no_dsb(srng->ring_base_vaddr,
+ 				      srng->ring_base_vaddr +
+ 				      ((srng->entry_size * srng->num_entries)));
+ 	}
+diff --git a/drivers/net/wireless/ath/ath12k/ppe.c b/drivers/net/wireless/ath/ath12k/ppe.c
+index 158c5c1..5949849 100644
+--- a/drivers/net/wireless/ath/ath12k/ppe.c
++++ b/drivers/net/wireless/ath/ath12k/ppe.c
+@@ -152,8 +152,8 @@ static bool ath12k_ppeds_free_rx_desc(struct ppe_ds_wlan_rxdesc_elem *arr,
+ 	/* When recycled_for_ds is set, packet is used by DS rings and never has
+ 	 * touched by host. So, buffer unmap can be skipped. */
+ 	if (!skb->recycled_for_ds) {
+-        	dmac_inv_range_no_dsb(skb->data, skb->data + (skb->len +
+-				      skb_tailroom(skb)));
++		ath12k_core_dma_inv_range_no_dsb(skb->data, skb->data + (skb->len +
++						 skb_tailroom(skb)));
+ 		dma_unmap_single_attrs(ab->dev, ATH12K_SKB_RXCB(skb)->paddr,
+            			       skb->len + skb_tailroom(skb),
+ 				       DMA_FROM_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+@@ -376,9 +376,9 @@ static u32 ath12k_ppeds_get_batched_tx_desc(ppe_ds_wlan_handle_t *ppeds_handle,
+ 
+ 			skb_reserve(skb, headroom);
+ 			if (!skb->recycled_for_ds) {
+-				dmac_inv_range_no_dsb((void *)skb->data,
+-						      (void *)skb->data + buff_size - headroom);
+-						      skb->recycled_for_ds = 1;
++				ath12k_core_dma_inv_range_no_dsb((void *)skb->data,
++								 (void *)skb->data + buff_size - headroom);
++								 skb->recycled_for_ds = 1;
+ 			}
+ 
+ 			paddr = virt_to_phys(skb->data);
+@@ -402,7 +402,7 @@ static u32 ath12k_ppeds_get_batched_tx_desc(ppe_ds_wlan_handle_t *ppeds_handle,
+ 
+ 	spin_unlock_bh(&dp->ppeds_tx_desc_lock);
+ 
+-	dsb(st);
++	ath12k_core_dsb();
+ 
+ update_stats_and_ret:
+ 	if (unlikely(num_buff_req))
+-- 
+2.34.1
+

@@ -1,0 +1,112 @@
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -2569,6 +2569,7 @@ struct cfg80211_scan_6ghz_params {
+  * @channels: channels to scan on.
+  * @n_channels: total number of channels to scan
+  * @scan_width: channel width for scanning
++ * @chandef: defines the channel to do wide band scan
+  * @ie: optional information element(s) to add into Probe Request or %NULL
+  * @ie_len: length of ie in octets
+  * @duration: how long to listen on each channel, in TUs. If
+@@ -2599,6 +2600,7 @@ struct cfg80211_scan_request {
+ 	int n_ssids;
+ 	u32 n_channels;
+ 	enum nl80211_bss_scan_width scan_width;
++	struct cfg80211_chan_def *chandef;
+ 	const u8 *ie;
+ 	size_t ie_len;
+ 	u16 duration;
+--- a/net/mac80211/scan.c
++++ b/net/mac80211/scan.c
+@@ -717,11 +717,13 @@ static int __ieee80211_start_scan(struct
+ 
+ 		local->hw_scan_req = kmalloc(
+ 				sizeof(*local->hw_scan_req) +
++				sizeof(*req->chandef) +
+ 				req->n_channels * sizeof(req->channels[0]) +
+ 				local->hw_scan_ies_bufsize, GFP_KERNEL);
+ 		if (!local->hw_scan_req)
+ 			return -ENOMEM;
+ 
++		local->hw_scan_req->req.chandef = req->chandef;
+ 		local->hw_scan_req->req.ssids = req->ssids;
+ 		local->hw_scan_req->req.n_ssids = req->n_ssids;
+ 		ies = (u8 *)local->hw_scan_req +
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -9117,7 +9117,10 @@ nl80211_check_scan_flags(struct wiphy *w
+ 				     NL80211_EXT_FEATURE_SCAN_RANDOM_SN) ||
+ 	    !nl80211_check_scan_feat(wiphy, *flags,
+ 				     NL80211_SCAN_FLAG_MIN_PREQ_CONTENT,
+-				     NL80211_EXT_FEATURE_SCAN_MIN_PREQ_CONTENT))
++				     NL80211_EXT_FEATURE_SCAN_MIN_PREQ_CONTENT) ||
++	    !nl80211_check_scan_feat(wiphy, *flags,
++				     NL80211_SCAN_FLAG_WIDE_BAND_SCAN,
++				     NL80211_EXT_FEATURE_WIDE_BAND_SCAN))
+ 		return -EOPNOTSUPP;
+ 
+ 	if (*flags & NL80211_SCAN_FLAG_RANDOM_ADDR) {
+@@ -9142,10 +9145,12 @@ static int nl80211_trigger_scan(struct s
+ 	struct cfg80211_scan_request *request;
+ 	struct nlattr *scan_freqs = NULL;
+ 	bool scan_freqs_khz = false;
++	struct cfg80211_chan_def chandef;
+ 	struct nlattr *attr;
+ 	struct wiphy *wiphy;
+-	int err, tmp, n_ssids = 0, n_channels, i;
++	int err, tmp, n_ssids = 0, n_channels = 0, i;
+ 	size_t ie_len, size;
++	bool chandef_found = false;
+ 
+ 	wiphy = &rdev->wiphy;
+ 
+@@ -9158,7 +9163,12 @@ static int nl80211_trigger_scan(struct s
+ 	if (rdev->scan_req || rdev->scan_msg)
+ 		return -EBUSY;
+ 
+-	if (info->attrs[NL80211_ATTR_SCAN_FREQ_KHZ]) {
++	if (info->attrs[NL80211_ATTR_WIPHY_FREQ]) {
++		if (nl80211_parse_chandef(rdev, info, &chandef)) {
++			return -EINVAL;
++		}
++		chandef_found = true;
++	} else if (info->attrs[NL80211_ATTR_SCAN_FREQ_KHZ]) {
+ 		if (!wiphy_ext_feature_isset(wiphy,
+ 					     NL80211_EXT_FEATURE_SCAN_FREQ_KHZ))
+ 			return -EOPNOTSUPP;
+@@ -9171,6 +9181,8 @@ static int nl80211_trigger_scan(struct s
+ 		n_channels = validate_scan_freqs(scan_freqs);
+ 		if (!n_channels)
+ 			return -EINVAL;
++	} else if (chandef_found) {
++		n_channels = 1;
+ 	} else {
+ 		n_channels = ieee80211_get_num_supported_channels(wiphy);
+ 	}
+@@ -9193,10 +9205,17 @@ static int nl80211_trigger_scan(struct s
+ 	size = struct_size(request, channels, n_channels);
+ 	size = size_add(size, array_size(sizeof(*request->ssids), n_ssids));
+ 	size = size_add(size, ie_len);
++	size = size_add(size, sizeof(*request->chandef));
+ 	request = kzalloc(size, GFP_KERNEL);
+ 	if (!request)
+ 		return -ENOMEM;
+ 
++	if (chandef_found) {
++		request->chandef = &chandef;
++		request->channels[0] = chandef.chan;
++		request->n_channels = n_channels;
++	}
++
+ 	if (n_ssids)
+ 		request->ssids = (void *)&request->channels[n_channels];
+ 	request->n_ssids = n_ssids;
+@@ -9230,7 +9249,7 @@ static int nl80211_trigger_scan(struct s
+ 			request->channels[i] = chan;
+ 			i++;
+ 		}
+-	} else {
++	} else if (!chandef_found) {
+ 		enum nl80211_band band;
+ 
+ 		/* all channels */

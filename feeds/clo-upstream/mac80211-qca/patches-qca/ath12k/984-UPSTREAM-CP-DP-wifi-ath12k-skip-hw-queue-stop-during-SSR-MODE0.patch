@@ -1,0 +1,67 @@
+From 3ae4c6241ef08f450bf3486a913c1df839838a2d Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Thu, 21 Nov 2024 14:13:32 +0530
+Subject: [PATCH] wifi: ath12k: skip hw queue stop during SSR MODE0
+
+use-after-free reported from KASAN after recovered from SSR. There
+is a pending queue in mac80211 which queues the skb when the
+hw queue stop triggered from host driver. The pending skb will be
+transmissed to tx path to hw queue for processing once recovered.
+
+This pending SKB holds the reference of some of the parameter like
+key. These resources are freed during the recovery but the pending
+SKB holds old reference which leads to use-after-free when the pending skb
+transmitted after SSR.
+
+The queuing not required for MODE0 SSR clear all VAP and station
+will be cleared. So skipping the hw queue stop during MODE0.
+
+[ 4021.355758] ath12k: HW group recovery flag cleared ag dev_flags:0x100
+[ 4021.362549] ==================================================================
+[ 4021.368942] BUG: KASAN: slab-use-after-free in ath12k_mac_tx_check_max_limit+0x898/0x1268 [ath12k]
+[ 4021.376060] Read of size 4 at addr ffffff8005e2f238 by task ksoftirqd/3/31
+[ 4021.384998]
+[ 4021.391854] CPU: 3 PID: 31 Comm: ksoftirqd/3 Tainted: G           O       6.6.47+ #0
+[ 4021.401233] Call trace:
+[ 4021.408952]  dump_backtrace+0xd4/0xf4
+[ 4021.411211]  show_stack+0x14/0x1c
+[ 4021.415029]  dump_stack_lvl+0x44/0x58
+[ 4021.418328]  print_report+0xa0/0x4ac
+[ 4021.421974]  kasan_report+0xac/0xbc
+[ 4021.425619]  __asan_load4+0x24/0x84
+[ 4021.428831]  ath12k_mac_tx_check_max_limit+0x898/0x1268 [ath12k]
+[ 4021.432307]  ieee80211_proberesp_get+0x1330/0x17a0 [mac80211]
+[ 4021.438557]  ieee80211_proberesp_get+0x14b8/0x17a0 [mac80211]
+[ 4021.444199]  ieee80211_tx_pending+0x35c/0x394 [mac80211]
+[ 4021.449927]  tasklet_action_common.isra.0+0xe8/0x14c
+[ 4021.455310]  tasklet_action+0x24/0x2c
+[ 4021.460256]  handle_softirqs+0x264/0x2e4
+[ 4021.463815]  run_ksoftirqd+0x34/0x64
+[ 4021.467807]  smpboot_thread_fn+0x3d4/0x3e4
+[ 4021.471367]  kthread+0x1b4/0x1d8
+[ 4021.475273]  ret_from_fork+0x10/0x20
+
+Patch-dependency: 707-b-ath12k-add-support-for-MLO-SSR-Mode0.patch
+Patch-work: None
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
+index 909e195..9a79a68 100644
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -3848,7 +3848,7 @@ static void ath12k_core_reset(struct work_struct *work)
+ 
+ 	/* TODO: DS: How to stop ppeds queues during SSR??
+ 	 * PPE hardware might still be enqueuing packets on PPE2TCL */
+-	if (!ag->hw_queues_stopped)
++	if (!ag->hw_queues_stopped && ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE1)
+ 		ath12k_core_mlo_hw_queues_stop(ag, ab);
+ 
+ 	for (i = 0; i < ag->num_chip; i++) {
+-- 
+2.34.1
+

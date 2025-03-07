@@ -1,0 +1,121 @@
+From a078fbdfc5f0a449fc69844d8cac9f43462898fa Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Sun, 26 May 2024 13:30:59 +0530
+Subject: [PATCH] mac80211: compilation fixes for backports 6.6
+
+1.Added appropriate ENUM for chan width,
+2.Assigned monitor_chandef[hw_idx] to dflt_chandef to fix compilation
+3.Modified wiphy_work API's to work_struct in API's to fix compilation failures
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ net/mac80211/main.c        | 10 +++++-----
+ net/wireless/chan.c        | 2 +-
+ net/mac80211/util.c        | 2 +-
+ 3 files changed,  7 insertions(+), 7 deletions(-)
+
+--- a/net/mac80211/main.c
++++ b/net/mac80211/main.c
+@@ -354,13 +354,13 @@ static void ieee80211_restart_work(struc
+ 	int ret;
+ 
+ 	flush_workqueue(local->workqueue);
+-	flush_work(&local->sched_scan_stopped_work);
+-	flush_work(&local->radar_detected_work);
+ 	flush_work(&local->awgn_detected_work);
+ 
+ 	rtnl_lock();
+ 	/* we might do interface manipulations, so need both */
+ 	wiphy_lock(local->hw.wiphy);
++	wiphy_work_cancel(local->hw.wiphy, &local->sched_scan_stopped_work);
++	wiphy_work_cancel(local->hw.wiphy, &local->radar_detected_work);
+ 
+ 	WARN(test_bit(SCAN_HW_SCANNING, &local->scanning),
+ 	     "%s called with hardware scan in progress\n", __func__);
+@@ -1206,7 +1206,7 @@ int ieee80211_register_hw(struct ieee802
+ 			/* Resetting to use first index for non-MLO case */
+ 			hw_idx = 0;
+ 
+-		local->monitor_chandef = dflt_chandef;
++		local->monitor_chandef[hw_idx] = dflt_chandef;
+ 
+ 		channels += sband->n_channels;
+ 
+--- a/net/wireless/chan.c
++++ b/net/wireless/chan.c
+@@ -40,7 +40,7 @@ void cfg80211_chandef_create(struct cfg8
+ 	chandef->edmg.channels = 0;
+ 	chandef->ru_punct_bitmap = 0;
+ 	chandef->ru_punct_bitmap_supp_he = 0;
+-	chandef->width_device = NL80211_CHAN_NO_HT;
++	chandef->width_device = NL80211_CHAN_WIDTH_20_NOHT;
+ 	chandef->center_freq_device = 0;
+ 
+ 	switch (chan_type) {
+--- a/net/mac80211/util.c
++++ b/net/mac80211/util.c
+@@ -4669,6 +4669,8 @@ ieee80211_dfs_radar_detected_processing(
+ 	struct ieee80211_chanctx *ctx;
+ 	int num_chanctx = 0;
+ 
++	lockdep_assert_wiphy(local->hw.wiphy);
++
+ 	mutex_lock(&local->chanctx_mtx);
+ 	list_for_each_entry(ctx, &local->chanctx_list, list) {
+ 		if (ctx->replace_state == IEEE80211_CHANCTX_REPLACES_OTHER)
+@@ -4683,9 +4685,7 @@ ieee80211_dfs_radar_detected_processing(
+ 	}
+ 	mutex_unlock(&local->chanctx_mtx);
+ 
+-	wiphy_lock(local->hw.wiphy);
+ 	ieee80211_dfs_cac_cancel(local);
+-	wiphy_unlock(local->hw.wiphy);
+ 
+ 	if (radar_chandef)
+ 		radar_chandef->radar_bitmap = radar_bitmap;
+@@ -4707,7 +4707,7 @@ ieee80211_dfs_radar_detected_processing(
+ 	}
+ }
+ 
+-void ieee80211_dfs_radar_detected_work(struct work_struct *work)
++void ieee80211_dfs_radar_detected_work(struct wiphy *wiphy, struct wiphy_work *work)
+ {
+ 	struct ieee80211_local *local =
+ 		container_of(work, struct ieee80211_local, radar_detected_work);
+@@ -4715,6 +4715,7 @@ void ieee80211_dfs_radar_detected_work(s
+ 	u16 radar_bitmap;
+ 	struct ieee80211_channel *radar_channel;
+ 
++	lockdep_assert_wiphy(local->hw.wiphy);
+ 	if (list_empty(&local->radar_info_list))
+ 		return ieee80211_dfs_radar_detected_processing(local, 0,
+ 							       radar_channel);
+@@ -4760,7 +4761,7 @@ void ieee80211_radar_detected_bitmap(str
+ 	radar_info->radar_channel = radar_channel;
+ 
+ 	list_add_tail(&radar_info->list, &local->radar_info_list);
+-	schedule_work(&local->radar_detected_work);
++	wiphy_work_queue(hw->wiphy, &local->radar_detected_work);
+ }
+ EXPORT_SYMBOL(ieee80211_radar_detected_bitmap);
+ 
+--- a/net/mac80211/ieee80211_i.h
++++ b/net/mac80211/ieee80211_i.h
+@@ -1453,7 +1453,7 @@ struct ieee80211_local {
+ 	/* wowlan is enabled -- don't reconfig on resume */
+ 	bool wowlan;
+ 
+-	struct work_struct radar_detected_work;
++	struct wiphy_work radar_detected_work;
+ 	struct list_head radar_info_list;
+ 
+ 	/* number of RX chains the hardware has */
+@@ -2648,7 +2648,7 @@ bool ieee80211_is_radar_required(struct
+ 
+ void ieee80211_dfs_cac_timer_work(struct work_struct *work);
+ void ieee80211_dfs_cac_cancel(struct ieee80211_local *local);
+-void ieee80211_dfs_radar_detected_work(struct work_struct *work);
++void ieee80211_dfs_radar_detected_work(struct wiphy *wiphy, struct wiphy_work *work);
+ void ieee80211_awgn_detected_work(struct work_struct *work);
+ int ieee80211_send_action_csa(struct ieee80211_sub_if_data *sdata,
+ 			      struct cfg80211_csa_settings *csa_settings);

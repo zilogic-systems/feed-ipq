@@ -1,0 +1,369 @@
+From 9052fcdf230839863b6c8dad32aaf252d6c6a6d0 Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Tue, 17 Sep 2024 17:31:42 +0530
+Subject: [PATCH] ath12k: Compilation warning fixes for ath12k Data path files
+
+accel_cfg.c     -  Added const for ath_dp_accel_cfg_ops struct in ath12k_dp_accel_cfg_init
+dp_rx.c         -  Added typecast for msdu_data with struct ieee80211_hdr * for ieee80211_get_qos_ctl 
+                   Added typecast for cmd with struct htt_rx_flow_fst_setup_cmd *
+                   Added typecast for fst_base with struct dp_rx_fse *
+                   Updated ab to ab->ag for ath12k_dp_rx_flow_compute_flow_hash
+dp_tx.c         -  Modified the function param of ath12k_ppeds_tx_update_stats to 
+                    struct hal_wbm_completion_ring_tx *
+                   Added typecast for ppeds_comp_ring.ppe_wbm2sw_ring 
+                    with struct dp_ppeds_tx_comp_ring *
+                   Modifed desc type to struct hal_wbm_release_ring *
+                   Updated tx_ring with dp->ppeds_comp_ring
+                   Added typecast for desc->paddr with dma_addr_t
+fse.c           -  Added const for ath_fse_ops_obj struct in ath12k_fse_init
+                   Modified the datetype of ab and hw to void* in ath12k_sfe_add_flow_entry and
+                    ath12k_sfe_delete_flow_entry to align with fse_rule_add and fse_rule_delete
+                   Added NULL for ath12_error in ath12k_sfe_delete_flow_entry
+ppe.c           -  Added typecast for rx_desc->paddr to assign NULL
+                   Modifed datatype of rxdma_desc to (struct ath12k_buffer_addr *)
+                   Removed double pointer access for ab in krealloc
+                   Added NULL for ath12_error in ath12k_vif_set_mtu
+ath_accel_cfg.c -  Added typecast for ath_cb with struct ath_dp_accel_cfg_ops *
+ath_fse.c       -  Added typecast for ath_cb with struct ath_fse_ops *
+ath_dp_accel_cfg.h - Modified out_ppe_ds_node_id type to u8 from u32
+hal_rx.h        - Modifed datatype of key to u8* from const u8*
+fse.h           - Modified the datetype of ab and hw to void* in ath12k_sfe_add_flow_entry and
+                   ath12k_sfe_delete_flow_entry to align with fse_rule_add and fse_rule_delete
+hal_rx.c        - Updated ab to ab->ag for ath12k_hw_grp_hal_rx_flow_get_tuple_info
+dp.c            - Added typecasr for ppeds_tx_descs[j].paddr with dma_addr_t
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/accel_cfg.c |  3 ++-
+ drivers/net/wireless/ath/ath12k/dp_rx.c     | 12 ++++++------
+ drivers/net/wireless/ath/ath12k/dp_tx.c     | 13 +++++++------
+ drivers/net/wireless/ath/ath12k/fse.c       |  2 +-
+ drivers/net/wireless/ath/ath12k/ppe.c       |  8 ++++----
+ drivers/net/wireless/ath/ath_accel_cfg.c    |  2 +-
+ drivers/net/wireless/ath/ath_fse.c          |  2 +-
+ include/ath/ath_dp_accel_cfg.h              |  2 +-
+ drivers/net/wireless/ath/ath12k/hal_rx.h    |  2 +-
+ drivers/net/wireless/ath/ath12k/fse.h       |  4 ++--
+ drivers/net/wireless/ath/ath12k/hal_rx.c    |  2 +-
+ drivers/net/wireless/ath/ath12k/dp.c        |  2 +-
+ 12 files changed, 27 insertions(+), 26 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/accel_cfg.c
++++ b/drivers/net/wireless/ath/ath12k/accel_cfg.c
+@@ -100,7 +100,7 @@ static const struct ath_dp_accel_cfg_ops
+  */
+ void ath12k_dp_accel_cfg_init(struct ath12k_base *ab)
+ {
+-	struct ath_dp_accel_cfg_ops *ath_dp_accel_cfg_ops_ptr;
++	const struct ath_dp_accel_cfg_ops *ath_dp_accel_cfg_ops_ptr;
+ 
+ 	ath_dp_accel_cfg_ops_ptr = &ath_dp_accel_cfg_ops_obj;
+ 
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -2712,7 +2712,7 @@ static void ath12k_get_dot11_hdr_from_rx
+ 			qos_ctl |= IEEE80211_QOS_CTL_MESH_CONTROL_PRESENT;
+ 
+ 		/* TODO: Add other QoS ctl fields when required */
+-		memcpy(ieee80211_get_qos_ctl(msdu->data),
++		memcpy(ieee80211_get_qos_ctl((struct ieee80211_hdr *)msdu->data),
+ 		       &qos_ctl, IEEE80211_QOS_CTL_LEN);
+ 	}
+ }
+@@ -5882,7 +5882,7 @@ int ath12k_htt_rx_flow_fst_setup(struct
+ 		return -ENOMEM;
+ 
+ 	skb_put(skb, len);
+-	cmd = (struct htt_dp_rx_flow_fst_setup_req_cmd *)skb->data;
++	cmd = (struct htt_rx_flow_fst_setup_cmd *)skb->data;
+ 	memset(cmd, 0, sizeof(*cmd));
+ 
+ 	cmd->info0 = le32_encode_bits(HTT_H2T_MSG_TYPE_RX_FSE_SETUP_CFG,
+@@ -5967,7 +5967,7 @@ int ath12k_htt_rx_flow_fse_operation(str
+ 		return -ENOMEM;
+ 
+ 	skb_put(skb, len);
+-	cmd = (struct htt_h2t_msg_rx_fse_operation_t *)skb->data;
++	cmd = (struct htt_rx_msg_fse_operation *)skb->data;
+ 	memset(cmd, 0, sizeof(*cmd));
+ 
+ 	cmd->info0 = le32_encode_bits(HTT_H2T_MSG_TYPE_RX_FSE_OPERATION_CFG,
+@@ -6103,7 +6103,7 @@ ath12k_dp_rx_flow_get_fse(struct dp_rx_f
+ 	struct dp_rx_fse *fse;
+ 	u32 idx = ath12k_hal_rx_get_trunc_hash(fst->hal_rx_fst, flow_hash);
+ 
+-	fse = fst->base;
++	fse = (struct dp_rx_fse *)fst->base;
+ 	return &fse[idx];
+ }
+ 
+@@ -6161,7 +6161,7 @@ ath12k_dp_rx_flow_alloc_entry(struct ath
+ 	u32 flow_idx;
+ 	int status;
+ 
+-	flow_hash = ath12k_dp_rx_flow_compute_flow_hash(ab, fst, flow_info, flow);
++	flow_hash = ath12k_dp_rx_flow_compute_flow_hash(ab->ag, fst, flow_info, flow);
+ 
+ 	status = ath12k_hal_rx_insert_flow_entry(ab, fst->hal_rx_fst, flow_hash,
+ 						 &flow_info->flow_tuple_info,
+@@ -6371,7 +6371,7 @@ int ath12k_dp_rx_flow_delete_all_entries
+ 
+ 	spin_lock_bh(&fst->fst_lock);
+ 
+-	fse = fst->base;
++	fse = (struct dp_rx_fse *)fst->base;
+ 	if (!fse) {
+ 		spin_unlock_bh(&fst->fst_lock);
+ 		return -ENODEV;
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -159,7 +159,7 @@ skip_reuse_list:
+ 	list_for_each_entry_safe(desc, tmp, local_list, list) {
+ 		skb = desc->skb;
+ 		desc->skb = NULL;
+-		desc->paddr = NULL;
++		desc->paddr = (dma_addr_t)NULL;
+ 		desc->in_use = false;
+ 		if (!skb) {
+ 			ath12k_warn(NULL, "no skb in ds completion path");
+@@ -1353,7 +1353,7 @@ static inline bool ath12k_dp_tx_completi
+ 
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ static void ath12k_ppeds_tx_update_stats(struct ath12k *ar,
+-					 struct hal_wbm_release_ring *tx_status)
++					 struct hal_wbm_completion_ring_tx *tx_status)
+ {
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_peer *peer;
+@@ -1367,7 +1367,7 @@ static void ath12k_ppeds_tx_update_stats
+ 	memset(&info, 0, sizeof(info));
+ 	info.status.rates[0].idx = -1;
+ 
+-	ath12k_dp_tx_status_parse(ab, (struct hal_wbm_completion_ring_tx *)tx_status, &ts);
++	ath12k_dp_tx_status_parse(ab, tx_status, &ts);
+ 	info.status.ack_signal = ATH12K_DEFAULT_NOISE_FLOOR +
+ 					  ts.ack_rssi;
+ 	info.status.flags = IEEE80211_TX_STATUS_ACK_SIGNAL_VALID;
+@@ -1460,12 +1460,12 @@ void ath12k_dp_ppeds_tx_comp_get_desc(st
+ int ath12k_ppeds_tx_completion_handler(struct ath12k_base *ab, int budget)
+ {
+ 	struct ath12k_dp *dp = &ab->dp;
+-	struct dp_ppeds_tx_comp_ring *tx_ring = &dp->ppeds_comp_ring.ppe_wbm2sw_ring;
++	struct dp_ppeds_tx_comp_ring *tx_ring = &dp->ppeds_comp_ring;
+ 	int hal_ring_id = tx_ring->ppe_wbm2sw_ring.ring_id;
+ 	struct hal_srng *status_ring = &ab->hal.srng_list[hal_ring_id];
+ 	struct ath12k_ppeds_tx_desc_info *tx_desc = NULL;
+ 	int valid_entries, count = 0, i;
+-	u32 *desc;
++	struct hal_wbm_release_ring *desc;
+ 	struct hal_wbm_completion_ring_tx *tx_status;
+ 	struct htt_tx_wbm_completion *status_desc;
+ 	enum hal_wbm_rel_src_module buf_rel_source;
+@@ -1498,8 +1498,7 @@ int ath12k_ppeds_tx_completion_handler(s
+ 	ath12k_hal_srng_ppeds_dst_inv_entry(ab, status_ring, valid_entries);
+ 
+ 	while (likely(valid_entries--)) {
+-		desc = (struct hal_wbm_completion_ring_tx *)
+-			ath12k_hal_srng_dst_get_next_cache_entry(ab, status_ring);
++		desc = (struct hal_wbm_release_ring *)ath12k_hal_srng_dst_get_next_cache_entry(ab, status_ring);
+ 		if (!desc || !ath12k_dp_tx_completion_valid(desc))
+ 			continue;
+ 
+@@ -1603,7 +1602,7 @@ int ath12k_dp_tx_completion_handler(stru
+ 		buf_rel_source = FIELD_GET(HAL_WBM_COMPL_TX_INFO0_REL_SRC_MODULE, tx_status->info0);
+ 		ab->soc_stats.tx_wbm_rel_source[buf_rel_source]++;
+ 
+-		status_desc = ((u8 *) tx_status) + HTT_TX_WBM_COMP_STATUS_OFFSET;
++		status_desc = (struct htt_tx_wbm_completion *)(((u8 *) tx_status) + HTT_TX_WBM_COMP_STATUS_OFFSET);
+ 		htt_status = FIELD_GET(HTT_TX_WBM_COMP_INFO0_STATUS, status_desc->info0);
+ 
+ 		if (buf_rel_source == HAL_WBM_REL_SRC_MODULE_FW) {
+--- a/drivers/net/wireless/ath/ath12k/fse.c
++++ b/drivers/net/wireless/ath/ath12k/fse.c
+@@ -21,7 +21,7 @@ static const struct ath_fse_ops ath_fse_
+ 
+ void ath12k_fse_init(struct ath12k_base *ab)
+ {
+-	struct ath_fse_ops *fse_ops_ptr;
++	const struct ath_fse_ops *fse_ops_ptr;
+ 
+ 	fse_ops_ptr = &ath_fse_ops_obj;
+ 	if (!ath12k_fse_enable)
+@@ -110,13 +110,14 @@ static void ath12k_hw_grp_dp_rx_sfe_upda
+ 	}
+ }
+ 
+-int ath12k_sfe_add_flow_entry(struct ath12k_base *ab,
++int ath12k_sfe_add_flow_entry(void *ptr,
+ 			      u32 *src_ip, u32 src_port,
+ 			      u32 *dest_ip, u32 dest_port,
+ 			      u8 protocol, u8 version)
+ 
+ {
+ 	struct rx_flow_info flow_info = {0};
++	struct ath12k_base *ab = (struct ath12k_base *)ptr;
+ 
+ 	if (!ath12k_fse_enable)
+ 		return -EINVAL;
+@@ -127,7 +128,7 @@ int ath12k_sfe_add_flow_entry(struct ath
+ 	return ath12k_dp_rx_flow_add_entry(ab, &flow_info);
+ }
+ 
+-int ath12k_sfe_delete_flow_entry(struct ieee80211_hw *hw,
++int ath12k_sfe_delete_flow_entry(void *ptr,
+ 				 u32 *src_ip, u32 src_port,
+ 				 u32 *dest_ip, u32 dest_port,
+ 				 u8 protocol, u8 version)
+@@ -135,13 +136,14 @@ int ath12k_sfe_delete_flow_entry(struct
+ 	struct rx_flow_info flow_info = {0};
+ 	struct ath12k_hw *ah = NULL;
+ 	struct ath12k_hw_group *ag = NULL;
++	struct ieee80211_hw *hw = (struct ieee80211_hw *)ptr;
+ 
+ 	if (!ath12k_fse_enable)
+ 		return -EINVAL;
+ 
+ 	ah = hw->priv;
+ 	if (!ah) {
+-		ath12k_err("HW invalid-Flow delete failed:S_IP:%x:%x:%x:%x,sPort:%u,D_IP:%x:%x:%x:%x,dPort:%u,Proto:%d,Ver:%d",
++		ath12k_err(NULL, "HW invalid-Flow delete failed:S_IP:%x:%x:%x:%x,sPort:%u,D_IP:%x:%x:%x:%x,dPort:%u,Proto:%d,Ver:%d",
+ 			   src_ip[0], src_ip[1], src_ip[2], src_ip[3], src_port, dest_ip[0],
+ 			   dest_ip[1], dest_ip[2], dest_ip[3], dest_port, protocol, version);
+ 		return -EINVAL;
+@@ -149,7 +151,7 @@ int ath12k_sfe_delete_flow_entry(struct
+ 
+ 	ag = ah->ag;
+ 	if (!ag) {
+-		ath12k_err("HW grp invalid-Flow delete failed:S_IP:%x:%x:%x:%x,sPort:%u,D_IP:%x:%x:%x:%x,dPort:%u,Proto:%d,Ver:%d",
++		ath12k_err(NULL, "HW grp invalid-Flow delete failed:S_IP:%x:%x:%x:%x,sPort:%u,D_IP:%x:%x:%x:%x,dPort:%u,Proto:%d,Ver:%d",
+ 			   src_ip[0], src_ip[1], src_ip[2], src_ip[3], src_port, dest_ip[0],
+ 			   dest_ip[1], dest_ip[2], dest_ip[3], dest_port, protocol, version);
+ 		return -EINVAL;
+--- a/drivers/net/wireless/ath/ath12k/ppe.c
++++ b/drivers/net/wireless/ath/ath12k/ppe.c
+@@ -139,7 +139,7 @@ static bool ath12k_ppeds_free_rx_desc(st
+ 
+ 	spin_lock_bh(&ab->dp.rx_desc_lock);
+ 	rx_desc->skb = NULL;
+-	rx_desc->paddr = NULL;
++	rx_desc->paddr = (dma_addr_t)NULL;
+ 	rx_desc->in_use = false;
+ 	list_add_tail(&rx_desc->list, &ab->dp.rx_desc_free_list);
+ 	spin_unlock_bh(&ab->dp.rx_desc_lock);
+@@ -170,7 +170,7 @@ int ath12k_dp_rx_bufs_replenish_ppeds(st
+ {
+ 	struct dp_rxdma_ring *rx_ring = &ab->dp.rx_refill_buf_ring;
+ 	struct hal_srng *rxdma_srng;
+-	u32 *rxdma_desc;
++	struct ath12k_buffer_addr *rxdma_desc;
+ 	u32 cookie;
+ 	dma_addr_t paddr;
+ 	struct ath12k_rx_desc_info *rx_desc;
+@@ -242,14 +242,14 @@ static void ath12k_ppeds_release_rx_desc
+ 	if (unlikely(count > ab->ppe.ppeds_rx_num_elem)) {
+ 		new_size = sizeof(u16) * count;
+ 		for (chip_id = 0; chip_id < ag->num_chip; chip_id++) {
+-			tmp = krealloc(*ab->ppe.ppeds_rx_idx[chip_id], new_size, GFP_ATOMIC);
++			tmp = krealloc(ab->ppe.ppeds_rx_idx[chip_id], new_size, GFP_ATOMIC);
+ 			if (!tmp) {
+ 		        	ath12k_err(ab, "ppeds: rx desc realloc failed for size %u\n",
+ 					   count);
+ 				goto err_h_alloc_failure;
+ 			}
+ 
+-			*ab->ppe.ppeds_rx_idx[chip_id] = tmp;
++			ab->ppe.ppeds_rx_idx[chip_id] = tmp;
+ 		}
+ 
+ 		ab->ppe.ppeds_rx_num_elem = count;
+@@ -1707,7 +1707,7 @@ int ath12k_vif_set_mtu(struct ath12k_vif
+ 		return -ENODEV;
+ 
+ 	if (ppe_vp_mtu_set(ppe_vp_num, mtu) != PPE_VP_STATUS_SUCCESS) {
+-		ath12k_err("\ndev:%p, dev->name:%s mtu %d vp num = %d set failed ",
++		ath12k_err(NULL, "\ndev:%p, dev->name:%s mtu %d vp num = %d set failed ",
+ 			wdev->netdev, wdev->netdev->name, mtu, ppe_vp_num);
+ 		return -EINVAL;
+ 	}
+--- a/drivers/net/wireless/ath/ath_accel_cfg.c
++++ b/drivers/net/wireless/ath/ath_accel_cfg.c
+@@ -14,7 +14,7 @@ int ath_dp_accel_cfg_ops_callback_regist
+ 		pr_err("Failed to register accel cfg callbacks\n");
+ 		return -EINVAL;
+ 	}
+-	ath_dp_accel_cfg_cb = ath_cb;
++	ath_dp_accel_cfg_cb = (struct ath_dp_accel_cfg_ops *)ath_cb;
+ 	return 0;
+ }
+ EXPORT_SYMBOL(ath_dp_accel_cfg_ops_callback_register);
+--- a/drivers/net/wireless/ath/ath_fse.c
++++ b/drivers/net/wireless/ath/ath_fse.c
+@@ -14,7 +14,7 @@ int ath_fse_ops_callback_register(const
+ 		pr_err("Failed to register FSE callbacks\n");
+ 		return -EINVAL;
+ 	}
+-	fse_cb = ath_cb;
++	fse_cb = (struct ath_fse_ops *)ath_cb;
+ 	pr_debug("FSE callbacks are registered successfully to ath\n");
+ 	return 0;
+ }
+--- a/include/ath/ath_dp_accel_cfg.h
++++ b/include/ath/ath_dp_accel_cfg.h
+@@ -29,7 +29,7 @@ struct ath_dp_accel_cfg_ops {
+ struct ath_dp_accel_cfg {
+ 	struct net_device *in_dest_dev;
+ 	u8 *in_dest_mac;
+-	u32 out_ppe_ds_node_id;
++	u8 out_ppe_ds_node_id;
+ };
+ 
+ /**
+--- a/drivers/net/wireless/ath/ath12k/hal_rx.h
++++ b/drivers/net/wireless/ath/ath12k/hal_rx.h
+@@ -1170,7 +1170,7 @@ enum ath12k_eht_ru_size {
+ struct hal_rx_fst {
+ 	struct hal_rx_fse *base_vaddr;
+ 	dma_addr_t base_paddr;
+-	const u8 *key;
++	u8 *key;
+ 	u8 shifted_key[HAL_FST_HASH_KEY_SIZE_BYTES];
+ 	u32 key_cache[HAL_FST_HASH_KEY_SIZE_BYTES][HAL_RX_KEY_CACHE_SIZE];
+ 	u16 max_entries;
+--- a/drivers/net/wireless/ath/ath12k/dp.c
++++ b/drivers/net/wireless/ath/ath12k/dp.c
+@@ -2091,7 +2091,7 @@ int ath12k_dp_cc_ppeds_desc_cleanup(stru
+ 
+ 			ppeds_tx_descs[j].skb = NULL;
+ 			ppeds_tx_descs[j].in_use = false;
+-			ppeds_tx_descs[j].paddr = NULL;
++			ppeds_tx_descs[j].paddr = (dma_addr_t)NULL;
+ 
+ 			dev_kfree_skb_any(skb);
+ 		}
+--- a/drivers/net/wireless/ath/ath12k/hal_rx.c
++++ b/drivers/net/wireless/ath/ath12k/hal_rx.c
+@@ -1263,7 +1263,7 @@ int ath12k_hal_rx_insert_flow_entry(stru
+ 	for (i = 0; i < fst->max_skid_length; i++) {
+ 		hal_hash = ath12k_hal_rx_get_trunc_hash(fst, (flow_hash + i));
+ 
+-		hal_fse = ath12k_hw_grp_hal_rx_flow_get_tuple_info(ab, fst, hal_hash,
++		hal_fse = ath12k_hw_grp_hal_rx_flow_get_tuple_info(ab->ag, fst, hal_hash,
+ 								   &hal_tuple_info);
+ 		if (!hal_fse)
+ 			break;
+--- a/drivers/net/wireless/ath/ath12k/fse.h
++++ b/drivers/net/wireless/ath/ath12k/fse.h
+@@ -36,11 +36,11 @@ void ath12k_fse_init(struct ath12k_base
+ void ath12k_fse_deinit(struct ath12k_base *ab);
+ void *ath12k_fse_get_ab_from_vif(struct ieee80211_vif *vif,
+ 				 const u8 *peer_mac);
+-int ath12k_sfe_add_flow_entry(struct ath12k_base *ab,
++int ath12k_sfe_add_flow_entry(void *ptr,
+ 			      u32 *src_ip, u32 src_port,
+ 			      u32 *dest_ip, u32 dest_port,
+ 			      u8 protocol, u8 version);
+-int ath12k_sfe_delete_flow_entry(struct ieee80211_hw *hw,
++int ath12k_sfe_delete_flow_entry(void *ptr,
+ 				 u32 *src_ip, u32 src_port,
+ 				 u32 *dest_ip, u32 dest_port,
+ 				 u8 protocol, u8 version);

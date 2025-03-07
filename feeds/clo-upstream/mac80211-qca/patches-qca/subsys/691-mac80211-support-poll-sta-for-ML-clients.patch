@@ -1,0 +1,79 @@
+From d4a49321b49feb70ae25c747e9acf368ebb67d66 Mon Sep 17 00:00:00 2001
+From: Sriram R <quic_srirrama@quicinc.com>
+Date: Thu, 22 Dec 2022 05:46:29 +0530
+Subject: [PATCH] mac80211: support poll sta for ML clients
+
+Update the client probe handling which sends Null data
+frames to check inactivity to support ML Stations as well.
+
+Replace the use of default bss conf with the link specific
+conf and use the stations default link to send the probe
+frame. Non ML Stations associated to the ML AP would use
+its default link as well which is one of the active links.
+
+For Non ML AP, the default link id is 0 and it is taken care
+as well.
+
+Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
+---
+ net/mac80211/cfg.c | 35 +++++++++++++++++++++++++++--------
+ 1 file changed, 27 insertions(+), 8 deletions(-)
+
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -4296,6 +4296,8 @@ static int ieee80211_probe_client(struct
+ 	struct ieee80211_chanctx_conf *chanctx_conf;
+ 	enum nl80211_band band;
+ 	int ret;
++	u8 link_id;
++	struct ieee80211_bss_conf *conf;
+ 
+ 	/* the lock is needed to assign the cookie later */
+ 	mutex_lock(&local->mtx);
+@@ -4309,11 +4311,25 @@ static int ieee80211_probe_client(struct
+ 
+ 	qos = sta->sta.wme;
+ 
+-	chanctx_conf = rcu_dereference(sdata->vif.bss_conf.chanctx_conf);
++	/* In case of ML vif, we shall use the default sta link to
++	 * send the probe frame. For non ML vif the link id 0 is
++	 * the deflink
++	 */
++	link_id = sta->deflink.link_id;
++
++	conf = rcu_dereference(sdata->vif.link_conf[link_id]);
++
++	if (unlikely(!conf)) {
++		ret = -ENOLINK;
++		goto unlock;
++	}
++
++	chanctx_conf = rcu_dereference(conf->chanctx_conf);
+ 	if (WARN_ON(!chanctx_conf)) {
+ 		ret = -EINVAL;
+ 		goto unlock;
+ 	}
++
+ 	band = chanctx_conf->def.chan->band;
+ 
+ 	if (qos) {
+@@ -4341,8 +4357,8 @@ static int ieee80211_probe_client(struct
+ 	nullfunc->frame_control = fc;
+ 	nullfunc->duration_id = 0;
+ 	memcpy(nullfunc->addr1, sta->sta.addr, ETH_ALEN);
+-	memcpy(nullfunc->addr2, sdata->vif.addr, ETH_ALEN);
+-	memcpy(nullfunc->addr3, sdata->vif.addr, ETH_ALEN);
++	memcpy(nullfunc->addr2, conf->addr, ETH_ALEN);
++	memcpy(nullfunc->addr3, conf->addr, ETH_ALEN);
+ 	nullfunc->seq_ctrl = 0;
+ 
+ 	info = IEEE80211_SKB_CB(skb);
+@@ -4351,6 +4367,8 @@ static int ieee80211_probe_client(struct
+ 		       IEEE80211_TX_INTFL_NL80211_FRAME_TX;
+ 	info->band = band;
+ 
++	info->control.flags |= u32_encode_bits(link_id, IEEE80211_TX_CTRL_MLO_LINK);
++
+ 	skb_set_queue_mapping(skb, IEEE80211_AC_VO);
+ 	skb->priority = 7;
+ 	if (qos)

@@ -1,0 +1,44 @@
+From ff280e2753b84e0b46cf043ec92502ff2134ce53 Mon Sep 17 00:00:00 2001
+From: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+Date: Fri, 15 Nov 2024 18:19:17 +0530
+Subject: [PATCH] QSDK:CP:wifi:ath12k: Set WDS vdev param in station mode
+
+When STA operating in WDS mode, 4addr qos NULL frame to be sent to Root
+AP in order for AP to create VLAN. Expected sequence in set 4 addr WMI
+peer param with AP address and then queue QOS NULL frame.
+
+In some race condition, QOS NULL frame is scheduled by firmware even
+before 4 addr param is set though host sends the cmd and frame in proper
+order. In order to solve the issue, firmware proposed to send WMI_VDEV_PARAM_WDS
+from host is sent to firmware for STA after vdev create.
+
+Patch-dependency: None
+Patch-work: None
+
+Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -12396,6 +12396,7 @@ int ath12k_mac_vdev_create(struct ath12k
+ 	struct ath12k_wmi_vdev_create_arg vdev_arg = {0};
+ 	struct ath12k_wmi_peer_create_arg peer_param = {0};
+ 	struct ieee80211_bss_conf *link_conf = NULL;
++	struct wireless_dev *wdev = ieee80211_vif_to_wdev(vif);
+ 	u32 param_id, param_value;
+ 	u16 nss;
+ 	int i;
+@@ -12668,6 +12669,11 @@ int ath12k_mac_vdev_create(struct ath12k
+ 
+ 	ath12k_debugfs_add_interface(arvif);
+ 
++	if (vif->type == NL80211_IFTYPE_STATION &&
++	    (wdev && wdev->use_4addr))
++		ath12k_wmi_vdev_set_param_cmd(arvif->ar, arvif->vdev_id,
++					      WMI_VDEV_PARAM_WDS, 1);
++
+ 	return ret;
+ 
+ err_peer_del:

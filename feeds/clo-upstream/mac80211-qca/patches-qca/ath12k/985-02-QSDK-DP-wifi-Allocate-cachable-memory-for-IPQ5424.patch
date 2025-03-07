@@ -1,0 +1,402 @@
+From e25f395683d31aaf2f3b709ec65c797fb4c8e13a Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Tue, 3 Dec 2024 16:06:59 +0530
+Subject: [PATCH 2/3] QSDK:DP:wifi: Allocate cachable memory for IPQ5424
+
+Allocate cacheable memory for I/O coherency-supported platforms for
+the rings to enable fast data access and offload related CMO
+operations to hardware.
+
+patch-dependency: 982-QSDK-wifi-ath12k-configure-secure-reg-for-io-coherency.patch
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ce.c     | 36 +++++-----
+ drivers/net/wireless/ath/ath12k/core.h   | 23 ++++++
+ drivers/net/wireless/ath/ath12k/dp.c     | 89 +++++++++++++-----------
+ drivers/net/wireless/ath/ath12k/hal.c    | 16 ++---
+ drivers/net/wireless/ath/ath12k/hal_rx.c | 10 +--
+ 5 files changed, 102 insertions(+), 72 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/ce.c b/drivers/net/wireless/ath/ath12k/ce.c
+index 42afa90..a6678d3 100644
+--- a/drivers/net/wireless/ath/ath12k/ce.c
++++ b/drivers/net/wireless/ath/ath12k/ce.c
+@@ -680,9 +680,9 @@ ath12k_ce_alloc_ring(struct ath12k_base *ab, int nentries, int desc_sz)
+ 	 * coherent DMA are unsupported
+ 	 */
+ 	ce_ring->base_addr_owner_space_unaligned =
+-		dma_alloc_coherent(ab->dev,
+-				   nentries * desc_sz + CE_DESC_RING_ALIGN,
+-				   &base_addr, GFP_KERNEL);
++		ath12k_core_dma_alloc_coherent(ab->dev,
++					       nentries * desc_sz + CE_DESC_RING_ALIGN,
++					       &base_addr, GFP_KERNEL);
+ 	if (!ce_ring->base_addr_owner_space_unaligned) {
+ 		kfree(ce_ring);
+ 		return ERR_PTR(-ENOMEM);
+@@ -1053,22 +1053,22 @@ void ath12k_ce_free_pipes(struct ath12k_base *ab)
+ 
+ 		if (pipe->src_ring) {
+ 			desc_sz = ath12k_hal_ce_get_desc_size(HAL_CE_DESC_SRC);
+-			dma_free_coherent(ab->dev,
+-					  pipe->src_ring->nentries * desc_sz +
+-					  CE_DESC_RING_ALIGN,
+-					  pipe->src_ring->base_addr_owner_space,
+-					  pipe->src_ring->base_addr_ce_space);
++			ath12k_core_dma_free_coherent(ab->dev,
++						      pipe->src_ring->nentries * desc_sz +
++						      CE_DESC_RING_ALIGN,
++						      pipe->src_ring->base_addr_owner_space,
++						      pipe->src_ring->base_addr_ce_space);
+ 			kfree(pipe->src_ring);
+ 			pipe->src_ring = NULL;
+ 		}
+ 
+ 		if (pipe->dest_ring) {
+ 			desc_sz = ath12k_hal_ce_get_desc_size(HAL_CE_DESC_DST);
+-			dma_free_coherent(ab->dev,
+-					  pipe->dest_ring->nentries * desc_sz +
+-					  CE_DESC_RING_ALIGN,
+-					  pipe->dest_ring->base_addr_owner_space,
+-					  pipe->dest_ring->base_addr_ce_space);
++			ath12k_core_dma_free_coherent(ab->dev,
++						      pipe->dest_ring->nentries * desc_sz +
++						      CE_DESC_RING_ALIGN,
++						      pipe->dest_ring->base_addr_owner_space,
++						      pipe->dest_ring->base_addr_ce_space);
+ 			kfree(pipe->dest_ring);
+ 			pipe->dest_ring = NULL;
+ 		}
+@@ -1076,11 +1076,11 @@ void ath12k_ce_free_pipes(struct ath12k_base *ab)
+ 		if (pipe->status_ring) {
+ 			desc_sz =
+ 			  ath12k_hal_ce_get_desc_size(HAL_CE_DESC_DST_STATUS);
+-			dma_free_coherent(ab->dev,
+-					  pipe->status_ring->nentries * desc_sz +
+-					  CE_DESC_RING_ALIGN,
+-					  pipe->status_ring->base_addr_owner_space,
+-					  pipe->status_ring->base_addr_ce_space);
++			ath12k_core_dma_free_coherent(ab->dev,
++						      pipe->status_ring->nentries * desc_sz +
++						      CE_DESC_RING_ALIGN,
++						      pipe->status_ring->base_addr_owner_space,
++						      pipe->status_ring->base_addr_ce_space);
+ 			kfree(pipe->status_ring);
+ 			pipe->status_ring = NULL;
+ 		}
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 864af8a..4af580b 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -2102,6 +2102,29 @@ ath12k_core_dma_clean_range_no_dsb(const void *start, const void *end) {
+ #endif
+ }
+ 
++static inline void *ath12k_core_dma_alloc_coherent(struct device *dev, size_t size,
++						   dma_addr_t *paddr, gfp_t flag)
++{
++        void *vaddr = NULL;
++#ifdef CONFIG_IO_COHERENCY
++        vaddr = kzalloc(size, GFP_KERNEL);
++        *paddr = virt_to_phys(vaddr);
++#else
++        vaddr = dma_alloc_coherent(dev, size, paddr, flag);
++#endif
++        return vaddr;
++}
++
++static inline void ath12k_core_dma_free_coherent(struct device *dev, size_t size,
++						 void *vaddr, dma_addr_t *paddr)
++{
++#ifdef CONFIG_IO_COHERENCY
++	kfree(vaddr);
++#else
++	dma_free_coherent(dev, size, vaddr, paddr);
++#endif
++}
++
+ int ath12k_pci_init(void);
+ void ath12k_pci_exit(void);
+ #ifdef CPTCFG_ATH12K_AHB
+diff --git a/drivers/net/wireless/ath/ath12k/dp.c b/drivers/net/wireless/ath/ath12k/dp.c
+index fea8f7f..f64c989 100644
+--- a/drivers/net/wireless/ath/ath12k/dp.c
++++ b/drivers/net/wireless/ath/ath12k/dp.c
+@@ -163,8 +163,8 @@ void ath12k_dp_srng_cleanup(struct ath12k_base *ab, struct dp_srng *ring)
+ 	if (ring->cached)
+ 		kfree(ring->vaddr_unaligned);
+ 	else
+-		dma_free_coherent(ab->dev, ring->size, ring->vaddr_unaligned,
+-				  ring->paddr_unaligned);
++		ath12k_core_dma_free_coherent(ab->dev, ring->size, ring->vaddr_unaligned,
++					      ring->paddr_unaligned);
+ 
+ 	ring->vaddr_unaligned = NULL;
+ }
+@@ -334,6 +334,7 @@ static int ath12k_dp_srng_alloc(struct ath12k_base *ab, struct dp_srng *ring,
+ 		num_entries = max_entries;
+ 
+ 	ring->size = (num_entries * entry_sz) + HAL_RING_BASE_ALIGN - 1;
++#ifndef CONFIG_IO_COHERENCY
+ 	if (ab->hw_params->alloc_cacheable_memory) {
+ 		/* Allocate the reo dst and tx completion rings from cacheable memory */
+ 		switch (type) {
+@@ -344,16 +345,18 @@ static int ath12k_dp_srng_alloc(struct ath12k_base *ab, struct dp_srng *ring,
+ 		default:
+ 			cached = false;
+ 		}
+-
+-		if (cached) {
+-			ring->vaddr_unaligned = kzalloc(ring->size, GFP_KERNEL);
+-			ring->paddr_unaligned = virt_to_phys(ring->vaddr_unaligned);
+-		}
+ 	}
+-	if (!cached)
++#else
++		cached = true;
++#endif
++	if (cached) {
++		ring->vaddr_unaligned = kzalloc(ring->size, GFP_KERNEL);
++		ring->paddr_unaligned = virt_to_phys(ring->vaddr_unaligned);
++	} else {
+ 		ring->vaddr_unaligned = dma_alloc_coherent(ab->dev, ring->size,
+ 							   &ring->paddr_unaligned,
+ 							   GFP_KERNEL);
++	}
+ 	if (!ring->vaddr_unaligned)
+ 		return -ENOMEM;
+ 
+@@ -514,6 +517,8 @@ int ath12k_dp_srng_setup(struct ath12k_base *ab, struct dp_srng *ring,
+ 		num_entries = max_entries;
+ 
+ 	ring->size = (num_entries * entry_sz) + HAL_RING_BASE_ALIGN - 1;
++
++#ifndef CONFIG_IO_COHERENCY
+ 	if (ab->hw_params->alloc_cacheable_memory) {
+ 		/* Allocate the reo dst and tx completion rings from cacheable memory */
+ 		switch (type) {
+@@ -525,7 +530,9 @@ int ath12k_dp_srng_setup(struct ath12k_base *ab, struct dp_srng *ring,
+ 			cached = false;
+ 		}
+ 	}
+-
++#else
++	cached = true;
++#endif
+ 	if (ath12k_dp_umac_reset_in_progress(ab))
+ 		goto skip_dma_alloc;
+ 
+@@ -997,8 +1004,8 @@ static void ath12k_dp_scatter_idle_link_desc_cleanup(struct ath12k_base *ab)
+ 		if (!slist[i].vaddr)
+ 			continue;
+ 
+-		dma_free_coherent(ab->dev, HAL_WBM_IDLE_SCATTER_BUF_SIZE_MAX,
+-				  slist[i].vaddr, slist[i].paddr);
++		ath12k_core_dma_free_coherent(ab->dev, HAL_WBM_IDLE_SCATTER_BUF_SIZE_MAX,
++					      slist[i].vaddr, slist[i].paddr);
+ 		slist[i].vaddr = NULL;
+ 	}
+ }
+@@ -1032,9 +1039,9 @@ static int ath12k_dp_scatter_idle_link_desc_setup(struct ath12k_base *ab,
+ 
+ 	if (!ath12k_dp_umac_reset_in_progress(ab)) {
+ 		for (i = 0; i < num_scatter_buf; i++) {
+-			slist[i].vaddr = dma_alloc_coherent(ab->dev,
+-							    HAL_WBM_IDLE_SCATTER_BUF_SIZE_MAX,
+-							    &slist[i].paddr, GFP_KERNEL);
++			slist[i].vaddr = ath12k_core_dma_alloc_coherent(ab->dev,
++									HAL_WBM_IDLE_SCATTER_BUF_SIZE_MAX,
++									&slist[i].paddr, GFP_KERNEL);
+ 			if (!slist[i].vaddr) {
+ 				ret = -ENOMEM;
+ 				goto err;
+@@ -1092,10 +1099,10 @@ ath12k_dp_link_desc_bank_free(struct ath12k_base *ab,
+ 
+ 	for (i = 0; i < DP_LINK_DESC_BANKS_MAX; i++) {
+ 		if (link_desc_banks[i].vaddr_unaligned) {
+-			dma_free_coherent(ab->dev,
+-					  link_desc_banks[i].size,
+-					  link_desc_banks[i].vaddr_unaligned,
+-					  link_desc_banks[i].paddr_unaligned);
++			ath12k_core_dma_free_coherent(ab->dev,
++						      link_desc_banks[i].size,
++						      link_desc_banks[i].vaddr_unaligned,
++						      link_desc_banks[i].paddr_unaligned);
+ 			link_desc_banks[i].vaddr_unaligned = NULL;
+ 		}
+ 	}
+@@ -1116,9 +1123,9 @@ static int ath12k_dp_link_desc_bank_alloc(struct ath12k_base *ab,
+ 			desc_sz = last_bank_sz;
+ 
+ 		desc_bank[i].vaddr_unaligned =
+-					dma_alloc_coherent(ab->dev, desc_sz,
+-							   &desc_bank[i].paddr_unaligned,
+-							   GFP_KERNEL);
++				ath12k_core_dma_alloc_coherent(ab->dev, desc_sz,
++							       &desc_bank[i].paddr_unaligned,
++							       GFP_KERNEL);
+ 		if (!desc_bank[i].vaddr_unaligned) {
+ 			ret = -ENOMEM;
+ 			goto err;
+@@ -1790,8 +1797,8 @@ static void ath12k_dp_cc_cleanup(struct ath12k_base *ab)
+ 		if (!dp->spt_info[i].vaddr)
+ 			continue;
+ 
+-		dma_free_coherent(ab->dev, ATH12K_PAGE_SIZE,
+-				  dp->spt_info[i].vaddr, dp->spt_info[i].paddr);
++		ath12k_core_dma_free_coherent(ab->dev, ATH12K_PAGE_SIZE,
++					      dp->spt_info[i].vaddr, dp->spt_info[i].paddr);
+ 		dp->spt_info[i].vaddr = NULL;
+ 	}
+ 
+@@ -1809,14 +1816,14 @@ static void ath12k_dp_reoq_lut_cleanup(struct ath12k_base *ab)
+ 		return;
+ 
+ 	if (dp->reoq_lut.vaddr) {
+-		dma_free_coherent(ab->dev, DP_REOQ_LUT_SIZE,
+-				  dp->reoq_lut.vaddr, dp->reoq_lut.paddr);
++		ath12k_core_dma_free_coherent(ab->dev, DP_REOQ_LUT_SIZE,
++					      dp->reoq_lut.vaddr, dp->reoq_lut.paddr);
+ 		dp->reoq_lut.vaddr = NULL;
+ 	}
+ 
+ 	if (dp->ml_reoq_lut.vaddr) {
+-		dma_free_coherent(ab->dev, DP_REOQ_LUT_SIZE,
+-				  dp->ml_reoq_lut.vaddr, dp->ml_reoq_lut.paddr);
++		ath12k_core_dma_free_coherent(ab->dev, DP_REOQ_LUT_SIZE,
++					      dp->ml_reoq_lut.vaddr, dp->ml_reoq_lut.paddr);
+ 		dp->ml_reoq_lut.vaddr = NULL;
+ 	}
+ }
+@@ -2297,10 +2304,10 @@ static int ath12k_dp_cc_init(struct ath12k_base *ab)
+ 	cmem_base = ab->qmi.dev_mem[ATH12K_QMI_DEVMEM_CMEM_INDEX].start;
+ 
+ 	for (i = 0; i < dp->num_spt_pages; i++) {
+-		dp->spt_info[i].vaddr = dma_alloc_coherent(ab->dev,
+-							   ATH12K_PAGE_SIZE,
+-							   &dp->spt_info[i].paddr,
+-							   GFP_KERNEL);
++		dp->spt_info[i].vaddr = ath12k_core_dma_alloc_coherent(ab->dev,
++								       ATH12K_PAGE_SIZE,
++								       &dp->spt_info[i].paddr,
++								       GFP_KERNEL);
+ 
+ 		if (!dp->spt_info[i].vaddr) {
+ 			ret = -ENOMEM;
+@@ -2338,26 +2345,26 @@ static int ath12k_dp_reoq_lut_setup(struct ath12k_base *ab)
+ 	if (!ab->hw_params->reoq_lut_support)
+ 		return 0;
+ 
+-	dp->reoq_lut.vaddr = dma_alloc_coherent(ab->dev,
+-						DP_REOQ_LUT_SIZE,
+-						&dp->reoq_lut.paddr,
+-						GFP_KERNEL | __GFP_ZERO);
++	dp->reoq_lut.vaddr = ath12k_core_dma_alloc_coherent(ab->dev,
++							    DP_REOQ_LUT_SIZE,
++							    &dp->reoq_lut.paddr,
++							    GFP_KERNEL | __GFP_ZERO);
+ 	if (!dp->reoq_lut.vaddr) {
+ 		ath12k_warn(ab, "failed to allocate memory for reoq table");
+ 		return -ENOMEM;
+ 	}
+ 
+-	dp->ml_reoq_lut.vaddr = dma_alloc_coherent(ab->dev,
+-						   DP_REOQ_LUT_SIZE,
+-						   &dp->ml_reoq_lut.paddr,
+-						   GFP_KERNEL);
++	dp->ml_reoq_lut.vaddr = ath12k_core_dma_alloc_coherent(ab->dev,
++							       DP_REOQ_LUT_SIZE,
++							       &dp->ml_reoq_lut.paddr,
++							       GFP_KERNEL);
+ 
+ 	if (!dp->ml_reoq_lut.vaddr) {
+ 		ath12k_warn(ab, "failed to allocate memory for ML reoq table");
+ 
+ 		/* cleanup non-ML REOQ LUT allocated above */
+-		dma_free_coherent(ab->dev, DP_REOQ_LUT_SIZE,
+-				  dp->reoq_lut.vaddr, dp->reoq_lut.paddr);
++		ath12k_core_dma_free_coherent(ab->dev, DP_REOQ_LUT_SIZE,
++					      dp->reoq_lut.vaddr, dp->reoq_lut.paddr);
+ 		dp->reoq_lut.vaddr = NULL;
+ 		return -ENOMEM;
+ 	}
+diff --git a/drivers/net/wireless/ath/ath12k/hal.c b/drivers/net/wireless/ath/ath12k/hal.c
+index f902844..4f52ae2 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -1402,8 +1402,8 @@ static int ath12k_hal_alloc_cont_rdp(struct ath12k_base *ab)
+ 	size_t size;
+ 
+ 	size = sizeof(u32) * HAL_SRNG_RING_ID_MAX;
+-	hal->rdp.vaddr = dma_alloc_coherent(ab->dev, size, &hal->rdp.paddr,
+-					    GFP_KERNEL);
++	hal->rdp.vaddr = ath12k_core_dma_alloc_coherent(ab->dev, size, &hal->rdp.paddr,
++							GFP_KERNEL);
+ 	if (!hal->rdp.vaddr)
+ 		return -ENOMEM;
+ 
+@@ -1419,8 +1419,8 @@ static void ath12k_hal_free_cont_rdp(struct ath12k_base *ab)
+ 		return;
+ 
+ 	size = sizeof(u32) * HAL_SRNG_RING_ID_MAX;
+-	dma_free_coherent(ab->dev, size,
+-			  hal->rdp.vaddr, hal->rdp.paddr);
++	ath12k_core_dma_free_coherent(ab->dev, size,
++				      hal->rdp.vaddr, hal->rdp.paddr);
+ 	hal->rdp.vaddr = NULL;
+ }
+ 
+@@ -1430,8 +1430,8 @@ static int ath12k_hal_alloc_cont_wrp(struct ath12k_base *ab)
+ 	size_t size;
+ 
+ 	size = sizeof(u32) * (HAL_SRNG_NUM_PMAC_RINGS + HAL_SRNG_NUM_DMAC_RINGS);
+-	hal->wrp.vaddr = dma_alloc_coherent(ab->dev, size, &hal->wrp.paddr,
+-					    GFP_KERNEL);
++	hal->wrp.vaddr = ath12k_core_dma_alloc_coherent(ab->dev, size, &hal->wrp.paddr,
++							GFP_KERNEL);
+ 	if (!hal->wrp.vaddr)
+ 		return -ENOMEM;
+ 
+@@ -1447,8 +1447,8 @@ static void ath12k_hal_free_cont_wrp(struct ath12k_base *ab)
+ 		return;
+ 
+ 	size = sizeof(u32) * (HAL_SRNG_NUM_PMAC_RINGS + HAL_SRNG_NUM_DMAC_RINGS);
+-	dma_free_coherent(ab->dev, size,
+-			  hal->wrp.vaddr, hal->wrp.paddr);
++	ath12k_core_dma_free_coherent(ab->dev, size,
++				      hal->wrp.vaddr, hal->wrp.paddr);
+ 	hal->wrp.vaddr = NULL;
+ }
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/hal_rx.c b/drivers/net/wireless/ath/ath12k/hal_rx.c
+index 4f9a36e..cdd82d5 100644
+--- a/drivers/net/wireless/ath/ath12k/hal_rx.c
++++ b/drivers/net/wireless/ath/ath12k/hal_rx.c
+@@ -1219,8 +1219,8 @@ ath12k_hal_rx_fst_attach(struct ath12k_base *ab)
+ 	ath12k_dbg(ab, ATH12K_DBG_DP_FST, "HAL FST allocation %pK entries %u entry size %u alloc_size %u\n",
+ 		   fst, fst->max_entries, fst->fst_entry_size, alloc_size);
+ 
+-	fst->base_vaddr = dma_alloc_coherent(ab->dev, alloc_size,
+-					     &fst->base_paddr, GFP_KERNEL);
++	fst->base_vaddr = ath12k_core_dma_alloc_coherent(ab->dev, alloc_size,
++							 &fst->base_paddr, GFP_KERNEL);
+ 	if (!fst->base_vaddr) {
+ 		kfree(fst);
+ 		return NULL;
+@@ -1245,9 +1245,9 @@ void ath12k_hal_rx_fst_detach(struct ath12k_base *ab, struct hal_rx_fst *fst)
+ 		return;
+ 
+ 	if (fst->base_vaddr)
+-		dma_free_coherent(ab->dev,
+-				  (fst->max_entries * fst->fst_entry_size),
+-				  fst->base_vaddr, fst->base_paddr);
++		ath12k_core_dma_free_coherent(ab->dev,
++					      (fst->max_entries * fst->fst_entry_size),
++					      fst->base_vaddr, fst->base_paddr);
+ 	kfree(fst);
+ }
+ 
+-- 
+2.34.1
+

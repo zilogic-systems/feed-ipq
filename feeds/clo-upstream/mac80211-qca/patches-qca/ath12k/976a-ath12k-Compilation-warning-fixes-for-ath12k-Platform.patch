@@ -1,0 +1,176 @@
+From 65f924941df56d9ba6949e2c2c33339f47c42388 Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Sun, 8 Sep 2024 14:28:50 +0530
+Subject: [PATCH] ath12k: Compilation warning fixes for ath12k Platform files
+
+core.c -  Returned NULL for void function ath12k_get_ab_nd_peer_from_peer_mac instead of -ENODEV
+          Modified the ath12k_rddm_notifier type from void to int and added return values for success and failure cases
+hw.c   -  Removed const from *hw_params in ath12k_hw_init function
+pcic.c -  Updated the ppeds_irq_name varibale with 0 to pass the index 0 for snprintf
+pcic.c -  Updated the ppeds_irq_name varibale with 0 to pass the index 0 for snprintf
+ahb.c  -  Modified return as 0 from NULL in ath12k_ahb_get_cmem_base 
+          Added const for bus_param in ath12k_ahb_probe
+core.h -  Modified htt_tx_ring_tlv_filter to htt_rx_ring_tlv_filter 
+           in ath12k_pktlog_rx_filter_setting
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 7 ++++---
+ drivers/net/wireless/ath/ath12k/hw.c   | 2 +-
+ drivers/net/wireless/ath/ath12k/pci.c  | 9 ++++++---
+ drivers/net/wireless/ath/ath12k/pcic.c | 9 ++++++---
+ drivers/net/wireless/ath/ath12k/core.h | 2 +-
+ 5 files changed, 18 insertions(+), 11 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -86,7 +86,7 @@ module_param_named(ppe_rfs_support, ath1
+ MODULE_PARM_DESC(ppe_rfs_support, "Enable PPE RFS support for DL (0 - disable, 1 - enable)");
+ 
+ bool ath12k_fse_3_tuple_enabled = true;
+-module_param_named(fse_3_tuple_enabled, ath12k_fse_3_tuple_enabled, uint, 0644);
++module_param_named(fse_3_tuple_enabled, ath12k_fse_3_tuple_enabled, bool, 0644);
+ MODULE_PARM_DESC(fse_3_tuple_enabled, "fse_3_tuple_enabled: 0-disable, 1-enable");
+ 
+ unsigned int ath12k_rfs_core_mask[4] = {ATH12K_MAX_CORE_MASK, ATH12K_MAX_CORE_MASK,
+@@ -4328,7 +4328,7 @@ void *ath12k_get_ab_nd_peer_from_peer_ma
+ 		if (!ag) {
+ 			ath12k_warn(NULL, "unable to fetch hw group\n");
+ 			mutex_unlock(&ath12k_hw_lock);
+-			return -ENODEV;
++			return NULL;
+ 		}
+ 		for (soc = ag->num_probed; soc > 0; soc--) {
+ 
+@@ -4493,7 +4493,7 @@ void ath12k_wsi_load_info_wsiorder_updat
+ 	}
+ }
+ 
+-static void ath12k_rddm_notifier(struct notifier_block *this,
++static int ath12k_rddm_notifier(struct notifier_block *this,
+ 				 unsigned long event, void *ptr)
+ {
+ 	struct ath12k_base *ab;
+@@ -4503,12 +4503,12 @@ static void ath12k_rddm_notifier(struct
+ 	list_for_each_entry(ag, &ath12k_hw_groups, list) {
+ 		if (test_bit(ATH12K_FLAG_UNREGISTERING, &ag->dev_flags)) {
+ 			ath12k_warn(NULL, "Skipping coredump collection due to shutdown request\n");
+-			return;
++			return NOTIFY_DONE;
+ 		}
+ 		for (i = 0; i < ag->num_chip; i++) {
+ 			ab = ag->ab[i];
+ 			if (ab->in_panic)
+-				return;
++				return NOTIFY_DONE;
+ 			ab->in_panic = true;
+ 			if (ab->hif.bus == ATH12K_BUS_AHB ||
+ 			    ab->hif.bus == ATH12K_BUS_HYBRID)
+@@ -4517,6 +4517,7 @@ static void ath12k_rddm_notifier(struct
+ 				ath12k_coredump_download_rddm(ab);
+ 		}
+ 	}
++	return NOTIFY_OK;
+ }
+ 
+ static struct notifier_block rddm_notifier = {
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -2404,7 +2404,7 @@ static struct ath12k_hw_params ath12k_hw
+ 
+ int ath12k_hw_init(struct ath12k_base *ab)
+ {
+-	const struct ath12k_hw_params *hw_params = NULL;
++	struct ath12k_hw_params *hw_params = NULL;
+ 	struct ath12k_hw_params *hw_params_msi8 = NULL;
+ 	int i;
+ 
+--- a/drivers/net/wireless/ath/ath12k/pci.c
++++ b/drivers/net/wireless/ath/ath12k/pci.c
+@@ -259,7 +259,7 @@ int ath12k_pci_ppeds_register_interrupts
+ 
+ 	irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
+ 	if (type == HAL_PPE2TCL) {
+-		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL]),
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL][0], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL]),
+ 			 "pci%d_ppe2tcl_%d", bus_id, ab->ppe.ppeds_soc_idx);
+ 		ret = request_irq(irq,  ath12k_ds_ppe2tcl_irq_handler,
+ 				  IRQF_NO_AUTOEN | IRQF_NO_SUSPEND,
+@@ -268,7 +268,7 @@ int ath12k_pci_ppeds_register_interrupts
+ 			goto irq_fail;
+ 		ab->dp.ppeds_irq[PPEDS_IRQ_PPE2TCL] = irq;
+ 	} else if (type == HAL_REO2PPE) {
+-		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE]),
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE][0], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE]),
+ 			 "pci%d_reo2ppe_%d", bus_id, ab->ppe.ppeds_soc_idx);
+ 		ret = request_irq(irq,  ath12k_ds_reo2ppe_irq_handler,
+ 				  IRQF_SHARED,
+@@ -278,7 +278,7 @@ int ath12k_pci_ppeds_register_interrupts
+ 		ab->dp.ppeds_irq[PPEDS_IRQ_REO2PPE] = irq;
+ 		disable_irq_nosync(irq);
+ 	} else if (type == HAL_WBM2SW_RELEASE && ring_num == HAL_WBM2SW_PPEDS_TX_CMPLN_RING_NUM) {
+-		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL]),
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL][0], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL]),
+ 			 "pci%d_ppe_wbm_rel_%d", bus_id, ab->ppe.ppeds_soc_idx);
+ 		ret = request_irq(irq,  ath12k_dp_ppeds_handle_tx_comp,
+ 				  IRQF_SHARED,
+--- a/drivers/net/wireless/ath/ath12k/pcic.c
++++ b/drivers/net/wireless/ath/ath12k/pcic.c
+@@ -616,7 +616,7 @@ int ath12k_pcic_ppeds_register_interrupt
+ 		if (!irq)
+ 			goto irq_fail;
+ 		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
+-		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL]),
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL][0], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL]),
+ 			 "pcic%d_ppe2tcl_%d", bus_id, ab->ppe.ppeds_soc_idx);
+ 		ret = devm_request_irq(&pdev->dev, irq,  ath12k_ds_ppe2tcl_irq_handler,
+ 				  IRQF_NO_AUTOEN | IRQF_NO_SUSPEND,
+@@ -629,7 +629,7 @@ int ath12k_pcic_ppeds_register_interrupt
+ 		if (!irq)
+ 			goto irq_fail;
+ 		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
+-		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE]),
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE][0], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE]),
+ 			 "pcic%d_reo2ppe_%d", bus_id, ab->ppe.ppeds_soc_idx);
+ 		ret = devm_request_irq(&pdev->dev, irq,  ath12k_ds_reo2ppe_irq_handler,
+ 				  IRQF_SHARED,
+@@ -644,7 +644,7 @@ int ath12k_pcic_ppeds_register_interrupt
+ 		if (!irq)
+ 			goto irq_fail;
+ 		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
+-		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL]),
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL][0], sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL]),
+ 			 "pcic%d_ppe_wbm_rel_%d", bus_id, ab->ppe.ppeds_soc_idx);
+ 		ret = devm_request_irq(&pdev->dev, irq,  ath12k_dp_ppeds_handle_tx_comp,
+ 				  IRQF_SHARED,
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -143,7 +143,7 @@ static inline u32 ath12k_ahb_get_cmem_ba
+ 	case ATH12K_HW_IPQ5424_HW10:
+ 		return HAL_IPQ5332_CMEM_BASE;
+ 	default:
+-		return NULL;
++		return 0;
+ 	}
+ }
+ 
+@@ -1156,7 +1156,7 @@ static int ath12k_ahb_probe(struct platf
+ 	const struct ath12k_hif_ops *hif_ops;
+ 	struct device *dev = &pdev->dev;
+ 	enum ath12k_hw_rev hw_rev;
+-	struct ath12k_bus_params *bus_params;
++	const struct ath12k_bus_params *bus_params;
+ 	int ret, userpd_id, bus_type;
+ 
+ 	of_id = of_match_device(ath12k_ahb_of_match, &pdev->dev);
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -884,7 +884,7 @@ struct ath12k_debug {
+ };
+ 
+ int ath12k_pktlog_rx_filter_setting(struct ath12k *ar,
+-                                    struct htt_tx_ring_tlv_filter
++                                    struct htt_rx_ring_tlv_filter
+                                     *tlv_filter);
+ 
+ struct ath12k_per_peer_tx_stats {

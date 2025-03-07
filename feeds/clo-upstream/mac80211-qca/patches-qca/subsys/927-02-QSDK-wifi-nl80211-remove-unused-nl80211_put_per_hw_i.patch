@@ -1,0 +1,92 @@
+From aeb08f2a0fe73887b9e9517118d64ff165b7a7e8 Mon Sep 17 00:00:00 2001
+From: Harshitha Prem <quic_hprem@quicinc.com>
+Date: Tue, 24 Sep 2024 12:33:51 +0530
+Subject: [PATCH] QSDK: CP: wifi: nl80211: remove unused
+ nl80211_put_per_hw_iface_combinations helper
+
+Remove unused helper function nl80211_put_per_hw_iface_combinations().
+
+Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
+---
+ net/wireless/nl80211.c | 65 ------------------------------------------
+ 1 file changed, 65 deletions(-)
+
+diff --git a/net/wireless/nl80211.c b/net/wireless/nl80211.c
+index 3bbfd1b..0a20f35 100644
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -1700,71 +1700,6 @@ nla_put_failure:
+ 	return -ENOBUFS;
+ }
+ 
+-static int
+-nl80211_put_per_hw_iface_combinations(struct wiphy *wiphy, struct sk_buff *msg,
+-				      const struct ieee80211_iface_combination *c)
+-{
+-	struct nlattr *hw_combis;
+-	int i;
+-
+-	hw_combis = nla_nest_start(msg, NL80211_IFACE_COMB_PER_HW_COMB);
+-	if (!hw_combis)
+-		return -ENOBUFS;
+-
+-	for (i = 0; i < c->n_hw_list; i++) {
+-		struct nlattr *hw_combi, *limits;
+-		int l;
+-
+-		hw_combi = nla_nest_start(msg, i + 1);
+-		if (!hw_combi)
+-			return -ENOBUFS;
+-
+-		if (nla_put_u8(msg, NL80211_IFACE_COMB_PER_HW_COMB_HW_IDX,
+-			       c->iface_hw_list[i].hw_chans_idx))
+-			return -ENOBUFS;
+-
+-		limits = nla_nest_start(msg,
+-					NL80211_IFACE_COMB_PER_HW_COMB_LIMITS);
+-		if (!limits)
+-			return -ENOBUFS;
+-
+-		for (l = 0; l < c->iface_hw_list->n_limits; l++) {
+-			struct nlattr *limit;
+-
+-			limit = nla_nest_start(msg, l + 1);
+-			if (!limit)
+-				return -ENOBUFS;
+-
+-			if (nla_put_u16(msg, NL80211_IFACE_LIMIT_MAX,
+-					c->iface_hw_list[i].limits[l].max))
+-				return -ENOBUFS;
+-
+-			if (nla_put_u16(msg, NL80211_IFACE_LIMIT_TYPES,
+-					c->iface_hw_list[i].limits[l].types))
+-				return -ENOBUFS;
+-
+-			nla_nest_end(msg, limit);
+-		}
+-		nla_nest_end(msg, limits);
+-
+-		if (nla_put_u32(msg,
+-				NL80211_IFACE_COMB_PER_HW_COMB_NUM_CHANNELS,
+-				c->iface_hw_list[i].num_different_channels))
+-			return -ENOBUFS;
+-
+-		if (nla_put_u16(msg,
+-				NL80211_IFACE_COMB_PER_HW_COMB_MAXIMUM,
+-				c->iface_hw_list[i].max_interfaces))
+-			return -ENOBUFS;
+-
+-		nla_nest_end(msg, hw_combi);
+-	}
+-
+-	nla_nest_end(msg, hw_combis);
+-
+-	return 0;
+-}
+-
+ static int nl80211_put_ifcomb_data(struct sk_buff *msg, bool large, int idx,
+ 				   const struct ieee80211_iface_combination *c)
+ {
+-- 
+2.34.1
+

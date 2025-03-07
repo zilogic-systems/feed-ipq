@@ -1,0 +1,32 @@
+From 5f1ab0adb10393f890ca430e6a4b5a80cf717a8d Mon Sep 17 00:00:00 2001
+From: Maharaja Kennadyrajan <quic_mkenna@quicinc.com>
+Date: Thu, 23 May 2024 15:23:15 +0530
+Subject: [PATCH] wifi: ath12k: Fix uninitialized variable Klocwork issue
+
+Fix uninitialized variable Klocwork issue in the function
+ath12k_peer_assoc_h_he().
+
+patch-work: Patch is in internal review in the below patch name
+wifi: ath12k: Fix the smatch error
+
+Signed-off-by: Maharaja Kennadyrajan <quic_mkenna@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 386120a..cb36c1f 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -2886,7 +2886,7 @@ static void ath12k_peer_assoc_h_he(struct ath12k *ar,
+ 	struct cfg80211_chan_def def;
+ 	const struct ieee80211_sta_he_cap *he_cap;
+ 	int i;
+-	u8 ampdu_factor, rx_mcs_80, rx_mcs_160, max_nss;
++	u8 ampdu_factor, rx_mcs_80 = 0, rx_mcs_160 = 0, max_nss;
+ 	u16 mcs_160_map, mcs_80_map;
+ 	bool support_160;
+ 	enum nl80211_band band;
+-- 
+2.34.1
+

@@ -1,0 +1,67 @@
+From da1267dfcee073bb1eb2bfcb7094d516c1389923 Mon Sep 17 00:00:00 2001
+From: Rajat Soni <quic_rajson@quicinc.com>
+Date: Wed, 25 Sep 2024 14:35:34 +0530
+Subject: [PATCH] QSDK: wifi: ath12k: Fix puncturing bitmap when station is
+ associated
+
+During ath12k_wmi_send_peer_assoc_cmd the puncture bitmap send
+to firmware is incorrect and due to this traffic is sent in punctured
+bandwidth.
+
+In ath12k_peer_assoc_h_eht() arg->punct_bitmap is assigned to
+arvif->punct_bitmap. But we have not assigned arvif->punct_bitmap during
+vap bring up, so the arvif->punct_bitmap is zero. Do to this the puncture
+bitmap information sent is incorrect.
+
+To resolve this issue, we should assign arvif->punct_bitmap during vap
+bringup. Also handle arg->punct_bitmap properly in
+ath12k_peer_assoc_h_eht().
+
+Patch-dependency:
+	595-ath12k-configure-RU-puncturing-bitmap.patch
+	962-02-wifi-ath12k-Handle-peer-assoc-for-Bridge-peer.patch
+
+Fixes: Ia4aac0ca9b3 ("wifi: ath12k: Upgrade ath12k from backport-6.5-rc3 to backport-6.6")
+
+Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -4038,7 +4038,7 @@ static void ath12k_peer_assoc_h_eht(stru
+ 	if (arsta->is_bridge_peer)
+ 		arg->punct_bitmap = ~link_sta->ru_punct_bitmap;
+ 	else
+-		arg->punct_bitmap = ~def.ru_punct_bitmap;
++		arg->punct_bitmap = ~arvif->punct_bitmap;
+ 	if (ieee80211_vif_is_mesh(vif) && link_sta->ru_punct_bitmap)
+ 		arg->punct_bitmap = ~link_sta->ru_punct_bitmap;
+ 
+@@ -4047,7 +4047,6 @@ static void ath12k_peer_assoc_h_eht(stru
+ 		   "mac eht peer %pM nss %d mcs cnt %d ru_punct_bitmap 0x%x\n",
+ 		   arsta->addr, arg->peer_nss, arg->peer_eht_mcs_count, arg->punct_bitmap);
+ 
+-	arg->punct_bitmap = ~arvif->punct_bitmap;
+ }
+ 
+ static void ath12k_peer_assoc_prepare(struct ath12k *ar,
+@@ -13593,7 +13592,7 @@ static int ath12k_mac_vdev_start_restart
+ 
+ 	is_bridge_vdev = ath12k_mac_is_bridge_vdev(arvif);
+ 	if (!is_bridge_vdev)
+-		ru_punct_bitmap = chandef->ru_punct_bitmap;
++		ru_punct_bitmap = arvif->punct_bitmap;
+ 
+ 	reinit_completion(&ar->vdev_setup_done);
+ 
+@@ -15715,6 +15714,8 @@ ath12k_mac_assign_vif_chanctx_handle(str
+ 		}
+ 	}
+ 
++	if (!is_bridge_vdev)
++		arvif->punct_bitmap = link_conf->eht_puncturing;
+ 	/* for some targets bss peer must be created before vdev_start */
+ 	if (ab->hw_params->vdev_start_delay &&
+ 	    ahvif->vdev_type != WMI_VDEV_TYPE_AP &&

@@ -1,0 +1,32 @@
+From 470a8711468edc089284c1a851717f869b63d5ec Mon Sep 17 00:00:00 2001
+From: Amith A <quic_amitajit@quicinc.com>
+Date: Wed, 6 Nov 2024 11:48:27 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL:Add enums for new power interpretations of
+ Indoor SP AP
+
+Add enum IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP and
+IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP_PSD to enum
+ieee80211_tx_power_intrpt_type to be used to parse TPE IE from
+an Indoor SP AP.
+
+Signed-off-by: Amith A <quic_amitajit@quicinc.com>
+---
+ include/linux/ieee80211.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/include/linux/ieee80211.h b/include/linux/ieee80211.h
+index ceca169..89f3c9e 100644
+--- a/include/linux/ieee80211.h
++++ b/include/linux/ieee80211.h
+@@ -2806,6 +2806,8 @@ enum ieee80211_tx_power_intrpt_type {
+ 	IEEE80211_TPE_LOCAL_EIRP_PSD,
+ 	IEEE80211_TPE_REG_CLIENT_EIRP,
+ 	IEEE80211_TPE_REG_CLIENT_EIRP_PSD,
++	IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP,
++	IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP_PSD,
+ };
+ 
+ /**
+-- 
+2.34.1
+

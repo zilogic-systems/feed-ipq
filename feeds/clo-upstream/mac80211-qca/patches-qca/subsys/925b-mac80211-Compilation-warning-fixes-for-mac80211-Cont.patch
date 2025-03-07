@@ -1,0 +1,202 @@
+From 030848a72b66eaaab92ff9dbc16724bc1d1a7307 Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Tue, 17 Sep 2024 09:12:20 +0530
+Subject: [PATCH] mac80211: Compilation warning fixes for mac80211 Control path files
+
+mac80211.h       - Modified datatype of valid_links from u16 to unsigned long in ieee80211_vif
+                    Modified datatype of valid_links from u16 to unsigned long in ieee80211_sta
+cfg.c            - Removed the double pointer for chan in cfg80211_channel_identical
+debugfs_netdev.c - Updated access specifier to unsigned long valid_links
+ieee80211_i.h    - Modified the datatype of bssid_indicator_offset from u8* to const u8*
+                    Modified the funtion param for ieee80211_wake_txqs from ulong to struct tasklet_struct *
+iface.c          - Modified dev->dev_addr copy from memcpy to eth_hw_addr_set
+                    Updated access specifier to unsigned long valid_links
+                    Removed const from sdata in ieee80211_get_channel_6ghz_pwr_mode
+spectmgmt.c      - Added typecast for he_6ghz_oper, csa_he_6ghz_oper and eht_oper_info
+util.c           - Modified the funtion param for ieee80211_wake_txqs from ulong to struct tasklet_struct * 
+vht.c            - Updated the proper he and eht param for ieee80211_eht_mcs_nss_size
+nl80211.c        - Modifed nla_data to nla_get_u16 retrive link_sta_params.mld_vper
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ include/net/mac80211.h        | 5 +++--
+ net/mac80211/cfg.c            | 2 +-
+ net/mac80211/debugfs_netdev.c | 2 +-
+ net/mac80211/ieee80211_i.h    | 4 ++--
+ net/mac80211/iface.c          | 4 ++--
+ net/mac80211/spectmgmt.c      | 6 +++---
+ net/mac80211/util.c           | 9 +++++----
+ net/mac80211/vht.c            | 4 ++--
+ net/wireless/nl80211.c        | 2 +-
+ 9 files changed, 20 insertions(+), 18 deletions(-)
+
+--- a/include/net/mac80211.h
++++ b/include/net/mac80211.h
+@@ -1977,7 +1977,8 @@ struct ieee80211_vif {
+ 	struct ieee80211_vif_cfg cfg;
+ 	struct ieee80211_bss_conf bss_conf;
+ 	struct ieee80211_bss_conf __rcu *link_conf[IEEE80211_MLD_MAX_NUM_LINKS];
+-	u16 valid_links, active_links, dormant_links;
++	unsigned long valid_links;
++	u16 active_links, dormant_links;
+ 	u8 addr[ETH_ALEN] __aligned(2);
+ 	bool p2p;
+ 
+@@ -2507,7 +2508,7 @@ struct ieee80211_sta {
+ 
+ 	struct ieee80211_txq *txq[IEEE80211_NUM_TIDS + 1];
+ 
+-	u16 valid_links;
++	unsigned long valid_links;
+ 	struct ieee80211_link_sta deflink;
+ 	struct ieee80211_link_sta __rcu *link[IEEE80211_MLD_MAX_NUM_LINKS];
+ 
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -1036,7 +1036,7 @@ static int ieee80211_del_monitor_channel
+ 	/* check only channel and delete it, unlike
+ 	* add channel checks for chandef
+ 	*/
+-	if (!cfg80211_channel_identical(&local->monitor_chandef[hw_idx].chan, chandef->chan))
++	if (!cfg80211_channel_identical(local->monitor_chandef[hw_idx].chan, chandef->chan))
+ 	       return -EINVAL;
+ 
+ 	mutex_lock(&local->mtx);
+--- a/net/mac80211/debugfs_netdev.c
++++ b/net/mac80211/debugfs_netdev.c
+@@ -653,7 +653,7 @@ IEEE80211_IF_FILE_RW(tsf);
+ static ssize_t ieee80211_if_fmt_valid_links(const struct ieee80211_sub_if_data *sdata,
+ 					    char *buf, int buflen)
+ {
+-	return snprintf(buf, buflen, "0x%x\n", sdata->vif.valid_links);
++	return snprintf(buf, buflen, "0x%lx\n", sdata->vif.valid_links);
+ }
+ IEEE80211_IF_FILE_R(valid_links);
+ 
+--- a/net/mac80211/ieee80211_i.h
++++ b/net/mac80211/ieee80211_i.h
+@@ -1206,7 +1206,7 @@ ieee80211_vif_get_shift(struct ieee80211
+ static inline u8
+ ieee80211_get_max_bssid_indicator(struct cfg80211_mbssid_elems *mbssid_elems)
+ {
+-	u8 *bssid_indicator_offset;
++	const u8 *bssid_indicator_offset;
+ 
+ 	if (!mbssid_elems || !mbssid_elems->cnt)
+ 		return 0;
+@@ -2515,7 +2515,7 @@ void ieee80211_txq_remove_vlan(struct ie
+ 			       struct ieee80211_sub_if_data *sdata);
+ void ieee80211_fill_txq_stats(struct cfg80211_txq_stats *txqstats,
+ 			      struct txq_info *txqi);
+-void ieee80211_wake_txqs(unsigned long data);
++void ieee80211_wake_txqs(struct tasklet_struct *data);
+ void ieee80211_send_auth(struct ieee80211_sub_if_data *sdata,
+ 			 u16 transaction, u16 auth_alg, u16 status,
+ 			 const u8 *extra, size_t extra_len, const u8 *bssid,
+@@ -2610,7 +2610,7 @@ void ieee80211_chandef_eht_oper(const st
+ 				bool support_160, bool support_320,
+ 				struct cfg80211_chan_def *chandef);
+ struct ieee80211_channel
+-*ieee80211_get_channel_6ghz_pwr_mode(const struct ieee80211_sub_if_data *sdata,
++*ieee80211_get_channel_6ghz_pwr_mode(struct ieee80211_sub_if_data *sdata,
+ 				     const struct ieee80211_he_operation *he_oper,
+ 				     const int new_chan_idx);
+ 
+--- a/net/mac80211/iface.c
++++ b/net/mac80211/iface.c
+@@ -550,7 +550,7 @@ static void ieee80211_do_stop(struct iee
+ 
+ 	sdata_lock(sdata);
+ 	WARN(ieee80211_vif_is_mld(&sdata->vif),
+-	     "destroying interface with valid links 0x%04x\n",
++	     "destroying interface with valid links 0x%04lx\n",
+ 	     sdata->vif.valid_links);
+ 
+ 	mutex_lock(&local->mtx);
+@@ -1504,9 +1504,7 @@ int ieee80211_do_open(struct wireless_de
+ 	 * this interface, if it has the special null one.
+ 	 */
+ 	if (dev && is_zero_ether_addr(dev->dev_addr)) {
+-		memcpy(dev->dev_addr,
+-		       local->hw.wiphy->perm_addr,
+-		       ETH_ALEN);
++		eth_hw_addr_set(dev, local->hw.wiphy->perm_addr);
+ 		memcpy(dev->perm_addr, dev->dev_addr, ETH_ALEN);
+ 
+ 		if (!is_valid_ether_addr(dev->dev_addr)) {
+--- a/net/mac80211/spectmgmt.c
++++ b/net/mac80211/spectmgmt.c
+@@ -159,14 +159,14 @@ int ieee80211_parse_ch_switch_ie(struct
+ 			if (!he_oper)
+ 				return -ENOMEM;
+ 
+-			he_6ghz_oper = &he_oper->optional;
++			he_6ghz_oper =  (struct ieee80211_he_6ghz_oper *)&he_oper->optional;
+ 			he_6ghz_oper->primary = new_chan_no;
+ 
+ 			if (new_chan_width == IEEE80211_CHANWIDTH_160MHZ)
+ 				he_6ghz_oper->control = IEEE80211_HE_6GHZ_OPER_CTRL_CHANWIDTH_160MHZ;
+ 			else if (new_chan_width == IEEE80211_CHANWIDTH_80MHZ)
+ 				he_6ghz_oper->control = IEEE80211_HE_6GHZ_OPER_CTRL_CHANWIDTH_80MHZ;
+-			csa_he_6ghz_oper = ieee80211_he_6ghz_oper(elems->he_operation);
++			csa_he_6ghz_oper =  (struct ieee80211_he_6ghz_oper *)ieee80211_he_6ghz_oper(elems->he_operation);
+ 			if (csa_he_6ghz_oper)
+ 				he_6ghz_oper->control |= (csa_he_6ghz_oper->control &
+ 							  IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO);
+@@ -182,7 +182,7 @@ int ieee80211_parse_ch_switch_ie(struct
+ 				kfree(he_oper);
+ 				return -ENOMEM;
+ 			}
+-			eht_oper_info = &eht_oper->optional;
++			eht_oper_info = (struct ieee80211_eht_operation_info *)&eht_oper->optional;
+ 			eht_oper_info->ccfs0 = new_seg0;
+ 			eht_oper_info->ccfs1 = new_seg1;
+ 			if (new_chan_width == IEEE80211_CHANWIDTH_320MHZ) {
+--- a/net/mac80211/util.c
++++ b/net/mac80211/util.c
+@@ -390,9 +390,10 @@ out:
+ 	local_bh_enable();
+ }
+ 
+-void ieee80211_wake_txqs(unsigned long data)
++void ieee80211_wake_txqs(struct tasklet_struct *data)
+ {
+-	struct ieee80211_local *local = (struct ieee80211_local *)data;
++	struct ieee80211_local *local = from_tasklet(local, data,
++                                                       wake_txqs_tasklet);
+ 	struct ieee80211_sub_if_data *sdata;
+ 	int n_acs = IEEE80211_NUM_ACS;
+ 	unsigned long flags;
+@@ -4013,7 +4014,7 @@ void ieee80211_chandef_eht_oper(const st
+ }
+ 
+ struct ieee80211_channel
+-*ieee80211_get_channel_6ghz_pwr_mode(const struct ieee80211_sub_if_data *sdata,
++*ieee80211_get_channel_6ghz_pwr_mode(struct ieee80211_sub_if_data *sdata,
+ 				     const struct ieee80211_he_operation *he_oper,
+ 				     const int new_chan_idx)
+ {
+--- a/net/mac80211/vht.c
++++ b/net/mac80211/vht.c
+@@ -552,8 +552,8 @@ void ieee80211_sta_set_rx_nss(struct lin
+ 
+ 	if (link_sta->pub->eht_cap.has_eht) {
+ 		int i;
+-		int eht_mcs_set_size = ieee80211_eht_mcs_nss_size(&link_sta->pub->he_cap,
+-								  &link_sta->pub->eht_cap,
++		int eht_mcs_set_size = ieee80211_eht_mcs_nss_size(&link_sta->pub->he_cap.he_cap_elem,
++								  &link_sta->pub->eht_cap.eht_cap_elem,
+ 								  false);
+ 		const u8 *rx_nss_mcs = (void *)&link_sta->pub->eht_cap.eht_mcs_nss_supp;
+ 
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -8116,7 +8116,7 @@ static int nl80211_set_station(struct sk
+ 
+ 	if (info->attrs[NL80211_ATTR_MLD_CAPA_AND_OPS])
+ 		params.link_sta_params.mld_oper =
+-			nla_data(info->attrs[NL80211_ATTR_MLD_CAPA_AND_OPS]);
++			nla_get_u16(info->attrs[NL80211_ATTR_MLD_CAPA_AND_OPS]);
+ 	/* Include parameters for TDLS peer (will check later) */
+ 	err = nl80211_set_station_tdls(info, &params);
+ 	if (err)

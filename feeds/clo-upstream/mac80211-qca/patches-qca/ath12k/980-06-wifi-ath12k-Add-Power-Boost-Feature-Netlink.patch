@@ -1,0 +1,550 @@
+From fd04e02f06102d60b9dae7a89f73773a5d1c8dad Mon Sep 17 00:00:00 2001
+From: Thomas Wu <quic_wthomas@quicinc.com>
+Date: Fri, 18 Oct 2024 15:45:34 -0700
+Subject: [PATCH 6/6] wifi: ath12k: Add Power Boost Feature - Netlink
+
+Power Boost is a feature where firmware will send to
+userspace data, where AI inference will be performed.
+New TX and TX Mask values will be sent do firmware to
+boost Antenna performance.
+
+This commit contains the netlink apis for sending commands
+to host driver and receiving events from host driver.
+
+Netlink Commands Received from User Space APP
+
+Added QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_TYPE
+
+with attributes
+
+QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_START
+	This cmd will call and _abort() and
+	_ready() from host driver to send abort and
+	ready to firmware.
+
+QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_STOP
+	This cmd will call _abort() from host
+	driver to send abort to firmware.
+
+QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_RESULT
+	This cmd will call _estimated_data()
+	from host driver to send the estimated
+	tx and tx mask data to firmware.
+
+QCA_WLAN_VENDOR_RM_GENERIC_APP_INIT now supports
+
+QCA_WLAN_VENDOR_RM_GENERIC_APP_INIT
+	This cmd will request host driver if
+	Power Boost feature is available. If available,
+	a path to the relayfs node should be provided in
+	the return attribute.
+
+QCA_WLAN_VENDOR_RM_GENERIC_APP_READY
+	This cmd is the return value from
+	_APP_INIT and should provide the path to the
+	relayfs node.
+
+Patch-dependency: none
+
+Signed-off-by: Thomas Wu <quic_wthomas@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c    |   2 +-
+ drivers/net/wireless/ath/ath12k/mac.h    |   1 +
+ drivers/net/wireless/ath/ath12k/vendor.c | 255 ++++++++++++++++++++---
+ drivers/net/wireless/ath/ath12k/vendor.h | 110 ++++++++++
+ 4 files changed, 334 insertions(+), 34 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 06c6cde..c17901b 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -705,7 +705,7 @@ bool ath12k_mac_is_bridge_vdev(struct ath12k_link_vif *arvif)
+ 	return false;
+ }
+ 
+-static struct ath12k *ath12k_get_ar_by_link_idx(struct ath12k_hw *ah, u16 link_idx)
++struct ath12k *ath12k_get_ar_by_link_idx(struct ath12k_hw *ah, u16 link_idx)
+ {
+ 	struct ath12k *ar;
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/mac.h b/drivers/net/wireless/ath/ath12k/mac.h
+index 1bd5d2e..fd8c0e5 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -186,6 +186,7 @@ void ath12k_mac_scan_finish(struct ath12k *ar);
+ struct ath12k_link_vif *ath12k_mac_get_arvif(struct ath12k *ar, u32 vdev_id);
+ struct ath12k_link_vif *ath12k_mac_get_arvif_by_vdev_id(struct ath12k_base *ab,
+ 						   u32 vdev_id);
++struct ath12k *ath12k_get_ar_by_link_idx(struct ath12k_hw *ah, u16 link_idx);
+ int ath12k_mac_btcoex_config(struct ath12k *ar, struct ath12k_link_vif *arvif,
+ 			   int coex, u32 wlan_prio_mask, u8 wlan_weight);
+ struct ath12k *ath12k_mac_get_ar_by_vdev_id(struct ath12k_base *ab, u32 vdev_id);
+diff --git a/drivers/net/wireless/ath/ath12k/vendor.c b/drivers/net/wireless/ath/ath12k/vendor.c
+index f4f546a..fffee90 100644
+--- a/drivers/net/wireless/ath/ath12k/vendor.c
++++ b/drivers/net/wireless/ath/ath12k/vendor.c
+@@ -14,7 +14,26 @@
+ #include "sawf.h"
+ #include "dp_rx.h"
+ #include "pci.h"
++#include "power_boost.h"
+ 
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++static const struct nla_policy
++ath12k_vendor_iq_data_inferencing_policy[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MAX + 1] = {
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CMD_TYPE] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_RADIO] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_VERSION] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_BW] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CHANNEL_FREQ] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_PRIMARY_BAND_CENTER] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_SECONDARY_BAND_CENTER] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MCS] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_TEMPERATURE] = {.type = NLA_S32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_STAGE] = {.type = NLA_U32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM] = {.type = NLA_S32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM_MASK] = {.type = NLA_S32},
++	[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_HW_IDX] = {.type = NLA_U32},
++};
++#endif
+ #ifdef CPTCFG_ATH12K_SAWF
+ static const struct nla_policy
+ ath12k_vendor_sdwf_phy_policy[QCA_WLAN_VENDOR_ATTR_SDWF_PHY_MAX + 1] = {
+@@ -178,6 +197,8 @@ ath12k_vendor_erp_policy[QCA_WLAN_VENDOR_ATTR_ERP_MAX + 1] = {
+ 
+ static const struct nla_policy
+ ath12k_vendor_rm_generic_policy[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MAX + 1] = {
++	[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_RELAYFS_FILE_NAME_PMLO] = {.type = NLA_STRING},
++	[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID] = {.type = NLA_U8},
+ 	[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP] =
+ 		NLA_POLICY_NESTED(ath12k_vendor_erp_policy),
+ };
+@@ -356,6 +377,144 @@ exit:
+ 	mutex_unlock(&ar->conf_mutex);
+ }
+ 
++static struct ath12k *ath12k_get_ar_from_wdev(struct wireless_dev *wdev, u8 link_id)
++{
++	struct ieee80211_vif *vif =  NULL;
++	struct ath12k_vif *ahvif = NULL;
++	struct ieee80211_hw *hw = NULL;
++	struct ath12k *ar = NULL;
++
++	vif = wdev_to_ieee80211_vif(wdev);
++	if (!vif)
++		return NULL;
++
++	ahvif = (struct ath12k_vif *)vif->drv_priv;
++	if (!ahvif)
++		return NULL;
++
++	mutex_lock(&ahvif->ah->conf_mutex);
++	hw = ahvif->ah->hw;
++	if (!hw) {
++		mutex_unlock(&ahvif->ah->conf_mutex);
++		return NULL;
++	}
++
++	ar = ath12k_get_ar_by_vif(hw, vif, link_id);
++	mutex_unlock(&ahvif->ah->conf_mutex);
++
++	return ar;
++}
++
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++static int ath12k_vendor_iq_data_inferencing_operations(struct wiphy *wiphy,
++							struct wireless_dev *wdev,
++							const void *data,
++							int data_len)
++{
++	struct ieee80211_hw *hw = wiphy_to_ieee80211_hw(wiphy);
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k *ar;
++	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MAX + 1];
++	u8 iq_oper;
++	u32 hw_idx;
++	u32 training_stage, mcs, bandwidth;
++	int evm, evm_mask, ret = 0;
++
++	if (!ath12k_power_boost_enabled) {
++		ath12k_err(NULL, "IQ Data inferencing not enabled\n");
++		return -EOPNOTSUPP;
++	}
++
++	ret = nla_parse(tb, QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MAX, data, data_len,
++			ath12k_vendor_iq_data_inferencing_policy, NULL);
++	if (ret) {
++		ath12k_err(NULL, "IQ Data inferencing received invalid attributes\n");
++		return -EINVAL;
++	}
++
++	if (!tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CMD_TYPE]) {
++		ath12k_err(NULL, "IQ Data inferencing operation missing\n");
++		return -EINVAL;
++	}
++
++	iq_oper = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CMD_TYPE]);
++	switch (iq_oper) {
++	case QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_START:
++		mutex_lock(&ah->conf_mutex);
++		ar = ah->radio;
++		if (!ar) {
++			mutex_unlock(&ah->conf_mutex);
++			ath12k_err(ar->ab, "IQ Data inferencing found invalid ar for cmd\n");
++			return -ENODATA;
++		}
++		mutex_unlock(&ah->conf_mutex);
++
++		if (ath12k_power_boost_cmd_status(ar, WMI_CMD_POWER_BOOST_ABORT)) {
++			ath12k_err(ar->ab, "IQ Data inferencing failed to send abort\n");
++			return -EINVAL;
++		}
++
++		if (ath12k_power_boost_cmd_status(ar, WMI_CMD_POWER_BOOST_READY)) {
++			ath12k_err(ar->ab, "IQ Data inferencing failed to send ready\n");
++			return -EINVAL;
++		}
++		break;
++	case QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_STOP:
++		mutex_lock(&ah->conf_mutex);
++		ar = ah->radio;
++		if (!ar) {
++			mutex_unlock(&ah->conf_mutex);
++			ath12k_err(ar->ab, "IQ Data inferencing found invalid ar for cmd\n");
++			return -ENODATA;
++		}
++		mutex_unlock(&ah->conf_mutex);
++
++		if (ath12k_power_boost_cmd_status(ar, WMI_CMD_POWER_BOOST_ABORT)) {
++			ath12k_err(ar->ab, "IQ Data inferencing failed to send abort\n");
++			return -EINVAL;
++		}
++		break;
++	case QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_RESULT:
++		if (!tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_STAGE] ||
++		    !tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MCS] ||
++		    !tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_BW] ||
++		    !tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM] ||
++		    !tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM_MASK] ||
++		    !tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_HW_IDX]) {
++			ath12k_err(ar->ab, "IQ Data inferencing operation missing\n");
++			return -EINVAL;
++		}
++
++		hw_idx = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_HW_IDX]);
++		mutex_lock(&ah->conf_mutex);
++		ar = ath12k_get_ar_by_link_idx(ah, hw_idx);
++		if (!ar) {
++			ath12k_err(NULL, "IQ Data inferencing failed to find ar to send cmd\n");
++			mutex_unlock(&ah->conf_mutex);
++			return -ENODATA;
++		}
++		mutex_unlock(&ah->conf_mutex);
++
++		training_stage = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_STAGE]);
++		mcs = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MCS]);
++		bandwidth = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_BW]);
++		evm = nla_get_s32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM]);
++		evm_mask = nla_get_s32(tb[QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM_MASK]);
++		if (ath12k_power_boost_cmd_estimated_data(ar, training_stage,
++							  mcs, bandwidth, evm, evm_mask)) {
++			ath12k_err(ar->ab, "IQ Data inferencing failed to send ready result\n");
++			return -EINVAL;
++		}
++		break;
++	default:
++		ath12k_err(ar->ab, "IQ Data inferencing invalid operation command\n");
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++#endif
+ #ifdef CPTCFG_ATH12K_SAWF
+ 
+ static void ath12k_set_default_values(struct ath12k_sawf_svc_params *param)
+@@ -870,34 +1029,6 @@ static int ath12k_vendor_telemetry_sdwf_sla_detection_config(struct nlattr *sla_
+ 	return ret;
+ }
+ 
+-static struct ath12k *ath12k_get_ar_from_wdev(struct wireless_dev *wdev, u8 link_id)
+-{
+-	struct ieee80211_vif *vif =  NULL;
+-	struct ath12k_vif *ahvif = NULL;
+-	struct ieee80211_hw *hw = NULL;
+-	struct ath12k *ar = NULL;
+-
+-	vif = wdev_to_ieee80211_vif(wdev);
+-	if (!vif)
+-		return NULL;
+-
+-	ahvif = (struct ath12k_vif *)vif->drv_priv;
+-	if (!ahvif)
+-		return NULL;
+-
+-	mutex_lock(&ahvif->ah->conf_mutex);
+-	hw = ahvif->ah->hw;
+-	if (!hw) {
+-		mutex_unlock(&ahvif->ah->conf_mutex);
+-		return NULL;
+-	}
+-
+-	ar = ath12k_get_ar_by_vif(hw, vif, link_id);
+-	mutex_unlock(&ahvif->ah->conf_mutex);
+-
+-	return ar;
+-}
+-
+ static int ath12k_vendor_sdwf_streaming_stats_configure(struct wireless_dev *wdev,
+ 							struct nlattr *streaming_stats)
+ {
+@@ -2119,6 +2250,44 @@ static int ath12k_vendor_parse_rm_erp(struct wiphy *wiphy,
+ 	return ret;
+ }
+ 
++static int ath12k_vendor_process_rm_power_boost(struct wiphy *wiphy)
++{
++	struct ieee80211_hw *hw = wiphy_to_ieee80211_hw(wiphy);
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k *ar = ah->radio;
++	struct sk_buff *skb = NULL;
++	int ret;
++
++	skb = cfg80211_vendor_cmd_alloc_reply_skb(wiphy, NLMSG_DEFAULT_SIZE);
++	if (!skb) {
++		ath12k_err(NULL, "rm generic pb failed to allocate skb\n");
++		return -ENOMEM;
++	}
++
++	if (nla_put_u8(skb, QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID,
++		       QCA_WLAN_VENDOR_RM_POWER_BOOST_SERVICE)) {
++		ath12k_err(NULL, "rm generic pb failed to put vendor id\n");
++		kfree_skb(skb);
++		return -ENOMEM;
++	}
++
++	if (nla_put_string(skb,
++			   QCA_WLAN_VENDOR_ATTR_RM_GENERIC_RELAYFS_FILE_NAME_PMLO,
++			   ar->ab->ag->pb_rfs_path)) {
++		ath12k_err(NULL, "rm generic pb failed to put relayfs path\n");
++		kfree_skb(skb);
++		return -ENOMEM;
++	}
++
++	ret = cfg80211_vendor_cmd_reply(skb);
++	if (ret) {
++		ath12k_err(NULL, "rm generic pb send failed with err %d\n", ret);
++		return ret;
++	}
++
++	return ret;
++}
++
+ static int ath12k_vendor_parse_rm(struct wiphy *wiphy,
+ 				  struct wireless_dev *wdev,
+ 				  const void *data,
+@@ -2134,13 +2303,18 @@ static int ath12k_vendor_parse_rm(struct wiphy *wiphy,
+ 		return ret;
+ 	}
+ 
+-	if (!tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP]) {
+-		ath12k_err(NULL, "invalid attributes provided for QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC\n");
+-		return ret;
++	if (tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP]) {
++		return ath12k_vendor_parse_rm_erp(wiphy, wdev,
++						  tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP]);
++	} else if (tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID]) {
++		if (nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID]) ==
++		    QCA_WLAN_VENDOR_RM_POWER_BOOST_SERVICE)
++			return ath12k_vendor_process_rm_power_boost(wiphy);
++	} else {
++		ath12k_err(NULL, "found QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC to be empty\n");
+ 	}
+ 
+-	return ath12k_vendor_parse_rm_erp(wiphy, wdev,
+-					  tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP]);
++	return ret;
+ }
+ 
+ void ath12k_erp_handle_trigger(struct work_struct *work)
+@@ -3207,6 +3381,15 @@ static struct wiphy_vendor_command ath12k_vendor_commands[] = {
+ 		.policy = ath12k_vendor_rm_generic_policy,
+ 		.maxattr = QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MAX,
+ 	},
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++	{
++		.info.vendor_id = QCA_NL80211_VENDOR_ID,
++		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_IQ_DATA_INFERENCING,
++		.doit = ath12k_vendor_iq_data_inferencing_operations,
++		.policy = ath12k_vendor_iq_data_inferencing_policy,
++		.maxattr = QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MAX,
++	},
++#endif
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	{
+ 		.info.vendor_id = QCA_NL80211_VENDOR_ID,
+@@ -3288,6 +3471,12 @@ static const struct nl80211_vendor_cmd_info ath12k_vendor_events[] = {
+ 		.vendor_id = QCA_NL80211_VENDOR_ID,
+ 		.subcmd = QCA_NL80211_VENDOR_SUBCMD_SDWF_DEV_OPS,
+ 	},
++#endif
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++	[QCA_NL80211_VENDOR_SUBCMD_IQ_DATA_INFERENCING_INDEX] = {
++		.vendor_id = QCA_NL80211_VENDOR_ID,
++		.subcmd = QCA_NL80211_VENDOR_SUBCMD_IQ_DATA_INFERENCING,
++	},
+ #endif
+ 	[QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC_INDEX] = {
+ 		.vendor_id = QCA_NL80211_VENDOR_ID,
+diff --git a/drivers/net/wireless/ath/ath12k/vendor.h b/drivers/net/wireless/ath/ath12k/vendor.h
+index f32a8fa..eca5e37 100644
+--- a/drivers/net/wireless/ath/ath12k/vendor.h
++++ b/drivers/net/wireless/ath/ath12k/vendor.h
+@@ -25,6 +25,7 @@ enum qca_nl80211_vendor_subcmds {
+ 	QCA_NL80211_VENDOR_SUBCMD_DCS_WLAN_INTERFERENCE_COMPUTE = 243,
+ 	QCA_NL80211_VENDOR_SUBCMD_SET_6GHZ_POWER_MODE = 253,
+ 	QCA_NL80211_VENDOR_SUBCMD_POWER_MODE_CHANGE_COMPLETED = 254,
++	QCA_NL80211_VENDOR_SUBCMD_IQ_DATA_INFERENCING = 255,
+ 
+ 	QCA_NL80211_VENDOR_SUBCMD_TELEMETRIC_DATA = 334,
+ };
+@@ -46,8 +47,101 @@ enum qca_nl80211_vendor_events {
+ 	QCA_NL80211_VENDOR_SUBCMD_AFC_EVENT_INDEX,
+ 	QCA_NL80211_VENDOR_SUBCMD_6GHZ_PWR_MODE_EVT_IDX,
+ 	QCA_NL80211_VENDOR_SUBCMD_DCS_WLAN_INTERFERENCE_COMPUTE_INDEX,
++	QCA_NL80211_VENDOR_SUBCMD_IQ_DATA_INFERENCING_INDEX,
+ };
+ 
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++/*
++ * enum qca_wlan_vendor_attr_iq_data_inferencing - Represents the communication sent as
++ * part of I/Q data inferencing messages.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_VERSION: u32, represents the current version
++ * of I/Q data Inferencing.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CMD_TYPE: u32, represents the command subtype
++ * sent from userspace to driver.
++ * The values are defined in enum qca_wlan_vendor_attr_iq_data_inferencing_cmd_type.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_RADIO: u32, represents the radio
++ *
++ * @QCA_WLAN_VENDOR_ATTR_DATA_INFERENCING_BW: u32, represents the BW in MHz
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CHANNEL_FREQ: u32, represents the
++ * Channel Frequency in MHz
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_PRIMARY_BAND_CENTER: u32, represents the
++ * primary band center frequency in MHz
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_SECONDARY_BAND_CENTER: u32, represents the
++ * secondary band center frequency for 80plus80 mode in Mhz
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MCS: u32, represents the MCS
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_TEMPERATURE: s32, represents the
++ * temperature in degree C
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_STAGE: u32, represents the inferencing
++ * stage TLV.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM: s32, represents the
++ * channel info for which inference data is being sent.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVN_MASK: s32, represents the
++ * channel info for which inference data is being sent.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_HW_IDX: u32, represents the
++ * hardware link index for the radio.
++ *
++ */
++enum qca_wlan_vendor_attr_iq_data_inferencing {
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_INVALID = 0,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_VERSION = 1,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CMD_TYPE = 2,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_RADIO = 3,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_BW = 4,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_CHANNEL_FREQ = 5,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_PRIMARY_BAND_CENTER = 6,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_SECONDARY_BAND_CENTER = 7,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MCS = 8,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_TEMPERATURE = 9,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_STAGE = 10,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM = 11,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_EVM_MASK = 12,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_HW_IDX = 13,
++
++	/* keep last */
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_AFTER_LAST,
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_MAX =
++	QCA_WLAN_VENDOR_ATTR_IQ_DATA_INFERENCING_AFTER_LAST - 1,
++};
++
++/*
++ * enum qca_wlan_vendor_iq_data_inferencing_cmd_type - Represents the data required
++ * to pass I/Q data for inferencing to user space and get the result.
++ *
++ * @QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_START: Represents the stage where
++ * Powerboost App has started and is ready to receive IQ samples.
++ *
++ * @QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_STOP: Represents the stage where
++ * Powerboost App has stopped and is no longer ready to receive IQ samples.
++ *
++ * @QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_RESULT: Represents result of inferencing
++ * of the I/Q data sent by user space to driver.
++ *
++ * @QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_FAILURE: Represents failure of inferencing
++ * of the I/Q data.
++ *
++ */
++enum qca_wlan_vendor_iq_data_inferencing_cmd_type {
++	QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_START = 1,
++	QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_APP_STOP = 2,
++	QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_RESULT = 3,
++	QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_FAILURE = 4,
++
++	/* keep last */
++	QCA_WLAN_VENDOR_IQ_DATA_INFERENCING_CMD_MAX
++};
++#endif
+ #ifdef CPTCFG_ATH12K_SAWF
+ enum qca_wlan_vendor_attr_sdwf_phy {
+ 	QCA_WLAN_VENDOR_ATTR_SDWF_PHY_INVALID = 0,
+@@ -625,17 +719,33 @@ enum qca_wlan_vendor_attr_scs_rule_config {
+ 	QCA_WLAN_VENDOR_ATTR_SCS_RULE_CONFIG_AFTER_LAST - 1,
+ };
+ 
++enum qca_wlan_vendor_rm_services {
++	QCA_WLAN_VENDOR_RM_MAIN_SERVICE = 0,
++	QCA_WLAN_VENDOR_RM_ERP_SERVICE = 3,
++	QCA_WLAN_VENDOR_RM_POWER_BOOST_SERVICE = 7,
++	QCA_WLAN_VENDOR_RM_MAX_SERVICE,
++};
++
+ /**
+  * enum qca_wlan_vendor_attr_rm_generic - Attributes required for vendor
+  * command %QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC to register a Resource Manager
+  * with the driver.
+  *
++ * @QCA_WLAN_VENDOR_ATTR_RM_GENERIC_RELAYFS_FILE_NAME_PMLO: string, represents relayfs
++ * filename used for PMLO feature. The driver sends this to userspace to tell what
++ * file to listen on for statistics.
++ *
+  * @QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP: Nested attribute used for commands
+  * and events related to ErP (Energy related Products),
+  * see @enum qca_wlan_vendor_attr_erp_ath for details.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID: Represents the service id
++ * for which RM GENERIC sent/received.
+  */
+ enum qca_wlan_vendor_attr_rm_generic {
++	QCA_WLAN_VENDOR_ATTR_RM_GENERIC_RELAYFS_FILE_NAME_PMLO = 6,
+ 	QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP = 13,
++	QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID = 15,
+ 
+ 	/* keep last */
+ 	QCA_WLAN_VENDOR_ATTR_RM_GENERIC_AFTER_LAST,
+-- 
+2.25.1
+

@@ -1,0 +1,23 @@
+From c8307269d1e167582e09c6ef3eae4e72db524db8 Mon Sep 17 00:00:00 2001
+From: Rajat Soni <quic_rajson@quicinc.com>
+Date: Thu, 25 Aug 2022 17:46:29 +0530
+Subject: [PATCH] ath12k: Fix memory leak
+
+Freed tb and event variables.
+
+Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/qmi.c | 4 +++-
+ drivers/net/wireless/ath/ath12k/wmi.c | 2 ++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -8356,6 +8356,7 @@ ath12k_wmi_pdev_temperature_event(struct
+ 
+ 	ath12k_thermal_event_temperature(ar, ev->temp);
+ exit:
++	kfree(tb);
+ 	rcu_read_unlock();
+ }
+ 

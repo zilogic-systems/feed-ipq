@@ -1,0 +1,103 @@
+From 5b113819fe962f1424d2f53de98c426a13865286 Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Wed, 23 Oct 2024 15:58:28 +0530
+Subject: [PATCH 4/5] QSDK: DP: wifi: ath12k: add cache aligned variable access in
+
+To unmap the DMA’d memory, dmac_inv_range_no_dsb is currently performed
+using the msdu->data and msdu->tail pointers. These fields are located in
+different cache lines, causing cache misses during access. Fix this by
+recording the skb->data pointer in the rx_desc_info structure and reusing
+it during the DMA unmap. Additionally, ath12k_rx_desc_info is fetched for
+each RX packet, with a size of 48 bytes. Since this memory is not aligned
+to a cache line, two cache misses occur for each access. Fix this by
+aligning the memory to 64 bytes to improve cache coherency.
+
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp.h    |  6 ++++++
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 21 ++++++++++++---------
+ 2 files changed, 18 insertions(+), 9 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -9,6 +9,7 @@
+ #include "core.h"
+ #include "hal_rx.h"
+ #include "hw.h"
++#include <asm/cache.h>
+ 
+ #define MAX_RXDMA_PER_PDEV     2
+ 
+@@ -324,13 +325,14 @@ struct ath12k_hp_update_timer {
+ 
+ struct ath12k_rx_desc_info {
+ 	struct list_head list;
+-	u32 cookie;
+ 	dma_addr_t paddr;
++	u32 cookie;
+ 	u8 chip_id		: 3,
+ 	   in_use		: 1;
+ 	struct sk_buff *skb;
+ 	u32 magic;
+-};
++	u8 *skb_data;
++} __attribute__ ((aligned(L1_CACHE_BYTES)));
+ 
+ #define DP_TX_DESC_FLAG_FAST     0x1
+ 
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -332,6 +332,7 @@ void ath12k_dp_rx_bufs_replenish(struct
+ 
+ 		rx_desc->skb = skb;
+ 		rx_desc->paddr = ATH12K_SKB_RXCB(skb)->paddr;
++		rx_desc->skb_data = skb->data;
+ 
+ 		desc = ath12k_hal_srng_src_get_next_entry(ab, srng);
+ 		if (unlikely(!desc)) {
+@@ -3556,7 +3557,6 @@ try_again:
+ 		src_ab = ar->ab;
+ 		rcu_read_unlock();
+ 
+-
+ 		/* retry manual desc retrieval */
+ 		if (unlikely(!desc_info)) {
+ 			desc_info = ath12k_dp_get_rx_desc(src_ab, cookie);
+@@ -3566,26 +3566,29 @@ try_again:
+ 			}
+ 		}
+ 
++		msdu = desc_info->skb;
++
++		/* To prefetch skb->cb */
++		prefetch(msdu);
++		prefetch(&msdu->len);
++
+ 		if (unlikely(desc_info->magic != ATH12K_DP_RX_DESC_MAGIC))
+ 			ath12k_warn(ab, "Check HW CC implementation");
+ 
+ 		chip_id = src_ab->chip_id;
+ 
+-		msdu = desc_info->skb;
++		dmac_inv_range_no_dsb(desc_info->skb_data, desc_info->skb_data + DP_RX_BUFFER_SIZE);
++		dma_unmap_single_attrs(src_ab->dev, desc_info->paddr, DP_RX_BUFFER_SIZE,
++				       DMA_FROM_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+ 		desc_info->skb = NULL;
+ 		desc_info->paddr = 0;
+-
++		desc_info->skb_data = NULL;
+ 		list_add_tail(&desc_info->list, &rx_desc_used_list[chip_id]);
+ 
+-		rxcb = ATH12K_SKB_RXCB(msdu);
+-		dmac_inv_range_no_dsb(msdu->data, msdu->data + (msdu->len + skb_tailroom(msdu)));
+-		dma_unmap_single_attrs(src_ab->dev, rxcb->paddr,
+-				       msdu->len + skb_tailroom(msdu),
+-				       DMA_FROM_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+-
+ 		num_buffs_reaped[chip_id]++;
+ 		ab->soc_stats.reo_rx[ring_id][chip_id]++;
+ 
++		rxcb = ATH12K_SKB_RXCB(msdu);
+ 		rxcb->ar = ar;
+ 		rxcb->hw_link_id = hw_link_id;
+ 		rxcb->peer_id = le32_get_bits(desc.rx_mpdu_info.peer_meta_data,

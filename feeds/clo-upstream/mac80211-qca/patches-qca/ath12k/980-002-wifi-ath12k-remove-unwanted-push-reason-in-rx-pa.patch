@@ -1,0 +1,47 @@
+From 1c28578cad828aaf6912363b74c90cd723011259 Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Wed, 23 Oct 2024 12:27:07 +0530
+Subject: [PATCH 2/5] Upstream: DP: wifi: ath12k: remove unwanted push reason in rx path
+
+In the RX path, only packets with the push reason set to routing
+instruction are received. Remove the unnecessary check in the per-packet
+rx path to elminate the redundant push reason check.
+
+Patch-dependency: None
+
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index a67e90d..aefa85a 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3712,7 +3712,6 @@ try_again:
+ 
+ 	while (likely((rx_desc = ath12k_hal_srng_dst_get_next_cache_entry(ab, srng)))) {
+ 		struct hal_reo_dest_ring desc = *(struct hal_reo_dest_ring *)rx_desc;
+-		enum hal_reo_dest_ring_push_reason push_reason;
+ 		u32 cookie;
+ 
+ 		cookie = le32_get_bits(desc.buf_addr_info.info1,
+@@ -3777,15 +3776,6 @@ try_again:
+ 		num_buffs_reaped[chip_id]++;
+ 		ab->soc_stats.reo_rx[ring_id][chip_id]++;
+ 
+-		push_reason = le32_get_bits(desc.info0,
+-					    HAL_REO_DEST_RING_INFO0_PUSH_REASON);
+-		if (unlikely(push_reason !=
+-		    HAL_REO_DEST_RING_PUSH_REASON_ROUTING_INSTRUCTION)) {
+-			dev_kfree_skb_any(msdu);
+-			ab->soc_stats.hal_reo_error[ring_id]++;
+-			continue;
+-		}
+-
+ 		rxcb->ar = ar;
+ 		rxcb->hw_link_id = hw_link_id;
+ 		rxcb->peer_id = le32_get_bits(desc.rx_mpdu_info.peer_meta_data,
+-- 
+2.34.1
+

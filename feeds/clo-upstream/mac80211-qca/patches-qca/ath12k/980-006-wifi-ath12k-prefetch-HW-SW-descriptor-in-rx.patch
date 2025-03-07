@@ -1,0 +1,144 @@
+From ef0d5fa57c1762377d943b28e19765359dc17ebe Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Tue, 29 Oct 2024 16:12:50 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: prefetch HW/SW descriptor in rx path
+
+Prefetch software (SW) and hardware (HW) descriptors during RX ring
+reaping to improve CPU utilization and avoid cache misses. This
+optimization is effective from the third iteration onwards.
+With this change, seeing 3%cpu improvement in TBTC cases.
+
+Patch-dependency : None
+
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 45 ++++++++++++++++++++++---
+ drivers/net/wireless/ath/ath12k/hal.c   | 27 +++++++++++++++
+ drivers/net/wireless/ath/ath12k/hal.h   |  2 ++
+ 3 files changed, 70 insertions(+), 4 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3662,11 +3662,48 @@ int ath12k_dp_rx_pkt_type_filter(struct
+ 	return ret;
+ }
+ 
++static inline void
++ath12k_dp_rx_prefetch_sw_hw_desc(struct ath12k_rx_desc_info **l_pf_sw_desc,
++				 struct hal_srng *srng,
++				 struct hal_reo_dest_ring *l_pf_reo_desc)
++{
++	u64 desc_va_next;
++	u32 tp, srng_tp = srng->u.dst_ring.tp;
++	u32 srng_cached_hp = srng->u.dst_ring.cached_hp;
++
++	if (*l_pf_sw_desc) {
++		prefetch((*l_pf_sw_desc)->skb);
++		prefetch(&(*l_pf_sw_desc)->skb->len);
++	}
++
++	if (l_pf_reo_desc) {
++		desc_va_next = ((u64)le32_to_cpu(l_pf_reo_desc->buf_va_hi) << 32 |
++				le32_to_cpu(l_pf_reo_desc->buf_va_lo));
++		prefetch((void *)(uintptr_t)desc_va_next);
++		*l_pf_sw_desc = (struct ath12k_rx_desc_info *)((unsigned long)desc_va_next);
++
++	        if (srng_tp == srng_cached_hp) {
++			l_pf_reo_desc = NULL;
++	        } else {
++			tp = srng_tp + srng->entry_size;
++			if (tp == srng->ring_size)
++				tp = 0;
++
++			if (tp != srng_cached_hp)
++				l_pf_reo_desc =
++					(struct hal_reo_dest_ring *)srng->ring_base_vaddr + tp;
++
++			if (!IS_ALIGNED((unsigned long)l_pf_reo_desc, 64))
++				prefetch(l_pf_reo_desc);
++	        }
++	}
++}
++
+ int ath12k_dp_rx_process(struct ath12k_base *ab, int ring_id,
+ 			 struct napi_struct *napi, int budget)
+ {
+ 	struct ath12k_base *src_ab;
+-	struct ath12k_rx_desc_info *desc_info;
++	struct ath12k_rx_desc_info *desc_info, *l_pf_sw_desc = NULL;
+ 	struct ath12k_dp *dp = &ab->dp;
+ 	struct dp_rxdma_ring *rx_ring = &dp->rx_refill_buf_ring;
+ 	struct ieee80211_rx_status rx_status = {0};
+@@ -3687,6 +3724,7 @@ int ath12k_dp_rx_process(struct ath12k_b
+ 	u8 ip_csum_fail, l4_csum_fail, l3_pad;
+ 	int valid_entries, ret;
+ 	struct list_head rx_desc_used_list[ATH12K_MAX_SOCS];
++	struct hal_reo_dest_ring *l_pf_reo_desc;
+ 
+ 	__skb_queue_head_init(&msdu_list);
+ 
+@@ -3704,6 +3742,8 @@ try_again:
+ 	}
+ 	ath12k_hal_srng_dst_invalidate_entry(ab, srng, valid_entries);
+ 
++	l_pf_reo_desc = ath12k_hal_srng_dst_prefetch_reo_desc(srng);
++
+ 	while (likely((rx_desc = ath12k_hal_srng_dst_get_next_cache_entry(ab, srng)))) {
+ 		struct hal_reo_dest_ring desc = *(struct hal_reo_dest_ring *)rx_desc;
+ 		u32 cookie;
+@@ -3751,9 +3791,7 @@ try_again:
+ 
+ 		msdu = desc_info->skb;
+ 
+-		/* To prefetch skb->cb */
+-		prefetch(msdu);
+-		prefetch(&msdu->len);
++		ath12k_dp_rx_prefetch_sw_hw_desc(&l_pf_sw_desc, srng, l_pf_reo_desc);
+ 
+ 		if (unlikely(desc_info->magic != ATH12K_DP_RX_DESC_MAGIC))
+ 			ath12k_warn(ab, "Check HW CC implementation");
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -1870,6 +1870,33 @@ void *ath12k_hal_srng_dst_get_next_entry
+ 	return desc;
+ }
+ 
++struct hal_reo_dest_ring *
++ath12k_hal_srng_dst_prefetch_reo_desc(struct hal_srng *srng)
++{
++	u32 *desc, tp, entry_size;
++
++	tp = srng->u.dst_ring.tp;
++	entry_size = srng->entry_size;
++
++	if (tp == srng->u.dst_ring.cached_hp)
++		return NULL;
++
++	desc = srng->ring_base_vaddr + tp;
++
++	/* check if the descriptor address is 64byte aligned address */
++	if (!IS_ALIGNED((unsigned long)desc, 64))
++	        tp += entry_size;
++	else
++	        tp += (entry_size * 2);
++
++	if (tp == entry_size)
++		tp = 0;
++
++	desc = srng->ring_base_vaddr + tp;
++	prefetch(desc);
++	return (struct hal_reo_dest_ring *)(desc + entry_size);
++}
++
+ u32 *ath12k_hal_srng_dst_get_next_cache_entry(struct ath12k_base *ab,
+                                               struct hal_srng *srng)
+ {
+--- a/drivers/net/wireless/ath/ath12k/hal.h
++++ b/drivers/net/wireless/ath/ath12k/hal.h
+@@ -1371,4 +1371,6 @@ void ath12k_hal_srng_access_lmac_src_rin
+ 
+ 
+ ssize_t ath12k_debugfs_hal_dump_srng_stats(struct ath12k_base *ab, char *buf, int size);
++struct hal_reo_dest_ring *
++ath12k_hal_srng_dst_prefetch_reo_desc(struct hal_srng *srng);
+ #endif

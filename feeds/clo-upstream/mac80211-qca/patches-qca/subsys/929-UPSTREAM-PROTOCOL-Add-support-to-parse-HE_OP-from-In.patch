@@ -1,0 +1,79 @@
+From 5d47c71feb3892051a159be703ea5173d3428ee4 Mon Sep 17 00:00:00 2001
+From: Amith A <quic_amitajit@quicinc.com>
+Date: Tue, 5 Nov 2024 20:39:46 +0530
+Subject: [PATCH 2/2] UPSTREAM:PROTOCOL:Add support to parse HE_OP from Indoor
+ SP AP
+
+An Indoor SP(Composite) AP advertises its power mode as 0x08 in the
+regulatory element of HE_OP IE. Add support in the STA to parse this
+new power mode.
+
+When the STA receives the regulatory info as Indoor SP AP, convert it
+to SP AP internally so that the STA treats the root AP as a regular
+SP AP.
+
+Tag: 6G_REGULATORY
+
+Signed-off-by: Amith A <quic_amitajit@quicinc.com>
+---
+ include/linux/ieee80211.h |  5 ++++-
+ net/mac80211/util.c       | 15 +++++++++++++++
+ 2 files changed, 19 insertions(+), 1 deletion(-)
+
+--- a/include/linux/ieee80211.h
++++ b/include/linux/ieee80211.h
+@@ -2759,6 +2759,7 @@ static inline bool ieee80211_he_capa_siz
+ 
+ #define IEEE80211_6GHZ_CTRL_REG_LPI_AP	0
+ #define IEEE80211_6GHZ_CTRL_REG_SP_AP	1
++#define IEEE80211_6GHZ_CTRL_REG_INDOOR_SP_AP	8
+ 
+ /**
+  * struct ieee80211_he_6ghz_oper - HE 6 GHz operation Information field
+@@ -2776,7 +2777,7 @@ struct ieee80211_he_6ghz_oper {
+ #define		IEEE80211_HE_6GHZ_OPER_CTRL_CHANWIDTH_80MHZ	2
+ #define		IEEE80211_HE_6GHZ_OPER_CTRL_CHANWIDTH_160MHZ	3
+ #define IEEE80211_HE_6GHZ_OPER_CTRL_DUP_BEACON	0x4
+-#define IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO	0x38
++#define IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO	0x78
+ #define IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO_LSB 3
+ 	u8 control;
+ 	u8 ccfs0;
+--- a/net/mac80211/util.c
++++ b/net/mac80211/util.c
+@@ -4072,6 +4072,13 @@ struct ieee80211_channel
+ 	reg_info = (he_6ghz_oper->control & IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO) >>
+ 		   IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO_LSB;
+ 
++	/*
++	 * If the root AP is Indoor SP AP, convert the received control field
++	 * to SP AP.
++	 */
++	if (reg_info == IEEE80211_6GHZ_CTRL_REG_INDOOR_SP_AP)
++		reg_info = IEEE80211_6GHZ_CTRL_REG_SP_AP;
++
+ 	/* 6G Power mode configured by the user */
+ 	reg_6g_power_mode = sdata->wdev.reg_6g_power_mode;
+ 
+@@ -4163,6 +4170,13 @@ bool ieee80211_chandef_he_6ghz_oper(stru
+ 	reg_info = (he_6ghz_oper->control & IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO) >>
+ 		    IEEE80211_HE_6GHZ_OPER_CTRL_REG_INFO_LSB;
+ 
++	/*
++	 * If the root AP is Indoor SP AP, convert the received control field
++	 * to SP AP.
++	 */
++	if (reg_info == IEEE80211_6GHZ_CTRL_REG_INDOOR_SP_AP)
++		reg_info = IEEE80211_6GHZ_CTRL_REG_SP_AP;
++
+ 	/* 6G Power mode configured by the user */
+ 	reg_6g_power_mode = sdata->wdev.reg_6g_power_mode;
+ 
+@@ -4198,6 +4212,7 @@ bool ieee80211_chandef_he_6ghz_oper(stru
+ 		bss_conf->power_type = IEEE80211_REG_LPI_AP;
+ 		break;
+ 	case IEEE80211_6GHZ_CTRL_REG_SP_AP:
++	case IEEE80211_6GHZ_CTRL_REG_INDOOR_SP_AP:
+ 		bss_conf->power_type = IEEE80211_REG_SP_AP;
+ 		break;
+ 	default:

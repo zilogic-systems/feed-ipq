@@ -1,0 +1,135 @@
+From 97800bd762511d7331f57e55f0e006e658f43051 Mon Sep 17 00:00:00 2001
+From: Suraj P Kizhakkethil <quic_surapk@quicinc.com>
+Date: Mon, 21 Oct 2024 15:42:25 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL: wifi: ath12k: Add support to
+ enable/disable TWT per vdev
+
+Currently, the TWT feature is enabled/disabled on pdev level. The new
+command adds support to enable/disable the TWT feature per vdev. This
+change is to support the FW changes for TWT feature.
+
+Change-Id: I3c119666ea00c3720ea6feb64d6f35f812b7e2bb
+Signed-off-by: Suraj P Kizhakkethil <quic_surapk@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c |  8 +++++++
+ drivers/net/wireless/ath/ath12k/wmi.c | 32 +++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.h | 17 ++++++++++++++
+ 3 files changed, 57 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -5452,10 +5452,18 @@ skip_pending_cs_up:
+ 		ath12k_recalculate_mgmt_rate(ar, arvif, &def, info);
+ 
+ 	if (changed & BSS_CHANGED_TWT) {
+-		if (info->twt_requester || info->twt_responder)
++		if (info->twt_requester || info->twt_responder) {
+ 			ath12k_wmi_send_twt_enable_cmd(ar, ar->pdev->pdev_id);
+-		else
++			if (info->twt_responder && test_bit(WMI_TLV_SERVICE_DYNAMIC_TWT_MODE_SUPPORT, ar->ab->wmi_ab.svc_map)) {
++				ret = ath12k_wmi_send_twt_vdev_config_cmd(ar, ar->pdev->pdev_id, arvif->vdev_id, info->twt_responder);
++
++				if (ret)
++					ath12k_warn(ar->ab, "failed to send twt config cmd on vdev %i: %d\n",
++						    arvif->vdev_id,  ret);
++			}
++		} else {
+ 			ath12k_wmi_send_twt_disable_cmd(ar, ar->pdev->pdev_id);
++		}
+ 	}
+ 
+ 	if (changed & BSS_CHANGED_HE_OBSS_PD)
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -4688,6 +4688,42 @@ ath12k_wmi_send_twt_disable_cmd(struct a
+ 	return ret;
+ }
+ 
++int
++ath12k_wmi_send_twt_vdev_config_cmd(struct ath12k *ar,
++                                    u32 pdev_id, u32 vdev_id, u32 value)
++{
++	struct ath12k_wmi_pdev *wmi = ar->wmi;
++	struct ath12k_base *ab = wmi->wmi_ab->ab;
++	struct wmi_twt_vdev_config_params_cmd *cmd;
++	struct sk_buff *skb;
++	int ret, len;
++
++	len = sizeof(*cmd);
++
++	skb = ath12k_wmi_alloc_skb(wmi->wmi_ab, len);
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (struct wmi_twt_vdev_config_params_cmd *)skb->data;
++
++	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_TWT_VDEV_CONFIG_CMD, len);
++	cmd->pdev_id = cpu_to_le32(pdev_id);
++	cmd->vdev_id = cpu_to_le32(vdev_id);
++	cmd->value = cpu_to_le32(value);
++
++	ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
++		   "wmi send twt vdev config pdev %u vdev %u value %u\n",
++		   cmd->pdev_id, cmd->vdev_id, cmd->value);
++
++	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_TWT_VDEV_CONFIG_CMDID);
++
++	if (ret) {
++		ath12k_warn(ab, "Failed to send WMI_TWT_VDEV_CONFIG_CMDID");
++		dev_kfree_skb(skb);
++	}
++	return ret;
++}
++
+ int ath12k_wmi_send_twt_add_dialog_cmd(struct ath12k *ar,
+ 				       struct wmi_twt_add_dialog_params *params)
+ {
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -853,6 +853,7 @@ enum wmi_tlv_cmd_id {
+ 	WMI_TWT_DEL_DIALOG_CMDID,
+ 	WMI_TWT_PAUSE_DIALOG_CMDID,
+ 	WMI_TWT_RESUME_DIALOG_CMDID,
++	WMI_TWT_VDEV_CONFIG_CMDID = 0x3E00C,
+ 	WMI_PDEV_OBSS_PD_SPATIAL_REUSE_CMDID =
+ 				WMI_TLV_CMD(WMI_GRP_SPATIAL_REUSE),
+ 	WMI_PDEV_OBSS_PD_SPATIAL_REUSE_SET_DEF_OBSS_THRESH_CMDID,
+@@ -2276,6 +2277,7 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_MLO_LINK_REMOVAL_CMD_FIXED_PARAM = 0x464,
+ 	WMI_TAG_PDEV_WSI_STATS_INFO_CMD = 0x4b1,
+ 	WMI_TAG_PDEV_DFS_RADAR_FLAGS = 0x4b4,
++	WMI_TAG_TWT_VDEV_CONFIG_CMD = 0x4de,
+ 	WMI_TAG_PDEV_POWER_BOOST_EVENT_FIXED_PARAM = 0x4E8,
+ 	WMI_TAG_PDEV_POWER_BOOST_CMD_FIXED_PARAM,
+ 	WMI_TAG_PDEV_POWER_BOOST_MEM_ADDR_CMD_FIXED_PARAM,
+@@ -2527,6 +2529,7 @@ enum wmi_tlv_service {
+ 	WMI_TLV_SERVICE_THERM_THROT_POUT_REDUCTION = 410,
+ 	WMI_SERVICE_WDS_NULL_FRAME_SUPPORT = 421,
+ 	WMI_SERVICE_MEC_AGING_TIMER_SUPPORT = 423,
++	WMI_TLV_SERVICE_DYNAMIC_TWT_MODE_SUPPORT = 433,
+ 	WMI_MAX_EXT2_SERVICE,
+ };
+ 
+@@ -7470,6 +7473,13 @@ struct wmi_twt_disable_params_cmd {
+ 	__le32 pdev_id;
+ } __packed;
+ 
++struct wmi_twt_vdev_config_params_cmd {
++	__le32 tlv_header;
++	__le32 pdev_id;
++	__le32 vdev_id;
++	__le32 value;
++} __packed;
++
+ enum WMI_HOST_TWT_COMMAND {
+ 	WMI_HOST_TWT_COMMAND_REQUEST_TWT = 0,
+ 	WMI_HOST_TWT_COMMAND_SUGGEST_TWT,
+@@ -9167,6 +9177,8 @@ int ath12k_wmi_simulate_radar(struct ath
+ int ath12k_wmi_simulate_awgn(struct ath12k *ar, u32 chan_bw_interference_bitmap);
+ int ath12k_wmi_send_twt_enable_cmd(struct ath12k *ar, u32 pdev_id);
+ int ath12k_wmi_send_twt_disable_cmd(struct ath12k *ar, u32 pdev_id);
++int ath12k_wmi_send_twt_vdev_config_cmd(struct ath12k *ar,
++					u32 pdev_id, u32 vdev_id, u32 value);
+ int ath12k_wmi_send_twt_add_dialog_cmd(struct ath12k *ar,
+ 				       struct wmi_twt_add_dialog_params *params);
+ int ath12k_wmi_send_twt_del_dialog_cmd(struct ath12k *ar,

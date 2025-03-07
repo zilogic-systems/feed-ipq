@@ -1,0 +1,96 @@
+From e64a6285c916ea7cab1893e3ddc2c6928349e245 Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Tue, 17 Sep 2024 15:28:04 +0530
+Subject: [PATCH] mac80211: Compilation warning fixes for mac80211 Protocol files
+
+mesh.c       -  Modified the typecasting for cap and cap->data value to fix the incompatible pointer warning
+mesg_plink.c -  Updated the param to 0 from NULL in ieee80211_eht_cap_ie_to_sta_eht_cap function call
+mlme.c       -  Modified the access specifier for valid_links
+chan.c       -  Modified the data type of cfg80211_get_start_freq_device and cfg80211_get_end_freq_device 
+                 to const struct cfg80211_chan_def *chandef
+cfg80211.h   -  Modified the data type of cfg80211_get_start_freq_device and cfg80211_get_end_freq_device
+                 to const struct cfg80211_chan_def *chandef
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ net/mac80211/mesh.c       |  6 ++++--
+ net/mac80211/mesh_plink.c |  2 +-
+ net/mac80211/mlme.c       |  4 ++--
+ net/wireless/chan.c       |  4 ++--
+ include/net/cfg80211.h    |  4 ++--
+ 5 files changed, 11 insertions(+), 9 deletions(-)
+
+--- a/net/mac80211/mesh.c
++++ b/net/mac80211/mesh.c
+@@ -781,8 +781,8 @@ ieee80211_mesh_update_bss_params(struct
+ 	sdata->vif.bss_conf.eht_support = true;
+ 
+ 	cap = cfg80211_find_ext_elem(WLAN_EID_EXT_EHT_OPERATION, ie, ie_len);
+-	if (cap && ieee80211_eht_oper_size_ok(cap, cap->datalen))
+-		eht_oper = (void *)(cap->data + 1);
++	if (cap && ieee80211_eht_oper_size_ok((const u8 *)cap, cap->datalen))
++		eht_oper = (const struct ieee80211_eht_operation *)(cap->data + 1);
+ 
+ 	sdata->vif.bss_conf.eht_support =
+ 		!!ieee80211_get_eht_iftype_cap(sband, NL80211_IFTYPE_MESH_POINT);
+--- a/net/mac80211/mesh_plink.c
++++ b/net/mac80211/mesh_plink.c
+@@ -465,7 +465,7 @@ static void mesh_sta_info_init(struct ie
+ 	ieee80211_eht_cap_ie_to_sta_eht_cap(sdata, sband, elems->he_cap,
+ 					    elems->he_cap_len,
+ 					    elems->eht_cap, elems->eht_cap_len,
+-					    NULL, NULL,
++					    NULL, 0,
+ 					    &sta->deflink);
+ 
+ 	if (bw != sta->sta.deflink.bandwidth)
+--- a/net/mac80211/mlme.c
++++ b/net/mac80211/mlme.c
+@@ -5815,7 +5815,7 @@ static void ieee80211_ml_reconf_work(str
+ 	}
+ 
+ 	sdata_info(sdata,
+-		   "MLO Reconfiguration: work: valid=0x%x, removed=0x%x\n",
++		   "MLO Reconfiguration: work: valid=0x%lx, removed=0x%x\n",
+ 		   sdata->vif.valid_links, sdata->u.mgd.removed_links);
+ 
+ 	list_for_each_entry(sta, &local->sta_list, list) {
+--- a/net/wireless/chan.c
++++ b/net/wireless/chan.c
+@@ -662,7 +662,7 @@ static u32 cfg80211_get_end_freq(u32 cen
+ 	return end_freq;
+ }
+ 
+-u32 cfg80211_get_start_freq_device(struct cfg80211_chan_def *chandef)
++u32 cfg80211_get_start_freq_device(const struct cfg80211_chan_def *chandef)
+ {
+ 	int width = nl80211_chan_width_to_mhz(chandef->width_device);
+ 
+@@ -672,7 +672,7 @@ u32 cfg80211_get_start_freq_device(struc
+ 	return cfg80211_get_start_freq(MHZ_TO_KHZ(chandef->center_freq_device), width);
+ }
+ 
+-u32 cfg80211_get_end_freq_device(struct cfg80211_chan_def *chandef)
++u32 cfg80211_get_end_freq_device(const struct cfg80211_chan_def *chandef)
+ {
+ 	int width = nl80211_chan_width_to_mhz(chandef->width_device);
+ 
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -1105,14 +1105,14 @@ void cfg80211_chandef_primary_freqs(cons
+  * @chandef: the channel definition to check
+  * Returns: Start frequency in KHz.
+  */
+-u32 cfg80211_get_start_freq_device(struct cfg80211_chan_def *chandef);
++u32 cfg80211_get_start_freq_device(const struct cfg80211_chan_def *chandef);
+ 
+ /**
+  * cfg80211_get_end_freq_device - retrieve end frequency of the device BW
+  * @chandef: the channel definition to check
+  * Returns: End frequency in KHz.
+  */
+-u32 cfg80211_get_end_freq_device(struct cfg80211_chan_def *chandef);
++u32 cfg80211_get_end_freq_device(const struct cfg80211_chan_def *chandef);
+ 
+ /**
+  * cfg80211_chandef_device_valid - check if device bandwidth parameters in a channel

@@ -1,0 +1,42 @@
+From ce3471f31a0b0b07cc1c87fb5ffc5367d2ee0d11 Mon Sep 17 00:00:00 2001
+From: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+Date: Wed, 14 Aug 2024 18:00:22 +0530
+Subject: [PATCH] QSDK: wifi: ath12k: Add secure PIL driver support for remoteproc
+
+IPQ5432 has only one rproc and there is not multiPD architecture and
+hence no rootPD. With secure PIL support ath12k needs to boot only one rproc
+hence skip rootPD registration if multiPD arch is not enabled. And only
+one notifier callbacks are registered for this rproc.
+
+Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c  | 5 +++++
+ drivers/net/wireless/ath/ath12k/ahb.h  | 2 +-
+ drivers/net/wireless/ath/ath12k/core.c | 2 +-
+ 3 files changed, 7 insertions(+), 2 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -860,6 +860,11 @@ static int ath12k_core_get_rproc(struct
+ 	 */
+ 	ab_ahb->tgt_rproc->dump_conf = RPROC_COREDUMP_INLINE;
+ 
++	ab->multi_pd_arch = of_property_read_bool(dev->of_node, "qcom,multipd_arch");
++
++	if (!ab->multi_pd_arch)
++		return 0;
++
+ 	rproc_pd = ath12k_core_get_parent_of_rproc_node(prproc);
+ 	if (rproc_pd) {
+ 		if (!strncmp(rproc_pd->name,
+--- a/drivers/net/wireless/ath/ath12k/ahb.h
++++ b/drivers/net/wireless/ath/ath12k/ahb.h
+@@ -79,7 +79,7 @@ static inline int ath12k_rproc_register_
+ 	if (!ab->ssr_upd_handle)
+ 		return -EINVAL;
+ 
+-	if (ab->userpd_id == USERPD_0) {
++	if (ab->userpd_id == USERPD_0 && ab->multi_pd_arch) {
+ 		ab->ssr_atomic_rpd_handle = qcom_register_ssr_atomic_notifier(ab_ahb->tgt_rrproc->name,
+ 									      &ab->rpd_atomic_ssr_nb);
+ 		if (!ab->ssr_atomic_rpd_handle) {

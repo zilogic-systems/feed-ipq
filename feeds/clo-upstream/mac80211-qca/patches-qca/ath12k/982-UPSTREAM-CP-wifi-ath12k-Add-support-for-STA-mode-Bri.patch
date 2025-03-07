@@ -1,0 +1,340 @@
+From 23e2eb890f2aaa61903124d79012dcaf0230a557 Mon Sep 17 00:00:00 2001
+From: Vignesh C <quic_vignc@quicinc.com>
+Date: Sun, 10 Nov 2024 23:18:43 +0530
+Subject: [PATCH] UPSTREAM:CP wifi:ath12k: Add support for STA mode Bridge peer
+
+When an ML peer associates on diagonal links in STA mode, create a bridge
+peer on the adjacent device, similar to AP mode. Upon receiving the
+Association response, the supplicant will request to add a link STA
+followed by a SET STATION command.
+
+The driver should check for adjacency to identify diagonally opposite links.
+If such links are found, create a Bridge Peer by sending a WMI PEER Create
+command with TYPE_DEFAULT. The firmware will send an HTT peer map event
+for successful Bridge Peer creation.
+
+For handling peer association for the Bridge Peer, ensure that link_sta
+is mandatory to set various peer capabilities (HT, VHT, HE, EHT) and flags
+which need to be sent as part of the WMI command. Allocate link_sta and
+fill in the mandatory capabilities of the bridge peer based on its
+radio capabilities, then free the allocated memory once the peer
+association for the bridge peer is sent on bss_assoc().
+
+Patch-dependency:
+	962-01-wifi-ath12k-Add-Basic-support-for-Bridge-Peer.patch
+
+Tag: N_LINK_MLO
+
+Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c |  6 +-
+ drivers/net/wireless/ath/ath12k/mac.c  | 80 ++++++++++++++++++--------
+ 2 files changed, 60 insertions(+), 26 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -2781,13 +2781,17 @@ static void ath12k_core_ml_sta_add(struc
+ 
+ 		ath12k_core_iterate_sta_list(ar, arvif);
+ 
+-		info = vif->link_conf[arvif->link_id];
++		if (ath12k_mac_is_bridge_vdev(arvif))
++			info = NULL;
++		else
++			info = vif->link_conf[arvif->link_id];
++
+ 		/* Set is_up to false as we will do
+ 		 * recovery for that vif in the
+ 		 * upcoming executions
+ 		 */
+ 		arvif->is_up = false;
+-		if (vif->cfg.assoc && info)
++		if (vif->cfg.assoc)
+ 			ath12k_bss_assoc(ar, arvif, info);
+ 		else
+ 			ath12k_bss_disassoc(ar, arvif, false);
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -280,6 +280,9 @@ static int ath12k_fw_stats_request(struc
+ 				   struct stats_request_params *req_param);
+ static void ath12k_mac_bridge_vdevs_down(struct ath12k_vif *ahvif, u8 cur_link_id);
+ static void ath12k_mac_bridge_vdevs_up(struct ath12k_link_vif *arvif);
++static struct
++ieee80211_link_sta *ath12k_mac_inherit_radio_cap(struct ath12k *ar,
++						 struct ath12k_link_sta *arsta);
+ 
+ enum nl80211_he_ru_alloc ath12k_mac_phy_he_ru_to_nl80211_he_ru_alloc(u16 ru_phy)
+ {
+@@ -2452,7 +2455,12 @@ static void ath12k_peer_assoc_h_crypto(s
+ 	}
+ 
+ 	/* FIXME: base on RSN IE/WPA IE is a correct idea? */
+-	if (ar->supports_6ghz || rsnie || wpaie) {
++	/* Bridge peer will be created only on ML association and only secured
++	 * association is allowed. For secured association, Firmware expects
++	 * WMI_PEER_NEED_PTK_4_WAY flag to set on peer_flags, hence Allow
++	 * setting ptk_4_way for bridge peer.
++	 */
++	if (ar->supports_6ghz || rsnie || wpaie || arsta->is_bridge_peer) {
+ 		ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
+ 			   "%s: rsn ie found\n", __func__);
+ 		if (sta->ft_auth)
+@@ -4221,23 +4229,25 @@ static bool ath12k_mac_vif_recalc_sta_he
+ 	struct ieee80211_bss_conf* link_conf;
+ 	enum nl80211_band band;
+ 
+-	rcu_read_lock();
++	if (!ath12k_mac_is_bridge_vdev(arvif)) {
++		rcu_read_lock();
+ 
+-	link_conf = ath12k_get_link_bss_conf(arvif);
++		link_conf = ath12k_get_link_bss_conf(arvif);
+ 
+-	if (!link_conf) {
+-		rcu_read_unlock();
+-		ath12k_warn(ar->ab, "unable to access bss link conf in recalc txbf conf\n");
+-		return false;
+-	}
++		if (!link_conf) {
++			rcu_read_unlock();
++			ath12k_warn(ar->ab, "unable to access bss link conf in recalc txbf conf\n");
++			return false;
++		}
++
++		if (!link_conf->he_support) {
++			rcu_read_unlock();
++			return true;
++		}
+ 
+-	if (!link_conf->he_support) {
+ 		rcu_read_unlock();
+-		return true;
+ 	}
+ 
+-	rcu_read_unlock();
+-
+ 	if (vif->type != NL80211_IFTYPE_STATION)
+ 		return false;
+ 
+@@ -4363,18 +4373,28 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 	struct ath12k_sta *ahsta;
+ 	struct ath12k_peer *peer;
+ 	struct ieee80211_sta_he_cap he_cap;
++	struct ieee80211_sta_ht_cap ht_cap;
+ 	bool is_auth = false;
+ 	int ret;
+ 	struct vdev_up_params params = { 0 };
+ 	u8 link_id;
+ 	u16 he_6ghz_capa;
++	struct ieee80211_link_sta *link_sta;
++	u8 bssid[ETH_ALEN];
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+ 
+-	if (!arvif)
++	/* bss_conf shouldnt be NULL expect for bridge vdev */
++	if (!arvif || (!bss_conf && !ath12k_mac_is_bridge_vdev(arvif)))
+ 		return;
+ 
+-	link_id = bss_conf->link_id;
++	if (ath12k_mac_is_bridge_vdev(arvif)) {
++		link_id = arvif->link_id;
++		ether_addr_copy(bssid, arvif->bssid);
++	} else {
++		link_id = bss_conf->link_id;
++		ether_addr_copy(bssid, bss_conf->bssid);
++	}
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac vdev %i link_id:%d assoc bssid %pM aid %d\n",
+ 		   arvif->vdev_id, link_id,  arvif->bssid, ahvif->aid);
+@@ -4390,18 +4410,37 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 
+ 	if (!ap_sta) {
+ 		ath12k_warn(ar->ab, "failed to find station entry for bss %pM vdev %i\n",
+-			    bss_conf->bssid, arvif->vdev_id);
++			    bssid, arvif->vdev_id);
+ 		rcu_read_unlock();
+ 		return;
+ 	}
+ 
+ 	ahsta = ath12k_sta_to_ahsta(ap_sta);
+ 	arsta = ahsta->link[link_id];
++	if (!arsta) {
++		ath12k_warn(ar->ab, "arsta NULL link_id %d for sta %pM in bss assoc\n",
++			    link_id, ap_sta->addr);
++		rcu_read_unlock();
++		return;
++	}
++
++	link_sta = arsta->is_bridge_peer ? ath12k_mac_inherit_radio_cap(ar, arsta) :
++					   ap_sta->link[link_id];
+ 
++	if (!link_sta) {
++		ath12k_warn(ar->ab, "unable to access link sta in bss assoc\n");
++		rcu_read_unlock();
++		return;
++	}
+ 	/* he_cap here is updated at assoc success for sta mode only */
+-	he_cap = ap_sta->link[link_id]->he_cap;
++	he_6ghz_capa = link_sta->he_6ghz_capa.capa;
++	he_cap = link_sta->he_cap;
++	ht_cap = link_sta->ht_cap;
++
++	ath12k_peer_assoc_prepare(ar, arvif, arsta, &peer_arg, false, link_sta);
+ 
+-	ath12k_peer_assoc_prepare(ar, arvif, arsta, &peer_arg, false, ap_sta->link[link_id]);
++	if (arsta->is_bridge_peer)
++		kfree(link_sta);
+ 
+ 	rcu_read_unlock();
+ 
+@@ -4409,13 +4448,13 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 	ret = ath12k_wmi_send_peer_assoc_cmd(ar, &peer_arg);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to run peer assoc for %pM vdev %i: %d\n",
+-			    bss_conf->bssid, arvif->vdev_id, ret);
++			    bssid, arvif->vdev_id, ret);
+ 		return;
+ 	}
+ 
+ 	if (!wait_for_completion_timeout(&ar->peer_assoc_done, 1 * HZ)) {
+ 		ath12k_warn(ar->ab, "failed to get peer assoc conf event for %pM vdev %i\n",
+-			    bss_conf->bssid, arvif->vdev_id);
++			    bssid, arvif->vdev_id);
+ 		return;
+ 	}
+ 
+@@ -4428,11 +4467,8 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 	}
+ 	spin_unlock_bh(&ar->ab->base_lock);
+ 
+-	he_6ghz_capa = ap_sta->link[link_id]->he_6ghz_capa.capa;
+-
+-	ret = ath12k_setup_peer_smps(ar, arvif, bss_conf->bssid,
+-				     &ap_sta->link[link_id]->ht_cap,
+-				     &ap_sta->link[link_id]->he_cap,
++	ret = ath12k_setup_peer_smps(ar, arvif, bssid,
++				     &ht_cap, &he_cap,
+ 				     le16_to_cpu(he_6ghz_capa));
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to setup peer SMPS for vdev %d: %d\n",
+@@ -4442,20 +4478,21 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 
+ 	if (!ath12k_mac_vif_recalc_sta_he_txbf(ar, arvif, &he_cap)) {
+ 		ath12k_warn(ar->ab, "failed to recalc he txbf for vdev %i on bss %pM\n",
+-			    arvif->vdev_id, bss_conf->bssid);
++			    arvif->vdev_id, bssid);
+ 		return;
+ 	}
+ 
+ 	WARN_ON(arvif->is_up);
+ 
+ 	ahvif->aid = vif->cfg.aid;
+-	ether_addr_copy(arvif->bssid, bss_conf->bssid);
++	if (!ath12k_mac_is_bridge_vdev(arvif))
++		ether_addr_copy(arvif->bssid, bss_conf->bssid);
+ 
+ 	params.vdev_id = arvif->vdev_id;
+ 	params.aid = ahvif->aid;
+ 	params.bssid = arvif->bssid;
+ 
+-	if (bss_conf->nontransmitted) {
++	if (!ath12k_mac_is_bridge_vdev(arvif) && bss_conf->nontransmitted) {
+ 		params.profile_idx = bss_conf->bssid_index;
+ 		params.profile_count = BIT(bss_conf->bssid_indicator) - 1;
+ 		params.tx_bssid = bss_conf->transmitter_bssid;
+@@ -4480,7 +4517,7 @@ skip_vdev_up:
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
+ 		   "mac vdev %d up (associated) bssid %pM aid %d\n",
+-		   arvif->vdev_id, bss_conf->bssid, vif->cfg.aid);
++		   arvif->vdev_id, bssid, vif->cfg.aid);
+ 
+ 	spin_lock_bh(&ar->ab->base_lock);
+ 
+@@ -4500,11 +4537,13 @@ skip_vdev_up:
+ 			ath12k_warn(ar->ab, "Unable to authorize BSS peer: %d\n", ret);
+ 	}
+ 
+-	ret = ath12k_wmi_send_obss_spr_cmd(ar, arvif->vdev_id,
+-					   &bss_conf->he_obss_pd);
+-	if (ret)
+-		ath12k_warn(ar->ab, "failed to set vdev %i OBSS PD parameters: %d\n",
+-			    arvif->vdev_id, ret);
++	if (!ath12k_mac_is_bridge_vdev(arvif)) {
++		ret = ath12k_wmi_send_obss_spr_cmd(ar, arvif->vdev_id,
++						   &bss_conf->he_obss_pd);
++		if (ret)
++			ath12k_warn(ar->ab, "failed to set vdev %i OBSS PD parameters: %d\n",
++				    arvif->vdev_id, ret);
++	}
+ }
+ 
+ void ath12k_bss_disassoc(struct ath12k *ar,
+@@ -5561,18 +5600,23 @@ static void ath12k_mac_op_vif_cfg_change
+ 
+ 	mutex_lock(&ah->conf_mutex);
+ 	if (changed & BSS_CHANGED_ASSOC) {
+-		for_each_ahvif_mld_link_protected(ahvif, ah, arvif, link_id) {
++		for_each_ahvif_link_protected(ahvif, ah, arvif, link_id) {
+ 			if (!arvif->is_started)
+ 				continue;
+ 
+-			link_conf = vif->link_conf[link_id];
+-			ar = arvif->ar;
+-			if (vif->cfg.assoc) {
+-				if (link_conf)
+-					ath12k_bss_assoc(ar, arvif, link_conf);
++			if (ath12k_mac_is_bridge_vdev(arvif)) {
++				if (ath12k_hw_group_recovery_in_progress(ah->ag))
++					continue;
++				link_conf = NULL;
+ 			} else {
+-				ath12k_bss_disassoc(ar, arvif, false);
++				link_conf = vif->link_conf[link_id];
+ 			}
++
++			ar = arvif->ar;
++			if (vif->cfg.assoc)
++				ath12k_bss_assoc(ar, arvif, link_conf);
++			else
++				ath12k_bss_disassoc(ar, arvif, false);
+ 		}
+ 	}
+ 	mutex_unlock(&ah->conf_mutex);
+@@ -8077,6 +8121,12 @@ static int ath12k_mac_station_add(struct
+ 	peer_param.peer_addr = arsta->addr;
+ 	if (arsta->is_bridge_peer) {
+ 		peer_param.peer_type = WMI_PEER_TYPE_MLO_BRIDGE;
++
++		/* For STA mode bridge peer, FW requirement is to set
++		 * peer type as Default (0) during peer create.
++		 */
++		if (ahvif && ahvif->vdev_type == WMI_VDEV_TYPE_STA)
++			peer_param.peer_type = WMI_PEER_TYPE_DEFAULT;
+ 		peer_param.mlo_bridge_peer = true;
+ 	} else {
+ 		peer_param.peer_type = WMI_PEER_TYPE_DEFAULT;
+@@ -9150,10 +9200,11 @@ int ath12k_mac_update_sta_state(struct i
+ 		ahsta->primary_link_id = link_id;
+ 	}
+ 
++	links = ahsta->links_map;
+ 	if (new_state == IEEE80211_STA_NOTEXIST && old_state == IEEE80211_STA_NONE) {
+ 		if (ahvif->vdev_type == WMI_VDEV_TYPE_STA) {
+-			for_each_set_bit(link_id, &sta->valid_links,
+-					 IEEE80211_MLD_MAX_NUM_LINKS) {
++			for_each_set_bit(link_id, &links,
++					 ATH12K_NUM_MAX_LINKS) {
+ 				arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
+ 				ath12k_vdev_stop_notify(arvif);
+ 			}
+@@ -9191,7 +9242,7 @@ int ath12k_mac_update_sta_state(struct i
+ 
+ 	}
+ 
+-	if (ahvif->vdev_type == WMI_VDEV_TYPE_AP &&
++	if ((ahvif->vdev_type == WMI_VDEV_TYPE_AP || ahvif->vdev_type == WMI_VDEV_TYPE_STA) &&
+ 	    (old_state == IEEE80211_STA_AUTH && new_state == IEEE80211_STA_ASSOC) &&
+ 	    ath12k_mac_is_bridge_required(ahsta->device_bitmap, num_devices,
+ 					  &bridge_bitmap)) {

@@ -1,0 +1,59 @@
+From 563b9c804345767a7db510d369be5c5c4282422c Mon Sep 17 00:00:00 2001
+From: Adwait Nayak <quic_adwaitn@quicinc.com>
+Date: Mon, 18 Nov 2024 09:55:15 +0530
+Subject: [PATCH] QSDK:CP: WIFI: Fetch mgmt_stats from proper resource
+
+In some corner cases, vif is unavailable during tx
+completion; whereas vif is needed to update the mgmt
+stats (struct ath12k_mgmt_frame_stats).
+
+With recent approach of populating mgmt stats using
+vif, crash is observed because of unavailability of
+NULL check for vif before usage.
+
+Aggregation of the tx mgmt stats is taken place at
+ath12k_mac_mgmt_tx_wmi(), and mgmt stats
+(struct ath12k_mgmt_frame_stats) can also be fetched
+using ath12_link_vif instead of vif.
+A sanity check for a valid ath12k_link_vif is already
+present at the caller of ath12k_mac_mgmt_tx_wmi(),
+
+Hence, the fix!
+
+Fix:
+Fetch ath12k_mgmt_frame_stats from ath12k_link_vif
+instead of vif.
+
+Signed-off-by: Adwait Nayak <quic_adwaitn@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 7 +------
+ 1 file changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 7f38823..6d77ade 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -10635,11 +10635,6 @@ static int ath12k_mac_mgmt_tx_wmi(struct ath12k *ar, struct ath12k_link_vif *arv
+ 	int ret;
+ 	bool link_agnostic;
+ 	bool tx_params_valid = false;
+-	struct ieee80211_vif *vif;
+-	struct ath12k_vif *ahvif;
+-
+-	vif = info->control.vif;
+-	ahvif = ath12k_vif_to_ahvif(vif);
+ 
+ 	spin_lock_bh(&ar->txmgmt_idr_lock);
+ 	buf_id = idr_alloc(&ar->txmgmt_idr, skb, 0,
+@@ -10683,7 +10678,7 @@ static int ath12k_mac_mgmt_tx_wmi(struct ath12k *ar, struct ath12k_link_vif *arv
+ 
+ 	skb_cb->paddr = paddr;
+ 
+-	stats = &ahvif->mgmt_stats;
++	stats = &arvif->ahvif->mgmt_stats;
+ 	spin_lock_bh(&ar->txmgmt_idr_lock);
+ 	stats->aggr_tx_mgmt_cnt++;
+ 	spin_unlock_bh(&ar->txmgmt_idr_lock);
+-- 
+2.34.1
+

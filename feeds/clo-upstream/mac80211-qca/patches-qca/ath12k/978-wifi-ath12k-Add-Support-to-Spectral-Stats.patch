@@ -1,0 +1,422 @@
+From 8f66549f676f8c3ac25f19bc2d53a19afef57a0b Mon Sep 17 00:00:00 2001
+From: Roopni Devanathan <quic_rdevanat@quicinc.com>
+Date: Thu, 10 Oct 2024 10:11:19 +0530
+Subject: [PATCH] UPSTREAM: CP: wifi: ath12k: Add HTT Stats Support to get Spectral related stats
+
+Add HTT stats support to get spectral stats for RF sensing. These stats
+are requested from firmware via HTT messages. HTT stats type 70, 71 and
+72 are added to collect stats from the frimware. HTT stats type 70 gives
+information about pdev spectral parameters like pdev host rings, IPC
+rings, shadow rings and vdev counters. HTT stats type 71 gives information
+about pdev RTT delay such as base and final delay and other information
+such as channel frequency and bandwidth. HTT stats type 72 gives
+information such as gain and phase calulations with Angle of Arrival(AoA).
+
+Sample Output:
+root@OpenWrt:~# echo 70 > /sys/kernel/debug/ath12k/ipq5332\ hw1.0_c000000.wifi/m
+ac0/htt_stats_type
+root@OpenWrt:~# cat /sys/kernel/debug/ath12k/ipq5332\ hw1.0_c000000.wifi/mac0/ht
+t_stats
+HTT_STATS_PDEV_RTT_DELAY_TLV:
+RTT_delay_0
+base_delay_0 = 0
+final_delay0 = 0
+base_delay_1 = 0
+final_delay1 = 0
+.....
+
+RTT_delay_1
+base_delay_0 = 0
+final_delay0 = 0
+base_delay_1 = 0
+final_delay1 = 0
+.....
+
+root@OpenWrt:~# echo 71 > /sys/kernel/debug/ath12k/ipq5332\ hw1.0_c000000.wifi/m
+ac0/htt_stats_type
+root@OpenWrt:~# cat /sys/kernel/debug/ath12k/ipq5332\ hw1.0_c000000.wifi/mac0/ht
+t_stats
+HTT_STATS_PDEV_SPECTRAL_TLV:
+dbg_num_buf = 0
+dbg_num_events = 0
+host_head_idx = 510
+host_tail_idx = 0
+host_shadow_tail_idx = 290
+.....
+
+root@OpenWrt:~# echo 72 > /sys/kernel/debug/ath12k/ipq5332\ hw1.0_c000000.wifi/m
+ac0/htt_stats_type
+root@OpenWrt:~# cat /sys/kernel/debug/ath12k/ipq5332\ hw1.0_c000000.wifi/mac0/ht
+t_stats
+HTT_STATS_PDEV_AOA_TLV:
+gain_idx[0] = 0
+gain_table[0] = 0
+phase_calculated[0] = 0
+phase_in_degree[0] = 0
+
+gain_idx[1] = 0
+gain_table[1] = 0
+phase_calculated[1] = 0
+phase_in_degree[1] = 0
+.....
+
+Patch-dependency: 9dffdfaeedd2 [879-c-wifi-ath12k-Enhance-the-htt-stats.patch]
+
+Signed-off-by: Roopni Devanathan <quic_rdevanat@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/debugfs.h     |   3 +
+ .../wireless/ath/ath12k/debugfs_htt_stats.c   | 161 ++++++++++++++++++
+ .../wireless/ath/ath12k/debugfs_htt_stats.h   |  91 ++++++++++
+ 3 files changed, 255 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/debugfs.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs.h
+@@ -92,6 +92,9 @@ enum ath12k_dbg_htt_ext_stats_type {
+ 	ATH12K_DBG_HTT_PDEV_MLO_IPC_STATS		    =  64,
+ 	ATH12K_DBG_HTT_EXT_PDEV_RTT_RESP_STATS		    =  65,
+ 	ATH12K_DBG_HTT_EXT_PDEV_RTT_INITIATOR_STATS	    =  66,
++	ATH12K_DBG_HTT_EXT_STATS_PDEV_RTT_DELAY		    =  70,
++	ATH12K_DBG_HTT_EXT_STATS_PDEV_SPECTRAL		    =  71,
++	ATH12K_DBG_HTT_EXT_STATS_PDEV_AOA		    =  72,
+ 
+ 	/* keep this last */
+ 	ATH12K_DBG_HTT_NUM_EXT_STATS,
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
+@@ -10112,6 +10112,209 @@ static void htt_print_pdev_rtt_tbr_cmd_r
+ 	stats_req->buf_len = len;
+ }
+ 
++static void htt_print_pdev_spectral_tlv(const void *tag_buf, u16 tag_len,
++					struct debug_htt_stats_req *stats_req)
++{
++	const struct htt_stats_pdev_spectral_tlv *htt_stats_buf = tag_buf;
++	u32 buf_len = ATH12K_HTT_STATS_BUF_SIZE, len = stats_req->buf_len;
++	u8 *buf = stats_req->buf, i;
++
++	if (tag_len < sizeof(*htt_stats_buf))
++		return;
++
++	len += scnprintf(buf + len, buf_len - len, "HTT_STATS_PDEV_SPECTRAL_TLV:\n");
++	len += scnprintf(buf + len, buf_len - len, "dbg_num_buf = %u\n",
++			 le32_to_cpu(htt_stats_buf->dbg_num_buf));
++	len += scnprintf(buf + len, buf_len - len, "dbg_num_events = %u\n",
++			 le32_to_cpu(htt_stats_buf->dbg_num_events));
++	len += scnprintf(buf + len, buf_len - len, "host_head_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->host_head_idx));
++	len += scnprintf(buf + len, buf_len - len, "host_tail_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->host_tail_idx));
++	len += scnprintf(buf + len, buf_len - len, "host_shadow_tail_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->host_shadow_tail_idx));
++	len += scnprintf(buf + len, buf_len - len, "in_ring_head_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->in_ring_head_idx));
++	len += scnprintf(buf + len, buf_len - len, "in_ring_tail_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->in_ring_tail_idx));
++	len += scnprintf(buf + len, buf_len - len, "in_ring_shadow_head_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->in_ring_shadow_head_idx));
++	len += scnprintf(buf + len, buf_len - len, "in_ring_shadow_tail_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->in_ring_shadow_tail_idx));
++	len += scnprintf(buf + len, buf_len - len, "out_ring_head_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->out_ring_head_idx));
++	len += scnprintf(buf + len, buf_len - len, "out_ring_tail_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->out_ring_tail_idx));
++	len += scnprintf(buf + len, buf_len - len, "out_ring_shadow_head_idx = %u\n",
++			 le32_to_cpu(htt_stats_buf->out_ring_shadow_head_idx));
++	len += scnprintf(buf + len, buf_len - len, "out_ring_shadow_tail_idx = %u\n\n",
++			 le32_to_cpu(htt_stats_buf->out_ring_shadow_tail_idx));
++
++	for(i = 0; i < HTT_STATS_SPECTRAL_MAX_PCSS_RING_FOR_IPC; i++) {
++		len += scnprintf(buf + len, buf_len - len, "ipc_rings_head_idx_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->ipc_rings[i].head_idx));
++		len += scnprintf(buf + len, buf_len - len, "ipc_rings_tail_idx_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->ipc_rings[i].tail_idx));
++		len += scnprintf(buf + len, buf_len - len,
++				 "ipc_rings_shadow_head_idx_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->ipc_rings[i].shadow_head_idx));
++		len += scnprintf(buf + len, buf_len - len,
++				 "ipc_rings_shadow_tail_idx_%d = %u\n\n",
++				 i, le32_to_cpu(htt_stats_buf->ipc_rings[i].shadow_tail_idx));
++	}
++
++	for (i = 0; i < HTT_STATS_SPECTRAL_PCFG_MAX_DET; i++) {
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_priority_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_priority));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_count_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_count));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_period_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_period));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_chn_mask_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_chn_mask));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_ena_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_ena));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_update_mask_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_update_mask));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_ready_intrpt_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_ready_intrpt));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scans_performed_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scans_performed));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_intrpts_sent_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].intrpts_sent));
++		len += scnprintf(buf +len, buf_len - len,
++				 "pcfg_stats_scan_pending_count_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].scan_pending_count));
++		len += scnprintf(buf +len, buf_len - len,
++				 "num_pcss_elem_zero_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].num_pcss_elem_zero));
++		len += scnprintf(buf +len, buf_len - len,
++				 "num_in_elem_zero_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].num_in_elem_zero));
++		len += scnprintf(buf +len, buf_len - len,
++				 "num_out_elem_zero_%d = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].num_out_elem_zero));
++		len += scnprintf(buf +len, buf_len - len,
++				 "num_elem_moved_%d = %u\n\n",
++				 i, le32_to_cpu(htt_stats_buf->pcfg_stats_det[i].num_elem_moved));
++	}
++
++	len += scnprintf(buf +len, buf_len - len,
++			 "pcfg_stats_scan_no_ipc_buf_avail = %u\n",
++			 le32_to_cpu(htt_stats_buf->pcfg_stats_vreg.scan_no_ipc_buf_avail));
++	len += scnprintf(buf +len, buf_len - len,
++			 "pcfg_stats_agile_scan_no_ipc_buf_avail = %u\n",
++			 le32_to_cpu(htt_stats_buf->pcfg_stats_vreg.agile_scan_no_ipc_buf_avail));
++	len += scnprintf(buf +len, buf_len - len,
++			 "pcfg_stats_scan_FFT_discard_count = %u\n",
++			 le32_to_cpu(htt_stats_buf->pcfg_stats_vreg.scan_FFT_discard_count));
++	len += scnprintf(buf +len, buf_len - len,
++			 "pcfg_stats_scan_recapture_FFT_discard_count = %u\n",
++			 le32_to_cpu(htt_stats_buf->pcfg_stats_vreg.scan_recapture_FFT_discard_count));
++	len += scnprintf(buf +len, buf_len - len,
++			 "pcfg_stats_scan_recapture_count = %u\n\n",
++			 le32_to_cpu(htt_stats_buf->pcfg_stats_vreg.scan_recapture_count));
++
++	stats_req->buf_len = len;
++}
++
++static void htt_print_pdev_rtt_delay_tlv(const void *tag_buf, u16 tag_len,
++					 struct debug_htt_stats_req *stats_req)
++{
++	const struct htt_stats_pdev_rtt_delay_tlv *htt_stats_buf = tag_buf;
++	u32 buf_len = ATH12K_HTT_STATS_BUF_SIZE, len = stats_req->buf_len;
++	char *str_buf[HTT_STATS_RTT_TX_RX_INSTANCES] = {"Tx", "Rx"};
++	u8 *buf = stats_req->buf, i, j, k;
++
++	if (tag_len < sizeof(*htt_stats_buf))
++		return;
++
++	len += scnprintf(buf + len, buf_len - len, "HTT_STATS_PDEV_RTT_DELAY_TLV:\n");
++	for(i = 0; i < HTT_STATS_RTT_DELAY_NUM_INSTANCES; i++) {
++		len += scnprintf(buf + len, buf_len - len, "RTT_delay_%d :\n", i);
++		for (j = 0; j < HTT_STATS_RTT_TX_RX_INSTANCES; j++) {
++			for (k = 0; k < HTT_STATS_RTT_DELAY_PKT_BW; k++) {
++				len += scnprintf(buf + len, buf_len - len,
++						 "%s_base_delay_%d = %d\n",
++						 str_buf[j], k,
++						 a_sle32_to_cpu(htt_stats_buf->rtt_delay[i].base_delay[j][k]));
++				len += scnprintf(buf + len, buf_len - len,
++						 "%s_final_delay_%d = %d\n",
++						 str_buf[j], k,
++						 a_sle32_to_cpu(htt_stats_buf->rtt_delay[i].final_delay[j][k]));
++			}
++			len += scnprintf(buf + len, buf_len - len,
++					 "per_chan_bias_%s = %d\n", str_buf[j],
++					 a_sle32_to_cpu(htt_stats_buf->rtt_delay[i].per_chan_bias[j]));
++			len += scnprintf(buf + len, buf_len - len,
++					 "off_chan_bias_%s = %d\n", str_buf[j],
++					 a_sle32_to_cpu(htt_stats_buf->rtt_delay[i].off_chan_bias[j]));
++			len += scnprintf(buf + len, buf_len - len,
++					 "chan_bw_bias_%s = %d\n", str_buf[j],
++					 a_sle32_to_cpu(htt_stats_buf->rtt_delay[i].chan_bw_bias[j]));
++			len += scnprintf(buf + len, buf_len - len,
++					 "rtt_11mc_chain_idx_%s = %u\n", str_buf[j],
++					 le32_to_cpu(htt_stats_buf->rtt_delay[i].rtt_11mc_chain_idx[j]));
++		}
++		len += scnprintf(buf + len, buf_len - len, "chan_freq = %u\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].chan_freq));
++		len += scnprintf(buf + len, buf_len - len, "digital_block_status = %u\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].digital_block_status));
++		len += scnprintf(buf + len, buf_len - len, "vreg_cache  = %u\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].vreg_cache));
++		len += scnprintf(buf + len, buf_len - len, "rtt_11mc_vreg_set_cnt = %u\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].rtt_11mc_vreg_set_cnt));
++		len += scnprintf(buf + len, buf_len - len, "cfr_vreg_set_cnt = %u\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].cfr_vreg_set_cnt));
++		len += scnprintf(buf + len, buf_len - len, "cir_vreg_set_cnt = %u\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].cir_vreg_set_cnt));
++		len += scnprintf(buf + len, buf_len - len, "bandwidth = %u\n\n",
++				 le32_to_cpu(htt_stats_buf->rtt_delay[i].bandwidth));
++	}
++
++	stats_req->buf_len = len;
++}
++
++static void htt_print_pdev_aoa_tlv(const void *tag_buf, u16 tag_len,
++				   struct debug_htt_stats_req *stats_req)
++{
++	const struct htt_stats_pdev_aoa_tlv *htt_stats_buf = tag_buf;
++	u32 buf_len = ATH12K_HTT_STATS_BUF_SIZE, len = stats_req->buf_len;
++	u8 *buf = stats_req->buf, i, j;
++
++	if (tag_len < sizeof(*htt_stats_buf))
++		return;
++
++	len += scnprintf(buf + len, buf_len - len, "HTT_STATS_PDEV_AOA_TLV:\n");
++	for(i = 0; i < HTT_STATS_PDEV_AOA_MAX_HIST; i++) {
++		len += scnprintf(buf + len, buf_len - len, "gain_idx[%d] = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->gain_idx[i]));
++		len += scnprintf(buf + len, buf_len - len, "gain_table[%d] = %u\n",
++				 i, le32_to_cpu(htt_stats_buf->gain_table[i]));
++
++		for (j = 0; j < HTT_STATS_PDEV_AOA_MAX_CHAINS; j++) {
++			len += scnprintf(buf + len, buf_len - len,
++					 "phase_calculated[ch%d] = %u\n", i,
++					 le32_to_cpu(htt_stats_buf->phase_calculated[i][j]));
++			len += scnprintf(buf + len, buf_len - len,
++					 "phase_in_degree[ch%d] = %d\n", i,
++					 a_sle32_to_cpu(htt_stats_buf->phase_in_degree[i][j]));
++		}
++		len += scnprintf(buf + len, buf_len - len, "\n");
++	}
++
++	stats_req->buf_len = len;
++}
++
+ static int ath12k_dbg_htt_ext_stats_parse(struct ath12k_base *ab,
+ 					  u16 tag, u16 len, const void *tag_buf,
+ 					  void *user_data)
+@@ -10781,6 +10984,15 @@ static int ath12k_dbg_htt_ext_stats_pars
+ 	case HTT_STATS_PDEV_RTT_TBR_CMD_RESULT_STATS_TAG:
+ 		htt_print_pdev_rtt_tbr_cmd_result_stats_tlv(tag_buf, stats_req);
+ 		break;
++	case HTT_STATS_PDEV_SPECTRAL_TAG:
++		htt_print_pdev_spectral_tlv(tag_buf, len, stats_req);
++		break;
++	case HTT_STATS_PDEV_RTT_DELAY_TAG:
++		htt_print_pdev_rtt_delay_tlv(tag_buf, len, stats_req);
++		break;
++	case HTT_STATS_PDEV_AOA_TAG:
++		htt_print_pdev_aoa_tlv(tag_buf, len, stats_req);
++		break;
+ 	default:
+ 		break;
+ 	}
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
+@@ -222,6 +222,9 @@ enum htt_tlv_tag_t {
+ 	HTT_STATS_PDEV_RTT_HW_STATS_TAG			    = 196,
+ 	HTT_STATS_PDEV_RTT_TBR_SELFGEN_QUEUED_STATS_TAG	    = 197,
+ 	HTT_STATS_PDEV_RTT_TBR_CMD_RESULT_STATS_TAG	    = 198,
++	HTT_STATS_PDEV_SPECTRAL_TAG			    = 204,
++	HTT_STATS_PDEV_RTT_DELAY_TAG			    = 205,
++	HTT_STATS_PDEV_AOA_TAG				    = 206,
+ 
+ 	HTT_STATS_MAX_TAG,
+ };
+@@ -4989,4 +4992,98 @@ struct htt_pdev_rtt_init_stats_t {
+ 	struct htt_stats_pdev_rtt_hw_stats_tlv pdev_rtt_hw_stats;
+ };
+ 
++#define HTT_STATS_SPECTRAL_MAX_PCSS_RING_FOR_IPC        3
++#define HTT_STATS_SPECTRAL_PCFG_MAX_DET         3
++
++struct htt_pdev_ipc_rings_t {
++	__le32 head_idx;
++	__le32 tail_idx;
++	__le32 shadow_tail_idx;
++	__le32 shadow_head_idx;
++};
++
++struct htt_pdev_pcfg_stats_det_t {
++	__le32 scan_priority;
++	__le32 scan_count;
++	__le32 scan_period;
++	__le32 scan_chn_mask;
++	__le32 scan_ena;
++	__le32 scan_update_mask;
++	__le32 scan_ready_intrpt;
++	__le32 scans_performed;
++	__le32 intrpts_sent;
++	__le32 scan_pending_count;
++	__le32 num_pcss_elem_zero;
++	__le32 num_in_elem_zero;
++	__le32 num_out_elem_zero;
++	__le32 num_elem_moved;
++};
++
++struct htt_pdev_pcfg_stats_vreg_t {
++	__le32 scan_no_ipc_buf_avail;
++	__le32 agile_scan_no_ipc_buf_avail;
++	__le32 scan_FFT_discard_count;
++	__le32 scan_recapture_FFT_discard_count;
++	__le32 scan_recapture_count;
++};
++
++struct htt_stats_pdev_spectral_tlv {
++	__le32 dbg_num_buf;
++	__le32 dbg_num_events;
++
++        /* HOST_ring_HI */
++	__le32 host_head_idx;
++	__le32 host_tail_idx;
++	__le32 host_shadow_tail_idx;
++
++        /* SHADOW_ring_HI */
++	__le32 in_ring_head_idx;
++	__le32 in_ring_tail_idx;
++	__le32 in_ring_shadow_tail_idx;
++	__le32 in_ring_shadow_head_idx;;
++
++        /* OUT_ring_HI */
++	__le32 out_ring_head_idx;
++	__le32 out_ring_tail_idx;
++	__le32 out_ring_shadow_tail_idx;
++	__le32 out_ring_shadow_head_idx;
++
++	struct htt_pdev_ipc_rings_t ipc_rings[HTT_STATS_SPECTRAL_MAX_PCSS_RING_FOR_IPC];
++	struct htt_pdev_pcfg_stats_det_t pcfg_stats_det[HTT_STATS_SPECTRAL_PCFG_MAX_DET];
++	struct htt_pdev_pcfg_stats_vreg_t pcfg_stats_vreg;
++};
++
++#define HTT_STATS_RTT_DELAY_PKT_BW              6
++#define HTT_STATS_RTT_TX_RX_INSTANCES           2
++#define HTT_STATS_RTT_DELAY_NUM_INSTANCES       2
++
++struct htt_stats_rtt_delay_t {
++	s32 base_delay[HTT_STATS_RTT_TX_RX_INSTANCES][HTT_STATS_RTT_DELAY_PKT_BW];
++	s32 final_delay[HTT_STATS_RTT_TX_RX_INSTANCES][HTT_STATS_RTT_DELAY_PKT_BW];
++	s32 per_chan_bias[HTT_STATS_RTT_TX_RX_INSTANCES];
++	s32 off_chan_bias[HTT_STATS_RTT_TX_RX_INSTANCES];
++	s32 chan_bw_bias[HTT_STATS_RTT_TX_RX_INSTANCES];
++	__le32 rtt_11mc_chain_idx[HTT_STATS_RTT_TX_RX_INSTANCES];
++	__le32 chan_freq;
++	__le32 bandwidth;
++	__le32 vreg_cache;
++	__le32 rtt_11mc_vreg_set_cnt;
++	__le32 cfr_vreg_set_cnt;
++	__le32 cir_vreg_set_cnt;
++	__le32 digital_block_status;
++};
++
++struct htt_stats_pdev_rtt_delay_tlv {
++	struct htt_stats_rtt_delay_t rtt_delay[HTT_STATS_RTT_DELAY_NUM_INSTANCES];
++};
++
++#define HTT_STATS_PDEV_AOA_MAX_HIST     10
++#define HTT_STATS_PDEV_AOA_MAX_CHAINS   4
++struct htt_stats_pdev_aoa_tlv {
++	__le32 gain_idx[HTT_STATS_PDEV_AOA_MAX_HIST];
++	__le32 gain_table[HTT_STATS_PDEV_AOA_MAX_HIST];
++	__le32 phase_calculated[HTT_STATS_PDEV_AOA_MAX_HIST][HTT_STATS_PDEV_AOA_MAX_CHAINS];
++	s32 phase_in_degree[HTT_STATS_PDEV_AOA_MAX_HIST][HTT_STATS_PDEV_AOA_MAX_CHAINS];
++};
++
+ #endif

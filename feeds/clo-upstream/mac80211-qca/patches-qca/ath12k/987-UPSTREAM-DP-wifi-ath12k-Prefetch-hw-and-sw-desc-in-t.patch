@@ -1,0 +1,145 @@
+From 6ec19fab6d344d9679305e3df511b6d51d5fd353 Mon Sep 17 00:00:00 2001
+From: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+Date: Thu, 14 Nov 2024 12:28:05 +0530
+Subject: [PATCH] UPSTREAM:DP:wifi:ath12k: Prefetch hw and sw desc in tx
+ completion handler
+
+Prefetch n+3 and consective hw and sw desc in tx completion
+handler to improve CPU optimization
+
+This change gives 50-70mbps KPI improvement in DL traffic
+
+Patch Dependency: None
+
+Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 62 +++++++++++++++++++++++--
+ drivers/net/wireless/ath/ath12k/hal.c   |  8 +---
+ 2 files changed, 58 insertions(+), 12 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -1596,6 +1596,33 @@ static inline void ath12k_dp_tx_decremen
+ 	}
+ }
+ 
++struct hal_wbm_completion_ring_tx *
++ath12k_hal_srng_dst_prefetch_tx_status(struct hal_srng *srng)
++{
++	u32 *desc, tp, entry_size;
++
++	lockdep_assert_held(&srng->lock);
++	tp = srng->u.dst_ring.tp;
++	entry_size = srng->entry_size;
++
++	if (tp == srng->u.dst_ring.cached_hp)
++		return NULL;
++	desc = srng->ring_base_vaddr + tp;
++
++	/* check if the descriptor address is 64byte aligned address */
++	if (!IS_ALIGNED((unsigned long)desc, 64))
++		tp += entry_size;
++	else
++		tp += (entry_size * 2);
++
++	if (tp == srng->ring_size)
++		tp = 0;
++
++	desc = srng->ring_base_vaddr + tp;
++	prefetch(desc);
++	return (struct hal_wbm_completion_ring_tx *)(desc + entry_size);
++}
++
+ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 				    int budget)
+ {
+@@ -1605,7 +1632,7 @@ int ath12k_dp_tx_completion_handler(stru
+ 	int hal_ring_id = tx_ring->tcl_comp_ring.ring_id;
+ 	int data_ring_id = tx_ring->tcl_data_ring_id;
+ 	struct hal_srng *status_ring = &ab->hal.srng_list[hal_ring_id];
+-	struct ath12k_tx_desc_info *tx_desc = NULL;
++	struct ath12k_tx_desc_info *tx_desc, *last_pf_sw_desc = NULL;
+ 	struct list_head desc_free_list, *cur;
+ 	struct sk_buff *msdu;
+ 	u8 mac_id;
+@@ -1614,10 +1641,10 @@ int ath12k_dp_tx_completion_handler(stru
+ 	struct ath12k_skb_cb *skb_cb;
+ #endif
+ 	u64 desc_va;
+-	u32 desc_id;
++	u32 desc_id, tp;
+ 	int valid_entries;
+ 	int orig_budget = budget;
+-	struct hal_wbm_completion_ring_tx *tx_status;
++	struct hal_wbm_completion_ring_tx *tx_status, *last_pf_hw_desc;
+ 	enum hal_wbm_rel_src_module buf_rel_source;
+ 	struct sk_buff_head free_list_head;
+ 	int dp_tx_dec_count[MAX_RADIOS] = {0};
+@@ -1641,6 +1668,7 @@ int ath12k_dp_tx_completion_handler(stru
+ 
+ 	ath12k_hal_srng_dst_invalidate_entry(ab, status_ring, valid_entries);
+ 	skb_queue_head_init(&free_list_head);
++	last_pf_hw_desc = ath12k_hal_srng_dst_prefetch_tx_status(status_ring);
+ 
+ 	while (budget && (tx_status = (struct hal_wbm_completion_ring_tx *)ath12k_hal_srng_dst_get_next_cache_entry(ab, status_ring))) {
+ 		budget--;
+@@ -1692,8 +1720,33 @@ int ath12k_dp_tx_completion_handler(stru
+ 			continue;
+ 		}
+ 
+-		prefetch(msdu);
+-		prefetch( (u8 *) msdu + 64);
++
++		if (last_pf_sw_desc) {
++			prefetch((u8 *)(last_pf_sw_desc->skb) + offsetof(struct sk_buff, headers));
++		}
++
++		if (valid_entries && last_pf_hw_desc) {
++			desc_va = ((u64)last_pf_hw_desc->buf_va_hi << 32 |
++					last_pf_hw_desc->buf_va_lo);
++			prefetch((void *)(uintptr_t)desc_va);
++			last_pf_sw_desc = (struct ath12k_tx_desc_info *)((unsigned long)desc_va);
++
++			if (status_ring->u.dst_ring.tp == status_ring->u.dst_ring.cached_hp) {
++				last_pf_hw_desc = NULL;
++			} else {
++				tp = status_ring->u.dst_ring.tp + (status_ring->entry_size * 2);
++
++				if (tp == status_ring->ring_size)
++					tp = 0;
++
++				if (tp != status_ring->u.dst_ring.cached_hp)
++					last_pf_hw_desc = (struct hal_wbm_completion_ring_tx *)
++								(status_ring->ring_base_vaddr + tp);
++
++				if (!IS_ALIGNED((unsigned long)last_pf_hw_desc, 64))
++					prefetch(last_pf_hw_desc);
++			}
++		}
+ 
+ 		if (unlikely(buf_rel_source == HAL_WBM_REL_SRC_MODULE_FW)) {
+ 			ath12k_dp_tx_process_htt_tx_complete(ab, msdu,
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -1900,7 +1900,7 @@ ath12k_hal_srng_dst_prefetch_reo_desc(st
+ u32 *ath12k_hal_srng_dst_get_next_cache_entry(struct ath12k_base *ab,
+                                               struct hal_srng *srng)
+ {
+-	u32 *desc, *desc_next;
++	u32 *desc;
+ 	lockdep_assert_held(&srng->lock);
+ 
+ 	if (srng->u.dst_ring.tp == srng->u.dst_ring.cached_hp)
+@@ -1914,12 +1914,6 @@ u32 *ath12k_hal_srng_dst_get_next_cache_
+ 	if (srng->u.dst_ring.tp == srng->ring_size)
+ 		srng->u.dst_ring.tp = 0;
+ 
+-	/* Try to prefetch the next descriptor in the ring */
+-	if (srng->u.dst_ring.tp != srng->u.dst_ring.cached_hp) {
+-		/* prefetch only if desc is available */
+-		desc_next = srng->ring_base_vaddr + srng->u.dst_ring.tp;
+-		prefetch(desc_next);
+-	}
+ 	return desc;
+ }
+ 

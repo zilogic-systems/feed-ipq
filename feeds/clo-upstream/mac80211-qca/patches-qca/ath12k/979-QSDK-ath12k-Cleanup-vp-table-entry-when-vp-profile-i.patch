@@ -1,0 +1,278 @@
+From 3d05fd051c0b40403c89095b3ef926f009d45f6c Mon Sep 17 00:00:00 2001
+From: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
+Date: Wed, 6 Nov 2024 16:25:14 +0530
+Subject: [PATCH] QSDK: ath12k: Cleanup vp table entry when vp profile is
+ cleaned up
+
+Cleanup the vp table entry when the corresponding vp profile
+entry is released after the refcount becomes 0 in all the
+dealloc paths, as the vp table entry is created once per vp
+profile entry. This change is needed for splitphy case.
+
+Patch-dependency: 970-QSDK-ath12k-Reuse-vp-profiles-in-case-of-splitphy.patch
+Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ppe.c | 142 +++++++++++++-------------
+ 1 file changed, 72 insertions(+), 70 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/ppe.c b/drivers/net/wireless/ath/ath12k/ppe.c
+index 9adc914..51b84de 100644
+--- a/drivers/net/wireless/ath/ath12k/ppe.c
++++ b/drivers/net/wireless/ath/ath12k/ppe.c
+@@ -647,11 +647,56 @@ end:
+ 	return i;
+ }
+ 
++static void
++ath12k_dp_ppeds_dealloc_vp_search_idx_tbl_entry(struct ath12k_base *ab,
++                                              int ppe_vp_search_idx)
++{
++	if (ppe_vp_search_idx < 0 || ppe_vp_search_idx >= PPE_VP_ENTRIES_MAX) {
++		ath12k_err(ab,"Invalid PPE VP search table free index");
++		return;
++	}
++
++	ath12k_dbg(ab, ATH12K_DBG_PPE, "dealloc ppe_vp_search_idx %d\n", ppe_vp_search_idx);
++
++	if (!ab->ppe.ppe_vp_search_idx_tbl_set[ppe_vp_search_idx]) {
++		ath12k_err(ab,"PPE VP search idx table is not configured at idx:%d", ppe_vp_search_idx);
++		return;
++	}
++
++	ab->ppe.ppe_vp_search_idx_tbl_set[ppe_vp_search_idx] = 0;
++	ab->ppe.num_ppe_vp_search_idx_entries--;
++
++	return;
++}
++
++static void ath12k_dp_ppeds_dealloc_vp_tbl_entry(struct ath12k_base *ab,
++						 int ppe_vp_num_idx)
++{
++	u32 vp_cfg = 0;
++
++	if (ppe_vp_num_idx < 0 || ppe_vp_num_idx >= PPE_VP_ENTRIES_MAX) {
++		ath12k_err(ab, "Invalid PPE VP free index");
++		return;
++	}
++
++	ath12k_hal_tx_set_ppe_vp_entry(ab, vp_cfg, ppe_vp_num_idx);
++
++	if (!ab->ppe.ppe_vp_tbl_registered[ppe_vp_num_idx]) {
++		ath12k_err(ab, "PPE VP is not configured at idx:%d", ppe_vp_num_idx);
++		return;
++	}
++
++	ab->ppe.ppe_vp_tbl_registered[ppe_vp_num_idx] = 0;
++	ab->ppe.num_ppe_vp_entries--;
++}
++
+ static void
+ ath12k_dp_ppeds_dealloc_ppe_vp_profile(struct ath12k_base *ab,
+-				       int ppe_vp_profile_idx)
++				       int ppe_vp_profile_idx,
++				       enum nl80211_iftype type)
+ {
+ 	bool dealloced = false;
++	struct ath12k_dp_ppe_vp_profile *vp_profile;
+ 
+ 	if (ppe_vp_profile_idx < 0 || ppe_vp_profile_idx >= PPE_VP_ENTRIES_MAX) {
+ 		ath12k_err(ab, "Invalid PPE VP profile free index");
+@@ -659,18 +704,26 @@ ath12k_dp_ppeds_dealloc_ppe_vp_profile(struct ath12k_base *ab,
+ 	}
+ 
+ 	mutex_lock(&ab->ppe.ppe_vp_tbl_lock);
+-	if (!ab->dp.ppe_vp_profile[ppe_vp_profile_idx].is_configured) {
++	vp_profile = &ab->dp.ppe_vp_profile[ppe_vp_profile_idx];
++
++	if (!vp_profile->is_configured) {
+ 		mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
+ 		ath12k_err(ab, "PPE VP profile is not configured at idx:%d", ppe_vp_profile_idx);
+ 		return;
+ 	}
+ 
+-	ab->dp.ppe_vp_profile[ppe_vp_profile_idx].ref_count--;
++	vp_profile->ref_count--;
+ 
+-	if (!ab->dp.ppe_vp_profile[ppe_vp_profile_idx].ref_count) {
+-		ab->dp.ppe_vp_profile[ppe_vp_profile_idx].is_configured = false;
++	if (!vp_profile->ref_count) {
++		vp_profile->is_configured = false;
+ 		ab->ppe.num_ppe_vp_profiles--;
+ 		dealloced = true;
++
++		/* For STA mode ast index table reg also needs to be cleaned */
++		if (type == NL80211_IFTYPE_STATION)
++			ath12k_dp_ppeds_dealloc_vp_search_idx_tbl_entry(ab, vp_profile->search_idx_reg_num);
++
++		ath12k_dp_ppeds_dealloc_vp_tbl_entry(ab, vp_profile->ppe_vp_num_idx);
+ 	}
+ 	mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
+ 
+@@ -707,30 +760,6 @@ static int ath12k_dp_ppeds_alloc_vp_tbl_entry(struct ath12k_base *ab)
+ 	return i;
+ }
+ 
+-static void ath12k_dp_ppeds_dealloc_vp_tbl_entry(struct ath12k_base *ab,
+-						 int ppe_vp_num_idx)
+-{
+-	u32 vp_cfg = 0;
+-
+-	if (ppe_vp_num_idx < 0 || ppe_vp_num_idx >= PPE_VP_ENTRIES_MAX) {
+-		ath12k_err(ab, "Invalid PPE VP free index");
+-		return;
+-	}
+-
+-	ath12k_hal_tx_set_ppe_vp_entry(ab, vp_cfg, ppe_vp_num_idx);
+-
+-	mutex_lock(&ab->ppe.ppe_vp_tbl_lock);
+-	if (!ab->ppe.ppe_vp_tbl_registered[ppe_vp_num_idx]) {
+-		mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
+-		ath12k_err(ab, "PPE VP is not configured at idx:%d", ppe_vp_num_idx);
+-		return;
+-	}
+-
+-	ab->ppe.ppe_vp_tbl_registered[ppe_vp_num_idx] = 0;
+-	ab->ppe.num_ppe_vp_entries--;
+-	mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
+-}
+-
+ static int ath12k_dp_ppeds_alloc_vp_search_idx_tbl_entry(struct ath12k_base *ab)
+ {
+ 	int i;
+@@ -761,31 +790,6 @@ static int ath12k_dp_ppeds_alloc_vp_search_idx_tbl_entry(struct ath12k_base *ab)
+ 	return i;
+ }
+ 
+-static void
+-ath12k_dp_ppeds_dealloc_vp_search_idx_tbl_entry(struct ath12k_base *ab,
+-                                              int ppe_vp_search_idx)
+-{
+-	if (ppe_vp_search_idx < 0 || ppe_vp_search_idx >= PPE_VP_ENTRIES_MAX) {
+-		ath12k_err(ab,"Invalid PPE VP search table free index");
+-		return;
+-	}
+-
+-	ath12k_dbg(ab, ATH12K_DBG_PPE, "dealloc ppe_vp_search_idx %d\n", ppe_vp_search_idx);
+-
+-	mutex_lock(&ab->ppe.ppe_vp_tbl_lock);
+-	if (!ab->ppe.ppe_vp_search_idx_tbl_set[ppe_vp_search_idx]) {
+-		mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
+-		ath12k_err(ab,"PPE VP search idx table is not configured at idx:%d", ppe_vp_search_idx);
+-		return;
+-	}
+-
+-	ab->ppe.ppe_vp_search_idx_tbl_set[ppe_vp_search_idx] = 0;
+-	ab->ppe.num_ppe_vp_search_idx_entries--;
+-	mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
+-
+-	return;
+-}
+-
+ static void ath12k_dp_ppeds_setup_vp_entry(struct ath12k_base *ab,
+ 					   struct ath12k *ar,
+ 					   struct ath12k_link_vif *arvif,
+@@ -879,6 +883,7 @@ static int ath12k_ppeds_attach_link_apvlan_vif(struct ath12k_link_vif *arvif, in
+ 	int ppe_vp_search_tbl_idx = -1;
+ 	int vdev_id = arvif->vdev_id;
+ 	int ret;
++	enum nl80211_iftype vif_type;
+ 
+ 	if (wdev == NULL)
+ 		return -EOPNOTSUPP;
+@@ -917,7 +922,7 @@ static int ath12k_ppeds_attach_link_apvlan_vif(struct ath12k_link_vif *arvif, in
+ 				ath12k_err(ab,
+ 						"Failed to allocate PPE VP search table idx for vdev_id:%d", vdev_id);
+ 				ret = -ENOSR;
+-				goto dealloc_vp_tbl_entry;
++				goto dealloc_vp_profile;
+ 			}
+ 			vp_profile->search_idx_reg_num = ppe_vp_search_tbl_idx;
+ 		}
+@@ -963,10 +968,9 @@ static int ath12k_ppeds_attach_link_apvlan_vif(struct ath12k_link_vif *arvif, in
+ 
+ 	return 0;
+ 
+-dealloc_vp_tbl_entry:
+-	ath12k_dp_ppeds_dealloc_vp_tbl_entry(ab, vp_profile->ppe_vp_num_idx);
+ dealloc_vp_profile:
+-	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx);
++	vif_type = arvif->ahvif->vif->type;
++	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx, vif_type);
+ 
+ 	return ret;
+ }
+@@ -1013,6 +1017,7 @@ int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
+ 	int ppe_vp_search_tbl_idx = -1;
+ 	int vdev_id = arvif->vdev_id;
+ 	int ret;
++	enum nl80211_iftype vif_type;
+ 
+ 	if (wdev == NULL)
+ 		return -EOPNOTSUPP;
+@@ -1057,7 +1062,7 @@ int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
+ 				ath12k_err(ab,
+ 						"Failed to allocate PPE VP search table idx for vdev_id:%d", vdev_id);
+ 				ret = -ENOSR;
+-				goto dealloc_vp_tbl_entry;
++				goto dealloc_vp_profile;
+ 			}
+ 			vp_profile->search_idx_reg_num = ppe_vp_search_tbl_idx;
+ 		}
+@@ -1135,10 +1140,9 @@ int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
+ 
+ 	return 0;
+ 
+-dealloc_vp_tbl_entry:
+-	ath12k_dp_ppeds_dealloc_vp_tbl_entry(ab, vp_profile->ppe_vp_num_idx);
+ dealloc_vp_profile:
+-	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx);
++	vif_type = arvif->ahvif->vif->type;
++	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx, vif_type);
+ 
+ 	return ret;
+ }
+@@ -1181,6 +1185,7 @@ void ath12k_ppeds_detach_link_apvlan_vif(struct ath12k_link_vif *arvif,
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_dp_ppe_vp_profile *vp_profile;
+ 	int ppe_vp_profile_idx = vlan_iface->ppe_vp_profile_idx[link_id];
++	enum nl80211_iftype vif_type;
+ 
+ 	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
+ 		return;
+@@ -1195,8 +1200,8 @@ void ath12k_ppeds_detach_link_apvlan_vif(struct ath12k_link_vif *arvif,
+ 		return;
+ 	}
+ 
+-	ath12k_dp_ppeds_dealloc_vp_tbl_entry(ab, vp_profile->ppe_vp_num_idx);
+-	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx);
++	vif_type = arvif->ahvif->vif->type;
++	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx, vif_type);
+ 	vlan_iface->ppe_vp_profile_idx[link_id] = ATH12K_INVALID_VP_PROFILE_IDX;
+ 	ath12k_dbg(ab, ATH12K_DBG_PPE,
+ 		   "PPEDS vdev detach success vpnum %d  ppe_vp_profile_idx %d\n",
+@@ -1209,6 +1214,7 @@ void ath12k_ppeds_detach_link_vif(struct ath12k_link_vif *arvif, int ppe_vp_prof
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_dp_ppe_vp_profile *vp_profile;
++	enum nl80211_iftype vif_type;
+ 
+ 	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
+ 		return;
+@@ -1223,12 +1229,8 @@ void ath12k_ppeds_detach_link_vif(struct ath12k_link_vif *arvif, int ppe_vp_prof
+ 		return;
+ 	}
+ 
+-	/* For STA mode ast index table reg also needs to be cleaned */
+-	if (arvif->ahvif->vif->type == NL80211_IFTYPE_STATION)
+-		ath12k_dp_ppeds_dealloc_vp_search_idx_tbl_entry(ab, vp_profile->search_idx_reg_num);
+-
+-	ath12k_dp_ppeds_dealloc_vp_tbl_entry(ab, vp_profile->ppe_vp_num_idx);
+-	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx);
++	vif_type = arvif->ahvif->vif->type;
++	ath12k_dp_ppeds_dealloc_ppe_vp_profile(ab, ppe_vp_profile_idx, vif_type);
+ 	ath12k_dbg(ab, ATH12K_DBG_PPE,
+ 		   "PPEDS vdev detach success vpnum %d  ppe_vp_profile_idx %d\n",
+ 		   vp_profile->vp_num, ppe_vp_profile_idx);
+-- 
+2.34.1
+

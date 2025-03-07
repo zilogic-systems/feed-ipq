@@ -1,0 +1,37 @@
+From 411b1994ef13f86bc45d50a54d96ca5578db64c3 Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Tue, 3 Dec 2024 17:56:07 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k:WAR: modify null msdu debug level
+
+In TX completion, few descriptors are received with NULL MSDUs, which is
+flooding the console while running TBTC KPI traffic. This WAR is to
+avoid console prints by replacing the error level with the info level.
+
+patch-dependency:
+985-01-QSDK-DP-wifi-Avoid-CMO-operation-for-IPQ5424.patch
+985-02-QSDK-DP-wifi-Allocate-cachable-memory-for-IPQ5424.patch
+985-03-QSDK-DP-wifi-Avoid-dma-map-unmap-for-IPQ5424.patch
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index 02ce66d..2077eb5 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -1666,8 +1666,8 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 		if (unlikely(!msdu)) {
+ 			ab->soc_stats.null_tx_complete[data_ring_id]++;
+ 
+-			ath12k_err_dump(ab, "Null msdu\n", "Tx compl Desc: ", tx_status,
+-					sizeof(*tx_status), NULL);
++			ath12k_dbg_dump(ab, ATH12K_DBG_DP_TX, NULL, "Null msdu: ",
++					tx_status, sizeof(*tx_status));
+ 
+ 			if (ath12k_debug_critical)
+ 				BUG_ON(1);
+-- 
+2.34.1
+

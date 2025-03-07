@@ -24,7 +24,10 @@ DEFAULT_PACKAGES += \
 	kmod-leds-gpio swconfig ethtool tcpdump taskset \
 	kmod-qca-nss-ppe kmod-qca-nss-ppe-ds kmod-qca-nss-ppe-vp \
 	kmod-qca-nss-ppe-bridge-mgr kmod-qca-nss-ppe-vlan-mgr kmod-qca-ovsmgr \
-	kmod-qca-ssdk-qca-nohnat kmod-qca-nss-dp-qca qca-ssdk-shell
+	kmod-qca-ssdk-qca-nohnat kmod-qca-nss-dp-qca kmod-bonding qca-ssdk-shell \
+	kmod-telemetry-agent kmod-ath12k-qca wpad-qca-mesh-openssl iwinfo \
+	qca-wifi-scripts ath-wifi-scripts wififw_mount_script \
+	hostapd-qca-utils wpa-qca-cli
 
 GENERIC_LINUX_CONFIG = $(PLATFORM_DIR)/generic/config-$(KERNEL_PATCHVER)-platform
 

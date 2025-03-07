@@ -1,0 +1,43 @@
+From f2c3061aae759a0decbdba8ec6bba6f896a86f50 Mon Sep 17 00:00:00 2001
+From: Hari <quic_hag@quicinc.com>
+Date: Thu, 5 Dec 2024 22:54:00 +0530
+Subject: [PATCH] Revert "cfg80211: Don't reset ssid len and nlportid after a
+ link removal."
+
+This reverts commit 3a9b77cf6ba44b7f166989e4b4642c40745d47e1.
+
+Reason for revert: Causing Easymesh regression
+
+Change-Id: I5ebf448c90a0b12f227ea0db67015e1d0321cc67
+---
+ net/wireless/ap.c | 11 ++---------
+ 1 file changed, 2 insertions(+), 9 deletions(-)
+
+diff --git a/net/wireless/ap.c b/net/wireless/ap.c
+index 5acbb4e04cee..3bb56c9106c9 100644
+--- a/net/wireless/ap.c
++++ b/net/wireless/ap.c
+@@ -37,18 +37,11 @@ static int ___cfg80211_stop_ap(struct cfg80211_registered_device *rdev,
+ 
+ 	err = rdev_stop_ap(rdev, dev, link_id, &params);
+ 	if (!err) {
++		wdev->conn_owner_nlportid = 0;
+ 		wdev->links[link_id].ap.beacon_interval = 0;
+ 		memset(&wdev->links[link_id].ap.chandef, 0,
+ 		       sizeof(wdev->links[link_id].ap.chandef));
+-
+-		if (hweight16(wdev->valid_links) <= 1) {
+-			/* Clear this only when there is one or lesser valid
+-			 * link, otherwise consider that some link is present
+-			 */
+-			wdev->conn_owner_nlportid = 0;
+-			wdev->u.ap.ssid_len = 0;
+-		}
+-
++		wdev->u.ap.ssid_len = 0;
+ 		rdev_set_qos_map(rdev, dev, NULL);
+ 		if (notify)
+ 			nl80211_send_ap_stopped(wdev, link_id);
+-- 
+2.34.1
+

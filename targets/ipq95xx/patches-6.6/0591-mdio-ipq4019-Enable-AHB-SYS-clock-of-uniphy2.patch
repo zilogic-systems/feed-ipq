@@ -1,0 +1,52 @@
+From 67873014aed3de4f88fe8c9b623a90960347fb8e Mon Sep 17 00:00:00 2001
+From: Luo Jie <quic_luoj@quicinc.com>
+Date: Wed, 17 Jul 2024 15:00:41 +0800
+Subject: [PATCH] mdio-ipq4019: Enable AHB & SYS clock of uniphy2
+
+MHT switch is connected with uniphy2 of Marina.
+Need to enable uniphy2 clock before initializing MHT.
+
+Change-Id: If0d9b347ce6457994e1522a2a6be48f4c70718c4
+---
+ drivers/net/mdio/mdio-ipq4019.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/mdio/mdio-ipq4019.c b/drivers/net/mdio/mdio-ipq4019.c
+index 28848d665a4d..b77d8ab2fa77 100644
+--- a/drivers/net/mdio/mdio-ipq4019.c
++++ b/drivers/net/mdio/mdio-ipq4019.c
+@@ -100,6 +100,8 @@ enum mdio_clk_id {
+ 	MDIO_CLK_UNIPHY0_SYS,
+ 	MDIO_CLK_UNIPHY1_AHB,
+ 	MDIO_CLK_UNIPHY1_SYS,
++	MDIO_CLK_UNIPHY2_AHB,
++	MDIO_CLK_UNIPHY2_SYS,
+ 	MDIO_CLK_CNT
+ };
+ 
+@@ -117,7 +119,8 @@ struct ipq4019_mdio_data {
+ 
+ const char * const ppe_clk_name[] = {
+ 	"gcc_mdio_ahb_clk", "uniphy0_ahb_clk", "uniphy0_sys_clk",
+-	"uniphy1_ahb_clk", "uniphy1_sys_clk"
++	"uniphy1_ahb_clk", "uniphy1_sys_clk",
++	"uniphy2_ahb_clk", "uniphy2_sys_clk"
+ };
+ 
+ static int ipq4019_mdio_wait_busy(struct mii_bus *bus)
+@@ -817,10 +820,12 @@ static int ipq_mdio_reset(struct mii_bus *bus)
+ 			switch (i) {
+ 			case MDIO_CLK_UNIPHY0_AHB:
+ 			case MDIO_CLK_UNIPHY1_AHB:
++			case MDIO_CLK_UNIPHY2_AHB:
+ 				rate = IPQ_UNIPHY_AHB_CLK_RATE;
+ 				break;
+ 			case MDIO_CLK_UNIPHY0_SYS:
+ 			case MDIO_CLK_UNIPHY1_SYS:
++			case MDIO_CLK_UNIPHY2_SYS:
+ 				rate = IPQ_UNIPHY_SYS_CLK_RATE;
+ 				break;
+ 			default:
+-- 
+2.34.1
+

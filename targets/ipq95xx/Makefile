@@ -18,10 +18,13 @@ DEFAULT_PACKAGES += \
 	e2fsprogs uboot-envtools kmod-leds-gpio kmod-gpio-button-hotplug kmod-button-hotplug \
 	kmod-ata-core kmod-ata-ahci kmod-ata-ahci-platform kmod-usb3 \
 	kmod-usb-phy-ipq807x kmod-usb-dwc3-qcom-internal \
-	kmod-fs-ext4 losetup mkf2fs f2fsck kmod-fs-f2fs kmod-fs-vfat\
+	kmod-fs-ext4 losetup mkf2fs f2fsck kmod-fs-f2fs kmod-fs-vfat \
 	kmod-usb-phy-ipq807x kmod-usb-dwc3-internal kmod-usb-dwc3-qcom-internal \
 	kmod-usb-storage kmod-usb-storage-extras kmod-usb-storage-uas \
-	kmod-leds-gpio swconfig ethtool tcpdump taskset
+	kmod-leds-gpio swconfig ethtool tcpdump taskset \
+	kmod-qca-nss-ppe kmod-qca-nss-ppe-ds kmod-qca-nss-ppe-vp \
+	kmod-qca-nss-ppe-bridge-mgr kmod-qca-nss-ppe-vlan-mgr kmod-qca-ovsmgr \
+	kmod-qca-ssdk-qca-nohnat kmod-qca-nss-dp-qca qca-ssdk-shell
 
 GENERIC_LINUX_CONFIG = $(PLATFORM_DIR)/generic/config-$(KERNEL_PATCHVER)-platform
 

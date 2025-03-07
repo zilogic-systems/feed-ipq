@@ -25,6 +25,11 @@ DEFAULT_PACKAGES += \
 
 GENERIC_LINUX_CONFIG = $(PLATFORM_DIR)/generic/config-$(KERNEL_PATCHVER)-platform
 
+override GENERIC_BACKPORT_DIR :=
+override GENERIC_PATCH_DIR :=
+override GENERIC_HACK_DIR :=
+override GENERIC_FILES_DIR :=
+
 define Kernel/Prepare
 	$(LINUX_CAT) $(DL_DIR)/$(LINUX_SOURCE) | $(TAR) -C $(KERNEL_BUILD_DIR) $(TAR_OPTIONS)
 

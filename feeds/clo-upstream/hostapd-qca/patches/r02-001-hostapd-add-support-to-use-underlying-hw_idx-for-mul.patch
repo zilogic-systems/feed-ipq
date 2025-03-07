@@ -1,0 +1,126 @@
+From ade710c95f8c249b97e87e41b5cebb40c74ee63e Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Tue, 10 Oct 2023 15:24:10 +0530
+Subject: [PATCH 1/2] hostapd: add support to use underlying hw_idx for
+ multi-hardware under single phy mode
+
+During multi-hardware under singly phy scenario, single channel list is
+maintained for a given band which does not clearly tells how many different
+underlying hardwares are being used to form that band. For example - in
+5 GHz split hardware case, two underlying hardwares 5 GHz Low and 5 GHz High
+are being used to enable full 5 GHz band. Now, when channel is selected from
+list of channels, it is possible that a channel can be picked which the
+hardware does not support (lower chanels can be picked for 5 GHz high
+hardware) which is wrong.
+
+However, the kernel does tells us about the underlying hardwares and the
+list of supported frequencies.
+
+Hence, add support to get the advertised hw_idx and the corresponding list
+of supported frequencies and then decide what is the current hw_idx being
+used.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ src/ap/ap_drv_ops.c               |   9 ++
+ src/ap/ap_drv_ops.h               |   3 +
+ src/ap/hostapd.c                  |   7 ++
+ src/ap/hostapd.h                  |   4 +
+ src/ap/hw_features.c              |  77 ++++++++++++++++
+ src/ap/hw_features.h              |  14 +++
+ src/drivers/driver.h              |  31 +++++++
+ src/drivers/driver_nl80211.c      |   1 +
+ src/drivers/driver_nl80211.h      |   2 +
+ src/drivers/driver_nl80211_capa.c | 144 ++++++++++++++++++++++++++++++
+ tests/fuzzing/ap-mgmt/ap-mgmt.c   |   2 +
+ 11 files changed, 294 insertions(+)
+
+--- a/src/drivers/driver_nl80211_capa.c
++++ b/src/drivers/driver_nl80211_capa.c
+@@ -2828,6 +2828,61 @@ struct phy_multi_hw_info_arg {
+ };
+ 
+ 
++static int phy_multi_hw_info_parser_old(struct phy_multi_hw_info_arg *multi_hw_info,
++					struct nlattr *nl_hw_macs)
++{
++	struct nlattr *tb_hw[NL80211_MULTI_HW_MAC_ATTR_MAX + 1];
++	struct nlattr *tb_freq[NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_MAX + 1];
++	struct nlattr *nl_freq_list;
++	struct hostapd_multi_hw_info *multi_hws;
++	int rem_freq_list, start_freq, end_freq;
++	u8 hw_idx, freq_idx = 0, i;
++	u32 freq[256];
++
++	nla_parse(tb_hw, NL80211_MULTI_HW_MAC_ATTR_MAX, nla_data(nl_hw_macs),
++		  nla_len(nl_hw_macs), NULL);
++
++	if (!tb_hw[NL80211_MULTI_HW_MAC_ATTR_IDX] ||
++	    !tb_hw[NL80211_MULTI_HW_MAC_ATTR_CHAN_LIST])
++		return NL_STOP;
++
++	hw_idx = nla_get_u8(tb_hw[NL80211_MULTI_HW_MAC_ATTR_IDX]);
++
++	nla_for_each_nested(nl_freq_list, tb_hw[NL80211_MULTI_HW_MAC_ATTR_CHAN_LIST],
++			    rem_freq_list)
++	{
++		nla_parse(tb_freq, NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_MAX,
++			  nla_data(nl_freq_list), nla_len(nl_freq_list), NULL);
++
++		if (!tb_freq[NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_FREQ])
++			return NL_STOP;
++
++		freq[freq_idx++] =
++			nla_get_u32(tb_freq[NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_FREQ]);
++	}
++
++	multi_hws = os_realloc_array(multi_hw_info->multi_hws,
++				     *multi_hw_info->num_multi_hws + 1,
++				     sizeof(*multi_hws));
++	if (!multi_hws) {
++		multi_hw_info->failed = true;
++		return NL_STOP;
++	}
++
++	multi_hw_info->multi_hws = multi_hws;
++
++	multi_hws = &multi_hw_info->multi_hws[*(multi_hw_info->num_multi_hws)];
++
++	multi_hws->hw_idx = hw_idx;
++	multi_hws->start_freq = freq[0];
++	multi_hws->end_freq = freq[freq_idx - 1];
++
++	*(multi_hw_info->num_multi_hws) += 1;
++
++	return NL_OK;
++}
++
++
+ static int phy_multi_hw_info_handler(struct nl_msg *msg, void *arg)
+ {
+ 	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+@@ -2840,6 +2895,24 @@ static int phy_multi_hw_info_handler(str
+ 	nla_parse(tb_msg, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+ 		  genlmsg_attrlen(gnlh, 0), NULL);
+ 
++	/* Soon this ATTR will be removed from kernel. */
++	if (tb_msg[NL80211_ATTR_MULTI_HW_MACS]) {
++		struct nlattr *nl_hw_macs;
++		int rem_hw_macs;
++
++		*multi_hw_info->num_multi_hws = 0;
++
++		nla_for_each_nested(nl_hw_macs,
++				    tb_msg[NL80211_ATTR_MULTI_HW_MACS],
++				    rem_hw_macs) {
++			res = phy_multi_hw_info_parser_old(multi_hw_info,
++							   nl_hw_macs);
++			if (res != NL_OK)
++				return res;
++		}
++		return NL_OK;
++	}
++
+ 	if (!tb_msg[NL80211_ATTR_WIPHY_RADIOS])
+ 		return NL_SKIP;
+ 

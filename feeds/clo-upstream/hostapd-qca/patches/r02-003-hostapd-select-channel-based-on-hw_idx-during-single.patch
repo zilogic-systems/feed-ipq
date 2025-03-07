@@ -1,0 +1,39 @@
+From 28c244a521342f9debb681e77dbbd1abfda894bd Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Tue, 10 Oct 2023 15:41:13 +0530
+Subject: [PATCH 2/2] hostapd: select channel based on hw_idx during single
+ wiphy operation
+
+Currently, channel is selected from the current hw_mode. However, not
+all channels under current hw_mode might be available for the current
+operating underlying hardware.
+
+Commit "hostapd: add support to use underlying hw_idx for multi-hardware under
+single phy mode" added support to store the possible underlying hardware info
+and set the current operating hardware index.
+
+Add logic to check if the selected channel falls under the current operating
+hardware index and only if it falls then continues with the channel.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ src/ap/interference.c           |  7 +++++++
+ 1 file changed, 7 insertions(+)
+
+
+--- a/src/ap/interference.c
++++ b/src/ap/interference.c
+@@ -242,6 +242,13 @@ static int intf_awgn_find_channel_list(s
+ 	for (i = 0; i < mode->num_channels; i++) {
+ 		chan = &mode->channels[i];
+ 
++		if (!chan_in_current_hw_info(iface->current_hw_info, chan)) {
++			wpa_printf(MSG_DEBUG,
++				   "AWGN: channel %d (%d) is not under current hardware index",
++				   chan->freq, chan->chan);
++			continue;
++		}
++
+ 		/* Skip incompatible chandefs */
+ 		if (!intf_awgn_chan_range_available(mode, i, n_chans)) {
+ 			wpa_printf(MSG_DEBUG,

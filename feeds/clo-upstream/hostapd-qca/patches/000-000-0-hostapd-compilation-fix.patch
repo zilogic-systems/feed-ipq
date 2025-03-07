@@ -1,0 +1,45 @@
+From 8261921da23e77f9df1d8299a5bf77c2c319e309 Mon Sep 17 00:00:00 2001
+From: Pavithra Ganesan <quic_pavigane@quicinc.com>
+Date: Wed, 21 Aug 2024 12:22:21 +0530
+Subject: [PATCH] hostapd: compilation fix
+
+The header file sta_info.h added in ubus.h
+creates a circular dependency and causes
+compilation error.
+
+To fix, move sta_info.h in ucode.c
+
+Signed-off-by: Pavithra Ganesan <quic_pavigane@quicinc.com>
+---
+ src/ap/ubus.h  | 2 --
+ src/ap/ucode.c | 5 ++++-
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/ap/ubus.h b/src/ap/ubus.h
+index f289042..753c4be 100644
+--- a/src/ap/ubus.h
++++ b/src/ap/ubus.h
+@@ -8,8 +8,6 @@
+ #ifndef __HOSTAPD_UBUS_H
+ #define __HOSTAPD_UBUS_H
+ 
+-#include "sta_info.h"
+-
+ enum hostapd_ubus_event_type {
+ 	HOSTAPD_UBUS_PROBE_REQ,
+ 	HOSTAPD_UBUS_AUTH_REQ,
+diff --git a/src/ap/ucode.c b/src/ap/ucode.c
+index a25e56e..00e2b74 100644
+--- a/src/ap/ucode.c
++++ b/src/ap/ucode.c
+@@ -10,6 +10,7 @@
+ #include "dfs.h"
+ #include "acs.h"
+ #include <libubox/uloop.h>
++#include "sta_info.h"
+ 
+ static uc_resource_type_t *global_type, *bss_type, *iface_type;
+ static struct hapd_interfaces *interfaces;
+-- 
+2.34.1
+

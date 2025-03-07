@@ -1,0 +1,40 @@
+From d7807f207e85083471238cf4d843f97d09cd56e8 Mon Sep 17 00:00:00 2001
+From: Jouni Malinen <quic_jouni@quicinc.com>
+Date: Sun, 20 Oct 2024 14:43:28 +0530
+Subject: [PATCH] QSDK:PROTOCOL:HOSTAPD: Omit RSNXE in (Re)Association Response
+ frame like in Beacon frame
+
+When rsn_override_omit_rsnxe=1 is used to omit the RSNXE from Beacon and
+Probe Response frames, it should also be omitted from (Re)Association
+Response frames since there is a general expectation on the RSNXE being
+used consistently between these frames. This is unlikely to have much of
+a difference for most use cases in practice, but this could impact FILS
+association if the non-AP STA were to confirm that the unprotected and
+protected version of the RSNXE from the AP were identical.
+
+Tag: MRSNO
+Patch-work: None
+Patch-dependency: None
+
+Signed-off-by: Jouni Malinen <quic_jouni@quicinc.com>
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/ieee802_11.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/ap/ieee802_11.c b/src/ap/ieee802_11.c
+index 1ff289e..62822a9 100644
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -5989,6 +5989,8 @@ static void handle_assoc(struct hostapd_data *hapd,
+ 	if (reassoc && sta->auth_alg == WLAN_AUTH_FT)
+ 		omit_rsnxe = !get_ie(pos, left, WLAN_EID_RSNX);
+ #endif /* CONFIG_IEEE80211R_AP */
++	if (hapd->conf->rsn_override_omit_rsnxe)
++		omit_rsnxe = 1;
+ 
+ 	if (hostapd_get_aid(hapd, sta) < 0) {
+ 		hostapd_logger(hapd, mgmt->sa, HOSTAPD_MODULE_IEEE80211,
+-- 
+2.34.1
+

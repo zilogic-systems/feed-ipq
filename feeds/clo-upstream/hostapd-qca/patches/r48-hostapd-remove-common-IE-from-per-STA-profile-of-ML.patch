@@ -1,0 +1,35 @@
+From 39aa8373161e9888a6b640f4ad18a619596f146c Mon Sep 17 00:00:00 2001
+From: Pavithra Ganesan <quic_pavigane@quicinc.com>
+Date: Tue, 22 Oct 2024 16:30:48 +0530
+Subject: [PATCH] UPSTREAM:HOSTAPD: Remove common IE's from
+per STA profile of ML Probe response
+
+In Probe response packet, with existing code common IE's are
+inherited and present in per STA profile of ML as well.
+
+Fix this issue by updating the EID's bitmap to remove common
+IE's from per STA profile of ML Probe response
+
+Signed-off-by: Pavithra Ganesan <quic_pavigane@quicinc.com>
+---
+ src/ap/beacon.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -3225,7 +3225,14 @@ static size_t hostapd_add_sta_profile(struct ieee80211_mgmt *link_fdata,
+ 					is_identical_vendor_ies = true;
+ 					num_own_elem_vendor_ies++;
+ 				}
+-				continue;
++				/* Update the parsed EIDs bitmap */
++				if (is_ext)
++					parsed_ext_eid_bmap[own_eid / 8] |=
++						BIT(own_eid % 8);
++				else
++					parsed_eid_bmap[own_eid / 8] |=
++						BIT(own_eid % 8);
++				break;
+ 			}
+ 
+ 			/* No need to include this non-matching Vendor Specific

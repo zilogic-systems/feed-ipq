@@ -1,0 +1,64 @@
+From e71699149fa2e57626fd1d6fecf389758f1f143b Mon Sep 17 00:00:00 2001
+From: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Date: Thu, 7 Nov 2024 12:11:04 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL:HOSTAPD: Fix puncturing bitmap in Bandwidth
+ Indication element
+
+Currently, when switching to a new channel with puncturing bitmap,
+bandwidth indication element is not correctly updated.
+
+Bandwidth Indication is updated with old puncturing bitmap instead
+of new bitmap from channel switch settings. Furthermore, the length
+of the element is incorrectly added.
+
+As per IEEE P802.11be/D7.0 section 9.4.2.329, Bandwidth Indication
+element contains:
+- Bandwidth Indication Parameters (1)
+- Bandwidth Indication Information (3 or 5)
+	- control (1)
+	- ccfs0 (1)
+	- ccfs1 (1)
+	- Disabled Subchannel Bitmap (0 or 2)
+
+Fix this issue by updating new puncturing bitmap and correct length
+for the bandwidth indication element.
+
+Patch-depdendency: None
+
+Patch-work: None
+
+Feature: CHANNEL_SWITCH, PUNCTURING
+
+Signed-off-by: Mohan Kumar G <quic_mkumarg@quicinc.com>
+---
+ src/ap/ieee802_11.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/src/ap/ieee802_11.c b/src/ap/ieee802_11.c
+index ee319e6..33caa18 100644
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -8823,9 +8823,18 @@ static u8 * hostapd_eid_wb_channel_switch(struct hostapd_data *hapd, u8 *eid,
+ static u8 * hostapd_eid_bw_indication(struct hostapd_data *hapd, u8 *eid,
+ 				      u8 chan1, u8 chan2)
+ {
+-	u16 punct_bitmap = hostapd_get_punct_bitmap(hapd);
++	u16 punct_bitmap = hapd->cs_freq_params.punct_bitmap;
+ 	struct ieee80211_bw_ind_element *bw_ind_elem;
+-	size_t elen = 3;
++	/* As per IEEE P802.11be/D7.0 section 9.4.2.329, Bandwidth Indication
++	 * element contains
++	 * - Bandwidth Indication parameters (1)
++	 * - Bandwidth Indication Information (3 or 5).
++	 *	- control (1)
++	 *	- ccfs0 (1)
++	 *	- ccfs1 (1)
++	 *	- Disabled Subchannel Bitmap (0 or 2)
++	 */
++	size_t elen = 4;
+ 
+ 	if (hapd->cs_freq_params.bandwidth <= 160 && !punct_bitmap)
+ 		return eid;
+-- 
+2.34.1
+

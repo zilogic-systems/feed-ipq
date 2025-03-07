@@ -1,0 +1,25 @@
+From 074bd1f3e4d2bc6f8c01bfa3e607803b575fcac9 Mon Sep 17 00:00:00 2001
+From: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Date: Sun, 1 Sep 2024 17:23:15 +0530
+Subject: [PATCH] [WAR] hostapd: Fix EHT capabilities advertising issue
+
+EHT capabilities are not shared to driver due this capabilities validation.
+
+Skipping the check for now.
+
+Signed-off-by: Karthik M <quic_karm@quicinc.com>
+---
+ src/ap/ieee802_11_eht.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+--- a/src/ap/ieee802_11_eht.c
++++ b/src/ap/ieee802_11_eht.c
+@@ -484,6 +484,8 @@ static bool ieee80211_invalid_eht_cap_si
+ 	size_t cap_len;
+ 	u16 ppe_thres_hdr;
+ 
++	return false;
++
+ 	he_capab = (const struct ieee80211_he_capabilities *) he_cap;
+ 	he_phy_cap = he_capab->he_phy_capab_info;
+ 	cap = (struct ieee80211_eht_capabilities *) eht_cap;

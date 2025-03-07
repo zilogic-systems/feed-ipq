@@ -1,0 +1,72 @@
+From ae828ad3c5970dcc53590e5e964826ae58a63e19 Mon Sep 17 00:00:00 2001
+From: Amutha Ravikumar <quic_aravikum@quicinc.com>
+Date: Fri, 31 Mar 2023 10:06:15 +0530
+Subject: wpa_supplicant: fix 6 GHz beacon report not updated
+
+Currently, verify_80mhz() and verify_160mhz() APIs were failing in 6GHz case.
+Fixed this by checking HE phy capability fields for 6 GHz to confirm
+operating bandwidth is 80 MHz/160 MHz.
+
+Add support for 320 MHz to handle beacon report.
+
+Signed-off-by: Amutha Ravikumar <quic_aravikum@quicinc.com>
+---
+ src/common/ieee802_11_common.c |  3 ++
+ wpa_supplicant/op_classes.c    | 86 ++++++++++++++++++++++++++++++++--
+ wpa_supplicant/rrm.c           |  6 +++
+ 3 files changed, 92 insertions(+), 3 deletions(-)
+
+--- a/src/common/ieee802_11_common.c
++++ b/src/common/ieee802_11_common.c
+@@ -2466,6 +2466,9 @@ const struct oper_class_map global_op_cl
+ 	{ HOSTAPD_MODE_IEEE80211A, 126, 149, 173, 8, BW40PLUS, P2P_SUPP },
+ 	{ HOSTAPD_MODE_IEEE80211A, 127, 153, 177, 8, BW40MINUS, P2P_SUPP },
+ 
++	/* EHT320 support */
++	{ HOSTAPD_MODE_IEEE80211A, 137, 1, 233, 32, BW320, NO_P2P_SUPP },
++
+ 	/*
+ 	 * IEEE Std 802.11ax-2021, Table E-4 actually talks about channel center
+ 	 * frequency index for operation classes 128, 129, 130, 132, 133, 134,
+--- a/wpa_supplicant/op_classes.c
++++ b/wpa_supplicant/op_classes.c
+@@ -102,6 +102,14 @@ static enum chan_allowed verify_80mhz(st
+ 		    NOT_ALLOWED)
+ 			return NOT_ALLOWED;
+ 
++		/* Check HE PHY capability flag for oper bw in 6 GHz */
++		if (is_6ghz_op_class(op_class) &&
++		    (!(mode->he_capab[WPAS_MODE_INFRA].phy_cap[HE_PHYCAP_CHANNEL_WIDTH_SET_IDX] &
++		     HE_PHYCAP_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G))) {
++			return NOT_ALLOWED;
++		}
++
++
+ 		if (!(flags & HOSTAPD_CHAN_VHT_80MHZ_SUBCHANNEL))
+ 			return NOT_ALLOWED;
+ 
+@@ -171,6 +179,13 @@ static enum chan_allowed verify_160mhz(s
+ 		    NOT_ALLOWED)
+ 			return NOT_ALLOWED;
+ 
++		/* Check HE PHY capability flag for oper bw in 6 GHz */
++		if (is_6ghz_op_class(op_class) &&
++		    (!(mode->he_capab[WPAS_MODE_INFRA].phy_cap[HE_PHYCAP_CHANNEL_WIDTH_SET_IDX] &
++		    HE_PHYCAP_CHANNEL_WIDTH_SET_160MHZ_IN_5G))) {
++			return NOT_ALLOWED;
++		}
++
+ 		if (!(flags & HOSTAPD_CHAN_VHT_80MHZ_SUBCHANNEL) ||
+ 		    !(flags & HOSTAPD_CHAN_VHT_160MHZ_SUBCHANNEL))
+ 			return NOT_ALLOWED;
+--- a/wpa_supplicant/rrm.c
++++ b/wpa_supplicant/rrm.c
+@@ -582,7 +582,7 @@ static int * wpas_op_class_freqs(const s
+ 			channels_160mhz_5ghz;
+ 		num_chan =  is_6ghz ? ARRAY_SIZE(channels_160mhz_6ghz) :
+ 			ARRAY_SIZE(channels_160mhz_5ghz);
+-	} else if (op->bw == BW320) {
++	} else if (op->bw == BW320 && is_6ghz) {
+ 		channels = channels_320mhz_6ghz;
+ 		num_chan = ARRAY_SIZE(channels_320mhz_6ghz);
+ 	}

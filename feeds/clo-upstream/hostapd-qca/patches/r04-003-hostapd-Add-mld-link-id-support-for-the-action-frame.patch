@@ -1,0 +1,133 @@
+From facc0209fe5eacb9d705a571c816522c184781b8 Mon Sep 17 00:00:00 2001
+From: Balamurugan Ramar <quic_bramar@quicinc.com>
+Date: Sat, 25 Nov 2023 17:53:56 +0530
+Subject: [PATCH] hostapd: Add mld link id support for the action frame
+
+Action frame from hostapd is not sent to the driver if the STA link
+is changed. This is because, link id is not sent to the driver
+from hostapd. After passing link id to the driver, works fine
+
+Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
+---
+ src/ap/ap_drv_ops.c             | 27 +++++++++++++++++++++------
+ src/drivers/driver.h            |  2 +-
+ src/drivers/driver_nl80211.c    | 24 ++++++++++++++++--------
+ wpa_supplicant/wpa_supplicant.c |  2 +-
+ 4 files changed, 39 insertions(+), 16 deletions(-)
+
+--- a/src/ap/ap_drv_ops.c
++++ b/src/ap/ap_drv_ops.c
+@@ -916,13 +916,14 @@ int hostapd_drv_send_mlme(struct hostapd
+ {
+ 	int link_id = -1;
+ 
++	if (!hapd->driver || !hapd->driver->send_mlme || !hapd->drv_priv)
++		return 0;
++
+ #ifdef CONFIG_IEEE80211BE
+-	if (hapd->conf->mld_ap)
+-		link_id = hapd->mld_link_id;
++        if (hapd->conf->mld_ap)
++                link_id = hapd->mld_link_id;
+ #endif /* CONFIG_IEEE80211BE */
+ 
+-	if (!hapd->driver || !hapd->driver->send_mlme || !hapd->drv_priv)
+-		return 0;
+ 	return hapd->driver->send_mlme(hapd->drv_priv, msg, len, noack, 0,
+ 				       csa_offs, csa_offs_len, no_encrypt, 0,
+ 				       link_id);
+@@ -993,9 +994,15 @@ static int hapd_drv_send_action(struct h
+ 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+ 	};
+ 	struct sta_info *sta;
++	int link_id = -1;
+ 
+ 	if (!hapd->driver || !hapd->driver->send_action || !hapd->drv_priv)
+ 		return 0;
++#ifdef CONFIG_IEEE80211BE
++	if (hapd->conf->mld_ap)
++		link_id = hapd->mld_link_id;
++#endif /* CONFIG_IEEE80211BE */
++
+ 	bssid = hapd->own_addr;
+ 	if (!addr3_ap && !is_multicast_ether_addr(dst) &&
+ 	    len > 0 && data[0] == WLAN_ACTION_PUBLIC) {
+@@ -1027,7 +1034,7 @@ static int hapd_drv_send_action(struct h
+ 	}
+ 
+ 	return hapd->driver->send_action(hapd->drv_priv, freq, wait, dst,
+-					 own_addr, bssid, data, len, 0);
++					 own_addr, bssid, data, len, 0, link_id);
+ }
+ 
+ 
+--- a/src/drivers/driver.h
++++ b/src/drivers/driver.h
+@@ -4185,7 +4185,7 @@ struct wpa_driver_ops {
+ 	 */
+ 	int (*send_action)(void *priv, unsigned int freq, unsigned int wait,
+ 			   const u8 *dst, const u8 *src, const u8 *bssid,
+-			   const u8 *data, size_t data_len, int no_cck);
++			   const u8 *data, size_t data_len, int no_cck, int link);
+ 
+ 	/**
+ 	 * send_action_cancel_wait - Cancel action frame TX wait
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -9370,6 +9370,13 @@ static int nl80211_send_frame_cmd(struct
+ 	    nla_put(msg, NL80211_ATTR_FRAME, buf_len, buf))
+ 		goto fail;
+ 
++#ifdef CONFIG_IEEE80211BE
++	if (link_id != NL80211_DRV_LINK_ID_NA) {
++		if (nla_put_u8(msg, NL80211_ATTR_MLO_LINK_ID, link_id))
++			goto fail;
++	}
++#endif
++
+ 	cookie = 0;
+ 	ret = send_and_recv_resp(drv, msg, cookie_handler, &cookie);
+ 	msg = NULL;
+@@ -9417,7 +9424,7 @@ static int wpa_driver_nl80211_send_actio
+ 					  const u8 *dst, const u8 *src,
+ 					  const u8 *bssid,
+ 					  const u8 *data, size_t data_len,
+-					  int no_cck)
++					  int no_cck, int link_id)
+ {
+ 	struct wpa_driver_nl80211_data *drv = bss->drv;
+ 	int ret = -1;
+@@ -9485,7 +9492,7 @@ static int wpa_driver_nl80211_send_actio
+ 	     !drv->use_monitor))
+ 		ret = wpa_driver_nl80211_send_mlme(bss, buf, 24 + data_len,
+ 						   0, freq, no_cck, offchanok,
+-						   wait_time, NULL, 0, 0, -1);
++						   wait_time, NULL, 0, 0, link_id);
+ 	else
+ 		ret = nl80211_send_frame_cmd(bss, freq, wait_time, buf,
+ 					     24 + data_len, 1, no_cck, 0,
+@@ -11247,11 +11254,11 @@ static int driver_nl80211_send_action(vo
+ 				      const u8 *dst, const u8 *src,
+ 				      const u8 *bssid,
+ 				      const u8 *data, size_t data_len,
+-				      int no_cck)
++				      int no_cck, int link_id)
+ {
+ 	struct i802_bss *bss = priv;
+ 	return wpa_driver_nl80211_send_action(bss, freq, wait_time, dst, src,
+-					      bssid, data, data_len, no_cck);
++					      bssid, data, data_len, no_cck, link_id);
+ }
+ 
+ 
+--- a/wpa_supplicant/wpa_supplicant.c
++++ b/wpa_supplicant/wpa_supplicant.c
+@@ -9725,7 +9725,7 @@ int wpa_drv_send_action(struct wpa_suppl
+ 	}
+ 
+ 	return wpa_s->driver->send_action(wpa_s->drv_priv, freq, wait, dst, src,
+-					  bssid, data, data_len, no_cck);
++					  bssid, data, data_len, no_cck, -1);
+ }
+ 
+ 

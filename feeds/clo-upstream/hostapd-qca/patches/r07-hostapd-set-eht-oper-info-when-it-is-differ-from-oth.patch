@@ -1,0 +1,148 @@
+From b98fadd4a3b47f950e7076d04fdcdfe7420cf6c9 Mon Sep 17 00:00:00 2001
+From: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
+Date: Wed, 3 Jan 2024 18:11:59 +0530
+Subject: [PATCH] hostapd: set eht oper based on the following condition
+
+As per spec, an EHT AP shall set the EHT Operation Information Present
+subfield in the EHT Operation element to 1 if all the following conditions
+are satisfied:
+
+— the AP is operating in the 5 GHz or in the 6 GHz band
+
+— the AP announces to EHT non-AP STAs a BSS operating channel
+width through the EHT Operation
+Information field that is different from the BSS operating
+channel width(s) that it announces to nonEHT non-AP STAs
+in the same Management frame
+
+— the BSS operating channel width announced to EHT non-AP STAs
+includes at least one punctured 20 MHz subchannel and/or is 320 MHz.
+
+Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
+---
+ src/ap/ieee802_11_eht.c | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+--- a/src/ap/ieee802_11_eht.c
++++ b/src/ap/ieee802_11_eht.c
+@@ -215,15 +215,20 @@ u8 * hostapd_eid_eht_capab(struct hostap
+ u8 * hostapd_eid_eht_operation(struct hostapd_data *hapd, u8 *eid,
+ 			       enum ieee80211_op_mode opmode)
+ {
++	struct hostapd_hw_modes *mode;
+ 	struct hostapd_config *conf = hapd->iconf;
+ 	struct ieee80211_eht_operation *oper;
+-	u8 *pos = eid, seg0 = 0, seg1 = 0, *length_pos;
++	u8 *pos = eid, seg0 = 0, seg1 = 0;
+ 	enum oper_chan_width chwidth;
+ 	size_t elen = 1 + 4;
+ 	bool eht_oper_info_present;
+ 	u16 punct_bitmap = hostapd_get_punct_bitmap(hapd);
++	mode = hapd->iface->current_mode;
+ 
+-	if (!hapd->iface->current_mode)
++	if (!mode)
++		return eid;
++
++	if (!mode->eht_capab[opmode].eht_supported)
+ 		return eid;
+ 
+ 	if (is_6ghz_op_class(conf->op_class))
+@@ -232,7 +237,7 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 		chwidth = conf->eht_oper_chwidth;
+ 
+ 	eht_oper_info_present = chwidth == CONF_OPER_CHWIDTH_320MHZ ||
+-		punct_bitmap;
++					   punct_bitmap;
+ 
+ 	if (eht_oper_info_present)
+ 		elen += 3;
+@@ -241,12 +246,10 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 		elen += EHT_OPER_DISABLED_SUBCHAN_BITMAP_SIZE;
+ 
+ 	*pos++ = WLAN_EID_EXTENSION;
+-	length_pos = pos++;
++	*pos++ = 1 + elen;
+ 	*pos++ = WLAN_EID_EXT_EHT_OPERATION;
+-
+ 	oper = (struct ieee80211_eht_operation *) pos;
+ 	oper->oper_params = 0;
+-
+ 	if (hapd->iconf->eht_default_pe_duration)
+ 		oper->oper_params |= EHT_OPER_DEFAULT_PE_DURATION;
+ 
+@@ -284,6 +287,13 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 				oper->oper_info.ccfs0 = oper->oper_info.ccfs1 + 8;
+ 		}
+ 
++		if (hapd->iconf->punct_bitmap &&
++		    hapd->iface->ru_punct_supp_bw == CONF_OPER_CHWIDTH_320MHZ) {
++			hapd->iconf->punct_bitmap = 0;
++			wpa_printf(MSG_ERROR,
++				   "Driver does not support RU puncturing for bandwidths less than 320 MHz. Setting bitmap to 0");
++		}
++
+ 		seg1 = seg0;
+ 		if (hapd->iconf->channel < seg0)
+ 			seg0 -= 8;
+@@ -295,14 +305,15 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 		break;
+ 	case CONF_OPER_CHWIDTH_USE_HT:
+ 		if ((is_6ghz_op_class(hapd->iconf->op_class) &&
+-		    op_class_to_bandwidth(hapd->iconf->op_class) == 40) ||
+-		    hapd->iconf->secondary_channel)
++		     op_class_to_bandwidth(hapd->iconf->op_class) == 40) ||
++		     hapd->iconf->secondary_channel)
+ 			oper->oper_info.control |= EHT_OPER_CHANNEL_WIDTH_40MHZ;
+ 		else
+ 			oper->oper_info.control |= EHT_OPER_CHANNEL_WIDTH_20MHZ;
+ 
+ 		break;
+ 	default:
++		hapd->iconf->punct_bitmap = 0;
+ 		oper->oper_info.control |= EHT_OPER_CHANNEL_WIDTH_20MHZ;
+ 		break;
+ 	}
+@@ -316,10 +327,7 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 			host_to_le16(punct_bitmap);
+ 	}
+ 
+-	pos += 8;
+-	*length_pos = pos - (eid + 2);
+-
+-	return pos;
++	return pos + elen;
+ }
+ 
+ u8 * hostapd_eid_vendor_240mhz(struct hostapd_data *hapd, u8 *eid,
+--- a/src/ap/hostapd.h
++++ b/src/ap/hostapd.h
+@@ -245,6 +245,8 @@ struct hostapd_data {
+ 	unsigned int started:1;
+ 	unsigned int disabled:1;
+ 	unsigned int reenable_beacon:1;
++	enum oper_chan_width vht_oper_chwidth;
++	enum oper_chan_width he_oper_chwidth;
+ 
+ 	u8 own_addr[ETH_ALEN];
+ 
+--- a/src/ap/ieee802_11_vht.c
++++ b/src/ap/ieee802_11_vht.c
+@@ -127,6 +127,7 @@ u8 * hostapd_eid_vht_operation(struct ho
+ 	oper->vht_op_info_chan_center_freq_seg1_idx = seg1;
+ 
+ 	oper->vht_op_info_chwidth = oper_chwidth;
++	hapd->vht_oper_chwidth = oper_chwidth;
+ 	vht_capabilities_info = host_to_le32(hapd->iface->current_mode->vht_capab);
+ 	if (oper_chwidth == CONF_OPER_CHWIDTH_160MHZ) {
+ 		/*
+--- a/src/ap/ieee802_11_he.c
++++ b/src/ap/ieee802_11_he.c
+@@ -275,6 +275,7 @@ u8 * hostapd_eid_he_operation(struct hos
+ 
+ 		*pos++ = control;
+ 
++		hapd->he_oper_chwidth = oper_chwidth;
+ 		/* Channel Center Freq Seg0/Seg1 */
+ 		if (oper_chwidth == CONF_OPER_CHWIDTH_160MHZ ||
+ 		    oper_chwidth == CONF_OPER_CHWIDTH_320MHZ) {

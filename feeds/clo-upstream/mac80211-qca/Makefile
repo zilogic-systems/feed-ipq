@@ -83,7 +83,7 @@ PKG_CONFIG_DEPENDS += \
 define KernelPackage/cfg80211-qca
   $(call KernelPackage/mac80211-qca/Default)
   TITLE:=cfg80211 - wireless configuration API
-  DEPENDS+= +iw-qca-full +iwinfo +wifi-scripts +wireless-regdb +USE_RFKILL:kmod-rfkill
+  DEPENDS+= +iw-qca-full +iwinfo +wifi-scripts-qca +wireless-regdb +USE_RFKILL:kmod-rfkill
   ABI_VERSION:=$(PKG_VERSION)-$(PKG_RELEASE)
   FILES:= \
 	$(PKG_BUILD_DIR)/compat/compat.ko \

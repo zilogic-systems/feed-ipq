@@ -1,0 +1,39 @@
+From c9d3ed710064b8db1757ccc5fac03d3eb9a1a97a Mon Sep 17 00:00:00 2001
+From: Raj Kumar Bhagat <quic_rajkbhag@quicinc.com>
+Date: Thu, 26 Jan 2023 17:59:07 +0530
+Subject: [PATCH] iw: sync NL Attribute and Ext Feature with RRM changes
+
+Due to RRM link measurement changes new NL Attribute and NL extended
+feature are added in kernel. The NL attributes and extended feature
+are:
+	NL80211_ATTR_WIPHY_MAX_TX_POWER_LEVEL
+	NL80211_EXT_FEATURE_TX_POWER_REPORTING
+
+Add this NL changes in iw to sync NL attribute and NL extended
+feature with kernel changes.
+
+The below NL Attributes are used in iw. Thus sync will make the
+below attributes not impacted after the RRM chnages.
+
+            NL80211_ATTR_RU_PUNCT_BITMAP
+            NL80211_ATTR_AP_PS
+            NL80211_ATTR_MULTI_HW_MACS
+
+Signed-off-by: Raj Kumar Bhagat <quic_rajkbhag@quicinc.com>
+---
+ info.c    |  3 +++
+ nl80211.h | 15 +++++++++++++++
+ 2 files changed, 18 insertions(+)
+
+--- a/info.c
++++ b/info.c
+@@ -167,7 +167,9 @@ static void ext_feat_print(enum nl80211_
+ 		      "support for MFP in range measurement negotiation/procedure");
+ 	ext_feat_case(BSS_COLOR, "BSS coloring support");
+ 	ext_feat_case(FILS_CRYPTO_OFFLOAD, "FILS crypto offload");
++	ext_feat_case(WIDE_BAND_SCAN, "wide band scan support");
+ 	ext_feat_case(RADAR_BACKGROUND, "Radar background support");
++	ext_feat_case(STA_MGMT_RTS_CTS, "station management RTS CTS support");
+ 	ext_feat_case(POWERED_ADDR_CHANGE, "can change MAC address while up");
+ 	ext_feat_case(PUNCT, "preamble puncturing in AP mode");
+ 	ext_feat_case(SECURE_NAN, "secure NAN support");

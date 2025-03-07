@@ -1,0 +1,151 @@
+From 9c263bc61d802fab30b3529ebdaace86f564e8f0 Mon Sep 17 00:00:00 2001
+From: Harshitha Prem <quic_hprem@quicinc.com>
+Date: Fri, 4 Nov 2022 18:51:54 +0530
+Subject: [PATCH] iw: interface combination changes
+
+print multi_hw channels
+print multi_hw interface combinations
+
+Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
+---
+ info.c    | 82 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ nl80211.h | 90 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 170 insertions(+), 2 deletions(-)
+
+--- a/info.c
++++ b/info.c
+@@ -390,7 +390,6 @@ next:
+ 
+ 	if (tb_msg[NL80211_ATTR_WIPHY_COVERAGE_CLASS]) {
+ 		unsigned char coverage;
+-
+ 		coverage = nla_get_u8(tb_msg[NL80211_ATTR_WIPHY_COVERAGE_CLASS]);
+ 		/* See handle_distance() for an explanation where the '450' comes from */
+ 		printf("\tCoverage class: %d (up to %dm)\n", coverage, 450 * coverage);
+@@ -436,6 +435,7 @@ next:
+ 		struct nlattr *nl_combi;
+ 		int rem_combi;
+ 		bool have_combinations = false;
++		bool have_combinations_per_hw = false;
+ 
+ 		nla_for_each_nested(nl_combi, tb_msg[NL80211_ATTR_INTERFACE_COMBINATIONS], rem_combi) {
+ 			static struct nla_policy iface_combination_policy[NUM_NL80211_IFACE_COMB] = {
+@@ -444,6 +444,7 @@ next:
+ 				[NL80211_IFACE_COMB_STA_AP_BI_MATCH] = { .type = NLA_FLAG },
+ 				[NL80211_IFACE_COMB_NUM_CHANNELS] = { .type = NLA_U32 },
+ 				[NL80211_IFACE_COMB_RADAR_DETECT_WIDTHS] = { .type = NLA_U32 },
++				[NL80211_IFACE_COMB_PER_HW_COMB] = { .type = NLA_NESTED },
+ 			};
+ 			struct nlattr *tb_comb[NUM_NL80211_IFACE_COMB];
+ 			static struct nla_policy iface_limit_policy[NUM_NL80211_IFACE_LIMIT] = {
+@@ -452,7 +453,15 @@ next:
+ 			};
+ 			struct nlattr *tb_limit[NUM_NL80211_IFACE_LIMIT];
+ 			struct nlattr *nl_limit;
+-			int err, rem_limit;
++			static struct nla_policy iface_comb_per_hw_policy[NUM_NL80211_IFACE_COMB_PER_HW_COMB] = {
++				[NL80211_IFACE_COMB_PER_HW_COMB_HW_IDX] = { .type = NLA_U8 },
++				[NL80211_IFACE_COMB_PER_HW_COMB_LIMITS] = { .type = NLA_NESTED },
++				[NL80211_IFACE_COMB_PER_HW_COMB_MAXIMUM] = { .type = NLA_U16 },
++				[NL80211_IFACE_COMB_PER_HW_COMB_NUM_CHANNELS] = { .type = NLA_U32 },
++			};
++			struct nlattr *tb_per_hw[NUM_NL80211_IFACE_COMB_PER_HW_COMB];
++			struct nlattr *nl_per_hw;
++			int err, rem_limit, rem_per_hw;
+ 			bool comma = false;
+ 
+ 			if (!have_combinations) {
+@@ -512,6 +521,43 @@ next:
+ 				}
+ 			}
+ 			printf("\n");
++
++			if (!tb_comb[NL80211_IFACE_COMB_PER_HW_COMB])
++				goto broken_combination;
++
++			nla_for_each_nested(nl_per_hw, tb_comb[NL80211_IFACE_COMB_PER_HW_COMB], rem_per_hw) {
++				comma = false;
++				if (!have_combinations_per_hw) {
++					printf("\tvalid interface combo per hw:");
++					have_combinations_per_hw = true;
++				}
++
++				err = nla_parse_nested(tb_per_hw, MAX_NL80211_IFACE_COMB_PER_HW_COMB,
++						       nl_per_hw, iface_comb_per_hw_policy);
++				if (err || !tb_per_hw[NL80211_IFACE_COMB_PER_HW_COMB_HW_IDX]) {
++					printf("<failed to parse> at %d %d\n", __LINE__, err);
++					goto broken_combination;
++				}
++				printf("\n\t\thw_idx %d:\n\t\t\t max num of iface: %d,  #channels <= %d,",
++					nla_get_u8(tb_per_hw[NL80211_IFACE_COMB_PER_HW_COMB_HW_IDX]),
++					nla_get_u32(tb_per_hw[NL80211_IFACE_COMB_PER_HW_COMB_MAXIMUM]),
++					nla_get_u16(tb_per_hw[NL80211_IFACE_COMB_NUM_CHANNELS]));
++				nla_for_each_nested(nl_limit, tb_comb[NL80211_IFACE_COMB_LIMITS], rem_limit) {
++					err = nla_parse_nested(tb_limit, MAX_NL80211_IFACE_LIMIT,
++							       nl_limit, iface_limit_policy);
++					if (err || !tb_limit[NL80211_IFACE_LIMIT_TYPES]) {
++						printf("<failed to parse> at %d %d\n", __LINE__, err);
++						goto broken_combination;
++					}
++					if (comma)
++						printf(", ");
++					comma = true;
++					printf("#{ ");
++					print_iftype_line(tb_limit[NL80211_IFACE_LIMIT_TYPES]);
++					printf(" } <= %u", nla_get_u32(tb_limit[NL80211_IFACE_LIMIT_MAX]));
++				}
++			}
++			printf("\n");
+ broken_combination:
+ 			;
+ 		}
+@@ -762,6 +808,49 @@ broken_combination:
+ 		printf("\tMaximum associated stations in AP mode: %u\n",
+ 		       nla_get_u16(tb_msg[NL80211_ATTR_MAX_AP_ASSOC_STA]));
+ 
++	if (tb_msg[NL80211_ATTR_MULTI_HW_MACS]) {
++		struct nlattr *tb_hw[NL80211_MULTI_HW_MAC_ATTR_MAX + 1];
++		struct nlattr *tb_freq[NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_MAX + 1];
++		struct nlattr *nl_hw_macs;
++		struct nlattr *nl_freq_list;
++		int rem_hw_macs, rem_freq_list;
++
++		nla_for_each_nested(nl_hw_macs, tb_msg[NL80211_ATTR_MULTI_HW_MACS],
++				    rem_hw_macs) {
++			nla_parse(tb_hw, NL80211_MULTI_HW_MAC_ATTR_MAX,
++				  nla_data(nl_hw_macs), nla_len(nl_hw_macs),
++				  NULL);
++
++			if (tb_hw[NL80211_MULTI_HW_MAC_ATTR_IDX]) {
++			    uint8_t hw_idx;
++			    hw_idx = nla_get_u8(tb_hw[NL80211_MULTI_HW_MAC_ATTR_IDX]);
++			    printf("\n\thw_idx %d channel list:\n", hw_idx);
++			}
++			if (tb_hw[NL80211_MULTI_HW_MAC_ATTR_CHAN_LIST]) {
++				uint8_t count = 0;
++				printf("\t\t");
++				nla_for_each_nested(nl_freq_list,
++						    tb_hw[NL80211_MULTI_HW_MAC_ATTR_CHAN_LIST],
++						    rem_freq_list) {
++					if (count == 20) {
++						printf("\n\t\t");
++						count = 0;
++					}
++					nla_parse(tb_freq, NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_MAX,
++						  nla_data(nl_freq_list), nla_len(nl_freq_list),
++						  NULL);
++					if (tb_freq[NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_FREQ]) {
++						uint32_t freq;
++						freq = nla_get_u32(tb_freq[NL80211_MULTI_HW_MAC_CHAN_LIST_ATTR_FREQ]);
++						printf("%d ",ieee80211_frequency_to_channel(freq));
++						count++;
++					}
++				}
++			}
++		}
++		printf("\n");
++	}
++
+ 	return NL_SKIP;
+ }
+ 

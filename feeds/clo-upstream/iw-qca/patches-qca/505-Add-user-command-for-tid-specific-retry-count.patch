@@ -1,0 +1,83 @@
+--- a/interface.c
++++ b/interface.c
+@@ -772,6 +772,80 @@ COMMAND(switch, freq,
+ COMMAND(switch, channel, "<channel> [NOHT|HT20|HT40+|HT40-|5MHz|10MHz|80MHz] [beacons <count>] [block-tx]",
+ 	NL80211_CMD_CHANNEL_SWITCH, 0, CIB_NETDEV, handle_chan, NULL);
+ 
++static int handle_retry_count(struct nl80211_state *state,
++			      struct nl_msg *msg,
++			      int argc, char **argv,
++			      enum id_input id)
++{
++	struct nl_msg *tid = NULL;
++	unsigned char mac_addr[ETH_ALEN];
++	uint8_t retry_short, retry_long, tid_no;
++	char *end;
++	int ret = -ENOSPC;
++
++	if (argc < 4)
++		return 1;
++
++	tid = nlmsg_alloc();
++	if (!tid)
++		return -ENOMEM;
++
++	while (argc) {
++		if (strcmp(argv[0], "tid") == 0) {
++			if (argc < 2)
++				return 1;
++
++			tid_no = strtoul(argv[1], &end, 8);
++			if (*end)
++				return 1;
++
++			NLA_PUT_U8(tid, NL80211_TID_CONFIG_ATTR_TIDS, tid_no);
++		} else if (strcmp(argv[0], "peer") == 0) {
++			if (argc < 2)
++				return 1;
++
++			if (mac_addr_a2n(mac_addr, argv[1])) {
++				fprintf(stderr, "invalid mac address\n");
++				return 2;
++			}
++
++			NLA_PUT(msg, NL80211_ATTR_MAC, ETH_ALEN, mac_addr);
++		} else if (strcmp(argv[0], "short") == 0) {
++			if (argc < 2)
++				return 1;
++
++			retry_short = strtoul(argv[1], &end, 0);
++			if (*end)
++				return 1;
++
++			NLA_PUT_U8(tid, NL80211_TID_CONFIG_ATTR_RETRY_SHORT, retry_short);
++		} else if (strcmp(argv[0], "long") == 0) {
++			if (argc < 2)
++				return 1;
++			retry_long = strtoul(argv[1], &end, 0);
++			if (*end)
++				return 1;
++
++			NLA_PUT_U8(tid, NL80211_TID_CONFIG_ATTR_RETRY_LONG, retry_long);
++		} else {
++			return 1;
++		}
++		argc -= 2;
++		argv += 2;
++	}
++
++	nla_put_nested(msg, NL80211_ATTR_TID_CONFIG, tid);
++
++	ret = 0;
++
++nla_put_failure:
++	nlmsg_free(tid);
++	return ret;
++}
++COMMAND(set, tid_retry_count, "tid <tid> <[peer <MAC address>] short <limit> long <limit>]>",
++		NL80211_CMD_SET_TID_CONFIG, 0, CIB_NETDEV, handle_retry_count,
++		"Set the retry count for the TIDs ");
++
+ 
+ static int toggle_tid_param(const char *argv0, const char *argv1,
+ 			    struct nl_msg *msg, uint32_t attr)

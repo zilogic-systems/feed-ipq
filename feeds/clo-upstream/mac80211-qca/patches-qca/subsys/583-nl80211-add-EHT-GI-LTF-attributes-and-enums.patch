@@ -1,0 +1,67 @@
+From 396c4ff5c0baa1aeafa5987ddded829dc4bb227d Mon Sep 17 00:00:00 2001
+From: Muna Sinada <quic_msinada@quicinc.com>
+Date: Wed, 1 Sep 2021 12:43:00 -0700
+Subject: [PATCH 21/27] nl80211: add EHT GI/LTF attributes and enums
+
+Add EHT GI/LTF attributes to struct cfg80211_bitrate_mask and
+create enums with the corresponding long training fields.
+
+Signed-off-by: Muna Sinada <quic_msinada@quicinc.com>
+Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
+---
+ include/net/cfg80211.h       |  2 ++
+ include/uapi/linux/nl80211.h | 18 +++++++++++++++++-
+ net/wireless/nl80211.c       | 14 ++++++++++++++
+ 3 files changed, 33 insertions(+), 1 deletion(-)
+
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -850,6 +850,8 @@ struct cfg80211_bitrate_mask {
+ 		enum nl80211_he_ltf he_ltf;
+ 		u16 he_ul_mcs[NL80211_HE_NSS_MAX];
+ 		u16 eht_mcs[NL80211_EHT_NSS_MAX];
++		enum nl80211_eht_gi eht_gi;
++		enum nl80211_eht_ltf eht_ltf;
+ 	} control[NUM_NL80211_BANDS];
+ };
+ 
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -402,6 +402,12 @@ static const struct nla_policy nl80211_t
+ 	},
+ 	[NL80211_TXRATE_EHT] =
+ 		NLA_POLICY_EXACT_LEN(sizeof(struct nl80211_txrate_eht)),
++	[NL80211_TXRATE_EHT_GI] =  NLA_POLICY_RANGE(NLA_U8,
++						    NL80211_RATE_INFO_EHT_GI_0_8,
++						    NL80211_RATE_INFO_EHT_GI_3_2),
++	[NL80211_TXRATE_EHT_LTF] = NLA_POLICY_RANGE(NLA_U8,
++						    NL80211_RATE_INFO_EHT_1XLTF,
++						    NL80211_RATE_INFO_EHT_4XLTF),
+ };
+ 
+ static const struct nla_policy
+@@ -5385,6 +5391,9 @@ static int nl80211_parse_tx_bitrate_mask
+ 
+ 		mask->control[i].he_gi = 0xFF;
+ 		mask->control[i].he_ltf = 0xFF;
++
++		mask->control[i].eht_gi = 0xFF;
++		mask->control[i].eht_ltf = 0xFF;
+ 	}
+ 
+ 	/* if no rates are given set it back to the defaults */
+@@ -5471,6 +5480,14 @@ static int nl80211_parse_tx_bitrate_mask
+ 				      mask->control[band].eht_mcs))
+ 			return -EINVAL;
+ 
++		if (tb[NL80211_TXRATE_EHT_GI])
++			mask->control[band].eht_gi =
++				nla_get_u8(tb[NL80211_TXRATE_EHT_GI]);
++
++		if (tb[NL80211_TXRATE_EHT_LTF])
++			mask->control[band].eht_ltf =
++				nla_get_u8(tb[NL80211_TXRATE_EHT_LTF]);
++
+ 		if (mask->control[band].legacy == 0) {
+ 			/* don't allow empty legacy rates if HT, VHT or HE
+ 			 * are not even supported.

@@ -1,0 +1,121 @@
+From bebc3dc474803c6ff2918b79fa09d1ee11588cc5 Mon Sep 17 00:00:00 2001
+From: Girish Kumar M P <quic_gmp@quicinc.com>
+Date: Sun, 24 Nov 2024 23:41:06 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12: Add New WMI Event handler for
+ rssi accuracy
+
+Currently rssi signal strength is calculated with rssi_combi + min_nf
++ rssi_temp_offset
+
+Firmware sends wmi event WMI_RSSI_ACCURACY_IMPROVEMENT_CAPABILITIES,
+which provides if the chip supports rssi_region_offset.
+
+Hence add support to handle and parse the wmi event
+WMI_RSSI_ACCURACY_IMPROVEMENT_CAPABILITIES.
+Also add support to update the parameter from this event in ath12k
+structure [ab->rssi_accuracy_support] and used for signal calculation
+
+signal calculation :
+rssi signal = rssi_combi + min_nf + rssi_temp_offset + region_offset
+
+Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/wmi.c | 29 ++++++++++++++++++++++++++-
+ drivers/net/wireless/ath/ath12k/wmi.h |  8 ++++++++
+ 2 files changed, 36 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -30,6 +30,10 @@ struct ath12k_wmi_dma_ring_caps_parse {
+ 	u32 n_dma_ring_caps;
+ };
+ 
++struct ath12k_wmi_rssi_accuracy_caps_parse {
++	u32 rssi_acc_imp_caps;
++};
++
+ struct ath12k_wmi_power_boost_caps_parse {
+ 	u32 power_boost_cap;
+ };
+@@ -90,6 +94,7 @@ struct ath12k_wmi_svc_rdy_ext2_parse {
+ 	struct ath12k_wmi_svc_rdy_ext2_arg arg;
+ 	struct ath12k_wmi_dma_ring_caps_parse dma_caps_parse;
+ 	struct ath12k_wmi_power_boost_caps_parse pb_caps_parse;
++	struct ath12k_wmi_rssi_accuracy_caps_parse rssi_caps_parse;
+ 	bool dma_ring_cap_done;
+ 	bool spectral_bin_scaling_done;
+ 	bool mac_phy_caps_ext_done;
+@@ -108,6 +113,7 @@ struct ath12k_wmi_svc_rdy_ext2_parse {
+ 	bool enhanced_aoa_per_band_caps_done;
+ 	bool sar_flag_tlv_param_done;
+ 	bool power_boost_caps_done;
++	bool rssi_acc_imp_cap_done;
+ };
+ 
+ struct ath12k_wmi_rdy_parse {
+@@ -7260,6 +7266,23 @@ static void ath12k_wmi_power_boost_caps(
+ 			    pb_caps_parse->power_boost_cap & WMI_POWER_BOOST_PHY_MASK);
+ }
+ 
++static void ath12k_wmi_tlv_rssi_acc_imp_caps(struct ath12k_base *ab,
++					     const void *ptr, void *data)
++{
++	struct ath12k_wmi_rssi_accuracy_caps_parse *rssi_acc_caps_parse = data;
++	struct ath12k_wmi_rssi_accuracy_caps  *rssi_acc_caps;
++
++	rssi_acc_caps  = (struct ath12k_wmi_rssi_accuracy_caps *)ptr;
++	rssi_acc_caps_parse->rssi_acc_imp_caps = __le32_to_cpu(rssi_acc_caps->rssi_acc_enable);
++
++	ab->rssi_accuracy_support = rssi_acc_caps_parse->rssi_acc_imp_caps & WMI_RSSI_ACC_CAP_EN ? 1 : 0;
++
++	if (ab->rssi_accuracy_support) {
++		ath12k_info(ab, "RSSI accuracy improvement is found for phy %lx\n",
++			    rssi_acc_caps_parse->rssi_acc_imp_caps & WMI_RSSI_ACC_PHY_MASK);
++	}
++}
++
+ static int ath12k_wmi_svc_rdy_ext2_parse(struct ath12k_base *ab,
+ 					 u16 tag, u16 len,
+ 					 const void *ptr, void *data)
+@@ -7336,6 +7359,10 @@ static int ath12k_wmi_svc_rdy_ext2_parse
+ 			ath12k_wmi_power_boost_caps(ab, ptr, &parse->pb_caps_parse);
+ 
+ 			parse->power_boost_caps_done = true;
++		} else if (!parse->rssi_acc_imp_cap_done) {
++			ath12k_wmi_tlv_rssi_acc_imp_caps(ab, ptr, &parse->rssi_caps_parse);
++
++			parse->rssi_acc_imp_cap_done = true;
+ 		}
+ 		break;
+ 	case WMI_TAG_NAN_CAPABILITIES:
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -2282,6 +2282,7 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_PDEV_POWER_BOOST_CMD_FIXED_PARAM,
+ 	WMI_TAG_PDEV_POWER_BOOST_MEM_ADDR_CMD_FIXED_PARAM,
+ 	WMI_TAG_PDEV_POWER_BOOST_CAPABILITY = 0x4EF,
++	WMI_TAG_PDEV_RSSI_ACCURACY_IMPROVEMENT_CAPABILITIES,
+ 	WMI_TAG_MAX
+ };
+ 
+@@ -5621,11 +5622,18 @@ struct wmi_pdev_radar_flags_param {
+ } __packed;
+ #define WMI_PDEV_RADAR_FLAGS_FULL_BW_NOL_MARK_BIT 0
+ 
++#define WMI_RSSI_ACC_PHY_MASK GENMASK(3, 0)
++#define WMI_RSSI_ACC_CAP_EN BIT(4)
++struct ath12k_wmi_rssi_accuracy_caps {
++	u32 tlv_header;
++	u32 rssi_acc_enable;
++};
++
+ #define WMI_POWER_BOOST_PHY_MASK GENMASK(3, 0)
+ #define WMI_POWER_BOOST_CAP_EN BIT(4)
+ struct ath12k_wmi_power_boost_capa {
+-	u32 tlv_header;
+-	u32 power_boost_enable;
++	__le32 tlv_header;
++	__le32 power_boost_enable;
+ } __packed;
+ 
+ struct ath12k_wmi_pdev_power_boost_mem_addr_cmd_fixed_param {

@@ -1,0 +1,211 @@
+From 53a077ec6dc161f1c538c42cfa733aa1bb309d6b Mon Sep 17 00:00:00 2001
+From: Harish Rachakonda <quic_rachakon@quicinc.com>
+Date: Tue, 19 Nov 2024 11:35:45 +0530
+Subject: [PATCH] QSDK:CP ath12k: Added support for 512 clients
+
+Currently, ath12k supports 128 clients. Support has been added for
+256 clients support for 1G profile of qcn9274 hw2.0, ipq5332 hw1.0,
+qcn6432 hw1.0 and ipq5424 hw1.0 and 128 clients for the 512M profiles.
+New module param max_clients introduced to extend the max clients
+support till 512 for qcn9274 hw2.0.
+
+Patch-dependency: 835-ath12k-Add-512MB-support-changes.patch
+patch-work: None
+
+Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/hw.h | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/hw.h
++++ b/drivers/net/wireless/ath/ath12k/hw.h
+@@ -20,6 +20,10 @@ struct ath12k_cfr_peer_tx_param;
+ #ifdef CPTCFG_ATH12K_MEM_PROFILE_512M
+ /* Num VDEVS per radio */
+ #define TARGET_NUM_VDEVS	(8 + 1)
++
++/* Max num of stations (per radio) */
++#define TARGET_NUM_STATIONS(ab)	128
++
+ /* Num of Bridge vdevs per radio */
+ #define TARGET_NUM_BRIDGE_VDEVS	0
+ #define ATH12K_MAX_NUM_VDEVS_NLINK	TARGET_NUM_BRIDGE_VDEVS
+@@ -32,27 +36,28 @@ struct ath12k_cfr_peer_tx_param;
+ #define ATH12K_MAX_NUM_VDEVS_NLINK	TARGET_NUM_VDEVS + \
+ 					TARGET_NUM_BRIDGE_VDEVS
+ #define ATH12K_QMI_TARGET_MEM_MODE	ATH12K_QMI_TARGET_MEM_MODE_DEFAULT
++
++/* Max num of stations (per radio) */
++
++#define TARGET_NUM_STATIONS(ab)	((ath12k_max_clients > ab->hw_params->max_clients_supported) ? ab->hw_params->max_clients_supported : ath12k_max_clients)
+ #endif
+ 
+ /* ToDo: do we need to include self peer of bridge vdev also here? */
+-#define TARGET_NUM_PEERS_PDEV	(TARGET_NUM_STATIONS + TARGET_NUM_VDEVS)
++#define TARGET_NUM_PEERS_PDEV(ab)	(TARGET_NUM_STATIONS(ab) + TARGET_NUM_VDEVS)
+ 
+ /* Num of peers for Single Radio mode */
+-#define TARGET_NUM_PEERS_SINGLE		(TARGET_NUM_PEERS_PDEV)
++#define TARGET_NUM_PEERS_SINGLE(ab)		(TARGET_NUM_PEERS_PDEV(ab))
+ 
+ /* Num of peers for DBS */
+-#define TARGET_NUM_PEERS_DBS		(2 * TARGET_NUM_PEERS_PDEV)
++#define TARGET_NUM_PEERS_DBS(ab)		(2 * TARGET_NUM_PEERS_PDEV(ab))
+ 
+ /* Num of peers for DBS_SBS */
+-#define TARGET_NUM_PEERS_DBS_SBS	(3 * TARGET_NUM_PEERS_PDEV)
+-
+-/* Max num of stations (per radio) */
+-#define TARGET_NUM_STATIONS	128
++#define TARGET_NUM_PEERS_DBS_SBS(ab)	(3 * TARGET_NUM_PEERS_PDEV(ab))
+ 
+-#define TARGET_NUM_PEERS(x)	TARGET_NUM_PEERS_##x
++#define TARGET_NUM_PEERS(x,ab)	TARGET_NUM_PEERS_##x(ab)
+ #define TARGET_NUM_PEER_KEYS	2
+ /* Do we need to change the below */
+-#define TARGET_NUM_TIDS(x)	(2 * TARGET_NUM_PEERS(x) + \
++#define TARGET_NUM_TIDS(x,ab)	(2 * TARGET_NUM_PEERS(x,ab) + \
+ 				 4 * TARGET_NUM_VDEVS + 8)
+ 
+ #define TARGET_AST_SKID_LIMIT	16
+@@ -196,6 +201,9 @@ struct ath12k_hw_params {
+ 		size_t cal_offset;
+ 	} fw;
+ 
++#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
++	u16 max_clients_supported;
++#endif
+ 	u8 max_radios;
+ 	bool single_pdev_only:1;
+ 	u32 qmi_service_ins_id;
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -39,6 +39,12 @@ static unsigned int ath12k_crypto_mode;
+ module_param_named(crypto_mode, ath12k_crypto_mode, uint, 0644);
+ MODULE_PARM_DESC(crypto_mode, "crypto mode: 0-hardware, 1-software");
+ 
++#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
++unsigned int ath12k_max_clients = 256;
++module_param_named(max_clients, ath12k_max_clients, uint, 0644);
++MODULE_PARM_DESC(max_clients, "Max clients support");
++#endif
++
+ /* frame mode values are mapped as per enum ath12k_hw_txrx_mode */
+ unsigned int ath12k_frame_mode = ATH12K_HW_TXRX_ETHERNET;
+ module_param_named(frame_mode, ath12k_frame_mode, uint, 0644);
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -57,6 +57,9 @@ extern bool ath12k_erp_support;
+ extern unsigned int ath12k_ppe_ds_enabled;
+ extern bool ath12k_rx_nwifi_err_dump;
+ extern bool ath12k_fse_3_tuple_enabled;
++#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
++extern unsigned int ath12k_max_clients;
++#endif
+ 
+ #define ATH12K_MAX_CORE_MASK	(0xFFFF & ((1 << NR_CPUS) - 1))
+ extern unsigned int ath12k_rfs_core_mask[4];
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -2053,6 +2053,7 @@ static struct ath12k_hw_params ath12k_hw
+ 					BIT(NL80211_IFTYPE_MESH_POINT),
+ #ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ 		.supports_monitor = true,
++		.max_clients_supported = 512,
+ #endif
+ 
+ 		.idle_ps = false,
+@@ -2156,6 +2157,7 @@ static struct ath12k_hw_params ath12k_hw
+ 					BIT(NL80211_IFTYPE_MESH_POINT),
+ #ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ 		.supports_monitor = true,
++		.max_clients_supported = 256,
+ #endif
+ 
+ 		.idle_ps = false,
+@@ -2259,6 +2261,7 @@ static struct ath12k_hw_params ath12k_hw
+ 					BIT(NL80211_IFTYPE_MESH_POINT),
+ #ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ 		.supports_monitor = true,
++		.max_clients_supported = 256,
+ #endif
+ 
+ 		.idle_ps = false,
+@@ -2357,6 +2360,7 @@ static struct ath12k_hw_params ath12k_hw
+ 					BIT(NL80211_IFTYPE_MESH_POINT),
+ #ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ 		.supports_monitor = true,
++		.max_clients_supported = 256,
+ #endif
+ 
+ 		.idle_ps = false,
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -19592,8 +19592,8 @@ static int __ath12k_mac_register(struct
+ 
+ 	ath12k_pdev_caps_update(ar);
+ 
+-	ar->max_num_stations = TARGET_NUM_STATIONS;
+-	ar->max_num_peers = TARGET_NUM_PEERS_PDEV;
++	ar->max_num_stations = TARGET_NUM_STATIONS(ar->ab);
++	ar->max_num_peers = TARGET_NUM_PEERS_PDEV(ar->ab);
+ 
+ 	if (cap->nss_ratio_enabled)
+ 		ieee80211_hw_set(hw, SUPPORTS_VHT_EXT_NSS_BW);
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -1104,7 +1104,7 @@ static int ath12k_peer_rhash_addr_tbl_in
+ 	param->head_offset = offsetof(struct ath12k_peer, rhash_addr);
+ 	param->key_len = sizeof_field(struct ath12k_peer, addr);
+ 	param->automatic_shrinking = true;
+-	param->nelem_hint = ab->num_radios * TARGET_NUM_PEERS_PDEV;
++	param->nelem_hint = ab->num_radios * TARGET_NUM_PEERS_PDEV(ab);
+ 
+ 	ret = rhashtable_init(rhash_addr_tbl, param);
+ 	if (ret) {
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -255,15 +255,15 @@ void ath12k_wmi_init_qcn9274(struct ath1
+ 	config->num_vdevs = ab->num_radios * total_vdevs;
+ 
+ 	if (ab->num_radios == 2) {
+-		config->num_peers = TARGET_NUM_PEERS(DBS);
+-		config->num_tids = TARGET_NUM_TIDS(DBS);
++		config->num_peers = TARGET_NUM_PEERS(DBS,ab);
++		config->num_tids = TARGET_NUM_TIDS(DBS,ab);
+ 	} else if (ab->num_radios == 3) {
+-		config->num_peers = TARGET_NUM_PEERS(DBS_SBS);
+-		config->num_tids = TARGET_NUM_TIDS(DBS_SBS);
++		config->num_peers = TARGET_NUM_PEERS(DBS_SBS,ab);
++		config->num_tids = TARGET_NUM_TIDS(DBS_SBS,ab);
+ 	} else {
+ 		/* Control should not reach here */
+-		config->num_peers = TARGET_NUM_PEERS(SINGLE);
+-		config->num_tids = TARGET_NUM_TIDS(SINGLE);
++		config->num_peers = TARGET_NUM_PEERS(SINGLE,ab);
++		config->num_tids = TARGET_NUM_TIDS(SINGLE,ab);
+ 	}
+ 	config->num_offload_peers = TARGET_NUM_OFFLD_PEERS;
+ 	config->num_offload_reorder_buffs = TARGET_NUM_OFFLD_REORDER_BUFFS;
+@@ -324,15 +324,15 @@ void ath12k_wmi_init_ipq5332(struct ath1
+ 	config->num_vdevs = ab->num_radios * total_vdevs;
+ 
+ 	if (ab->num_radios == 2) {
+-		config->num_peers = TARGET_NUM_PEERS(DBS);
+-		config->num_tids = TARGET_NUM_TIDS(DBS);
++		config->num_peers = TARGET_NUM_PEERS(DBS,ab);
++		config->num_tids = TARGET_NUM_TIDS(DBS,ab);
+ 	} else if (ab->num_radios == 3) {
+-		config->num_peers = TARGET_NUM_PEERS(DBS_SBS);
+-		config->num_tids = TARGET_NUM_TIDS(DBS_SBS);
++		config->num_peers = TARGET_NUM_PEERS(DBS_SBS,ab);
++		config->num_tids = TARGET_NUM_TIDS(DBS_SBS,ab);
+ 	} else {
+ 		/* Control should not reach here */
+-		config->num_peers = TARGET_NUM_PEERS(SINGLE);
+-		config->num_tids = TARGET_NUM_TIDS(SINGLE);
++		config->num_peers = TARGET_NUM_PEERS(SINGLE,ab);
++		config->num_tids = TARGET_NUM_TIDS(SINGLE,ab);
+ 	}
+ 	config->num_offload_peers = TARGET_NUM_OFFLD_PEERS;
+ 	config->num_offload_reorder_buffs = TARGET_NUM_OFFLD_REORDER_BUFFS;

@@ -1,0 +1,75 @@
+From b8541c12c958aa12d170bfc7233f1939816342ea Mon Sep 17 00:00:00 2001
+From: devi priya <quic_devipriy@quicinc.com>
+Date: Mon, 22 Apr 2024 15:14:37 +0530
+Subject: [PATCH] clk: qcom: ipq9574: Update the alpha PLL type for GPLLs
+
+Update the driver to use offsets corresponding to DEFAULT_EVO for GPLLs
+as the PLL offsets match with that of SPARK PLL used in IPQ9574.
+
+Change-Id: Iba07596343cd7cd59b93e94d5650da0d590481b9
+Signed-off-by: devi priya <quic_devipriy@quicinc.com>
+---
+ drivers/clk/qcom/gcc-ipq9574.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/clk/qcom/gcc-ipq9574.c b/drivers/clk/qcom/gcc-ipq9574.c
+index 68bad53095ae..f49b9b426860 100644
+--- a/drivers/clk/qcom/gcc-ipq9574.c
++++ b/drivers/clk/qcom/gcc-ipq9574.c
+@@ -67,7 +67,7 @@ static const struct clk_parent_data gcc_sleep_clk_data[] = {
+ 
+ static struct clk_alpha_pll gpll0_main = {
+ 	.offset = 0x20000,
+-	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT],
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT_EVO],
+ 	.clkr = {
+ 		.enable_reg = 0x0b000,
+ 		.enable_mask = BIT(0),
+@@ -95,7 +95,7 @@ static struct clk_fixed_factor gpll0_out_main_div2 = {
+ 
+ static struct clk_alpha_pll_postdiv gpll0 = {
+ 	.offset = 0x20000,
+-	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT],
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT_EVO],
+ 	.width = 4,
+ 	.clkr.hw.init = &(const struct clk_init_data) {
+ 		.name = "gpll0",
+@@ -109,7 +109,7 @@ static struct clk_alpha_pll_postdiv gpll0 = {
+ 
+ static struct clk_alpha_pll gpll4_main = {
+ 	.offset = 0x22000,
+-	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT],
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT_EVO],
+ 	.clkr = {
+ 		.enable_reg = 0x0b000,
+ 		.enable_mask = BIT(2),
+@@ -124,7 +124,7 @@ static struct clk_alpha_pll gpll4_main = {
+ 
+ static struct clk_alpha_pll_postdiv gpll4 = {
+ 	.offset = 0x22000,
+-	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT],
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT_EVO],
+ 	.width = 4,
+ 	.clkr.hw.init = &(const struct clk_init_data) {
+ 		.name = "gpll4",
+@@ -138,7 +138,7 @@ static struct clk_alpha_pll_postdiv gpll4 = {
+ 
+ static struct clk_alpha_pll gpll2_main = {
+ 	.offset = 0x21000,
+-	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT],
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT_EVO],
+ 	.clkr = {
+ 		.enable_reg = 0x0b000,
+ 		.enable_mask = BIT(1),
+@@ -153,7 +153,7 @@ static struct clk_alpha_pll gpll2_main = {
+ 
+ static struct clk_alpha_pll_postdiv gpll2 = {
+ 	.offset = 0x21000,
+-	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT],
++	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_DEFAULT_EVO],
+ 	.width = 4,
+ 	.clkr.hw.init = &(const struct clk_init_data) {
+ 		.name = "gpll2",
+-- 
+2.34.1
+

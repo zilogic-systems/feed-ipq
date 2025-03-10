@@ -1,0 +1,99 @@
+From 70cda476059714d228cf792fc1ce603a79c5bf30 Mon Sep 17 00:00:00 2001
+From: Aloka Dixit <quic_alokad@quicinc.com>
+Date: Wed, 8 Dec 2021 13:49:10 -0800
+Subject: [PATCH] ath12k: advertise RU puncturing support to kernel
+
+Target advertises the minimum bandwidth which supports static preamble
+puncturing using WMI_TAG_SERVICE_READY_EXT2_EVENT.
+Store this support in struct wiphy to be advertised to the userspace.
+
+Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |  1 +
+ drivers/net/wireless/ath/ath12k/mac.c  |  2 ++
+ drivers/net/wireless/ath/ath12k/wmi.c  | 11 ++++++++---
+ drivers/net/wireless/ath/ath12k/wmi.h  |  4 ++--
+ 4 files changed, 13 insertions(+), 5 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -679,6 +679,7 @@ struct ath12k_pdev_cap {
+ 	struct ath12k_band_cap band[NUM_NL80211_BANDS];
+ 	bool nss_ratio_enabled;
+ 	u8 nss_ratio_info;
++	u32 ru_punct_supp_bw;
+ };
+ 
+ struct mlo_timestamp {
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -8421,6 +8421,8 @@ static int __ath12k_mac_register(struct
+ 
+ 	ar->hw->wiphy->interface_modes = ab->hw_params->interface_modes;
+ 
++	ar->hw->wiphy->ru_punct_supp_bw = NL80211_RU_PUNCT_SUPP_BW_80;
++
+ 	ieee80211_hw_set(ar->hw, SIGNAL_DBM);
+ 	ieee80211_hw_set(ar->hw, SUPPORTS_PS);
+ 	ieee80211_hw_set(ar->hw, SUPPORTS_DYNAMIC_PS);
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -67,7 +67,7 @@ struct ath12k_wmi_svc_rdy_ext2_arg {
+ 	u32 hw_min_max_tx_power_2ghz;
+ 	u32 hw_min_max_tx_power_5ghz;
+ 	u32 chwidth_num_peer_caps;
+-	u32 preamble_puncture_bw;
++	u32 ru_punct_supp_bw;
+ 	u32 max_user_per_ppdu_ofdma;
+ 	u32 max_user_per_ppdu_mumimo;
+ 	u32 target_cap_flags;
+@@ -4394,7 +4394,7 @@ static int ath12k_pull_svc_ready_ext2(st
+ 	arg->hw_min_max_tx_power_2ghz = le32_to_cpu(ev->hw_min_max_tx_power_2ghz);
+ 	arg->hw_min_max_tx_power_5ghz = le32_to_cpu(ev->hw_min_max_tx_power_5ghz);
+ 	arg->chwidth_num_peer_caps = le32_to_cpu(ev->chwidth_num_peer_caps);
+-	arg->preamble_puncture_bw = le32_to_cpu(ev->preamble_puncture_bw);
++	arg->ru_punct_supp_bw = le32_to_cpu(ev->ru_punct_supp_bw);
+ 	arg->max_user_per_ppdu_ofdma = le32_to_cpu(ev->max_user_per_ppdu_ofdma);
+ 	arg->max_user_per_ppdu_mumimo = le32_to_cpu(ev->max_user_per_ppdu_mumimo);
+ 	arg->target_cap_flags = le32_to_cpu(ev->target_cap_flags);
+@@ -4436,7 +4436,8 @@ static void ath12k_wmi_eht_caps_parse(st
+ static int
+ ath12k_wmi_tlv_mac_phy_caps_ext_parse(struct ath12k_base *ab,
+ 				      const struct ath12k_wmi_caps_ext_params *caps,
+-				      struct ath12k_pdev *pdev)
++				      struct ath12k_pdev *pdev,
++				      struct ath12k_wmi_svc_rdy_ext2_parse *data)
+ {
+ 	u32 bands;
+ 	int i;
+@@ -4484,6 +4485,9 @@ ath12k_wmi_tlv_mac_phy_caps_ext_parse(st
+ 					  caps->eht_cap_info_internal);
+ 	}
+ 
++	if (data)
++		pdev_cap->ru_punct_supp_bw = data->arg.ru_punct_supp_bw;
++
+ 	return 0;
+ }
+ 
+@@ -4510,7 +4514,8 @@ static int ath12k_wmi_tlv_mac_phy_caps_e
+ 			return -EINVAL;
+ 	}
+ 
+-	ret = ath12k_wmi_tlv_mac_phy_caps_ext_parse(ab, caps, &ab->pdevs[i]);
++	ret = ath12k_wmi_tlv_mac_phy_caps_ext_parse(ab, caps, &ab->pdevs[i],
++						    data);
+ 	if (ret) {
+ 		ath12k_warn(ab,
+ 			    "failed to parse extended MAC PHY capabilities for pdev %d: %d\n",
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -2709,7 +2709,7 @@ struct wmi_service_ready_ext2_event {
+ 	__le32 hw_min_max_tx_power_2ghz;
+ 	__le32 hw_min_max_tx_power_5ghz;
+ 	__le32 chwidth_num_peer_caps;
+-	__le32 preamble_puncture_bw;
++	__le32 ru_punct_supp_bw;
+ 	__le32 max_user_per_ppdu_ofdma;
+ 	__le32 max_user_per_ppdu_mumimo;
+ 	__le32 target_cap_flags;

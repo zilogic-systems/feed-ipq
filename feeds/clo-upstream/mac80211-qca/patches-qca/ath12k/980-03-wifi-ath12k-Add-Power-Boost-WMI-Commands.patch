@@ -1,0 +1,354 @@
+From fd031b6b66fe8a5974014138a778169fbdae2e1d Mon Sep 17 00:00:00 2001
+From: Thomas Wu <quic_wthomas@quicinc.com>
+Date: Mon, 14 Oct 2024 15:04:52 -0700
+Subject: [PATCH 3/6] wifi: ath12k: Add Power Boost - WMI Commands
+
+Power Boost is a feature where firmware will send to
+userspace IQ Calibration data, where AI inference will
+be performed. New TX and TX Mask values will be sent to
+firmware to boost Antenna performance.
+
+Add support for WMI commands and events.
+
+Events received from firmware are described as below:
+
+ath12k_wmi_power_boost_caps() -
+is part of ath12k_wmi_svc_rdy_ext2_parse(). If host driver
+receives WMI_TAG_PDEV_POWER_BOOST_CAPABILITY,
+ath12k_wmi_power_boost_caps() will to see if power boost
+feature is enabled.
+
+ath12k_wmi_power_boost_event() -
+is event handler that indicates that data is ready
+in the shared memory pool. Once this event is received,
+host driver will send start magic number + meta header +
+shared memory pool + end magic number to user space
+via relayfs.
+
+Commands sent to firmware are described as below:
+
+ath12k_wmi_power_boost_mem_addr_cmd() -
+will send the 8 byte aligned address of the shared memory pool
+to firmware.
+
+ath12k_wmi_power_boost_status_cmd() -
+will send the general status commands to firmware such as
+ready, abort, and data.
+
+Patch-dependency: none
+
+Signed-off-by: Thomas Wu <quic_wthomas@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/debug.h |   1 +
+ drivers/net/wireless/ath/ath12k/wmi.c   | 228 ++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.h   |   3 +
+ 3 files changed, 232 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/debug.h b/drivers/net/wireless/ath/ath12k/debug.h
+index d32c7bd..1382315 100644
+--- a/drivers/net/wireless/ath/ath12k/debug.h
++++ b/drivers/net/wireless/ath/ath12k/debug.h
+@@ -38,6 +38,7 @@ enum ath12k_debug_mask {
+ 	ATH12K_DBG_CFR          = 0x01000000,
+ 	ATH12K_DBG_CFR_DUMP     = 0x02000000,
+ 	ATH12K_DBG_AFC          = 0x04000000,
++	ATH12K_DBG_POWER_BOOST  = 0x08000000,
+ 
+ 	/* keep last*/
+ 	ATH12K_DBG_ANY		= 0xffffffff,
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
+index 16f47de..56f09ec 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -30,6 +30,10 @@ struct ath12k_wmi_dma_ring_caps_parse {
+ 	u32 n_dma_ring_caps;
+ };
+ 
++struct ath12k_wmi_power_boost_caps_parse {
++	u32 power_boost_cap;
++};
++
+ struct ath12k_wmi_service_ext_arg {
+ 	u32 default_conc_scan_config_bits;
+ 	u32 default_fw_config_bits;
+@@ -85,9 +89,25 @@ struct ath12k_wmi_svc_rdy_ext2_arg {
+ struct ath12k_wmi_svc_rdy_ext2_parse {
+ 	struct ath12k_wmi_svc_rdy_ext2_arg arg;
+ 	struct ath12k_wmi_dma_ring_caps_parse dma_caps_parse;
++	struct ath12k_wmi_power_boost_caps_parse pb_caps_parse;
+ 	bool dma_ring_cap_done;
+ 	bool spectral_bin_scaling_done;
+ 	bool mac_phy_caps_ext_done;
++	bool hal_reg_done;
++	bool nan_caps_done;
++	bool scan_radio_caps_done;
++	bool twt_caps_done;
++	bool htt_msdu_idx_to_htt_msdu_qtype_done;
++	bool dbs_or_sbs_caps_done;
++	bool cust_bdf_ver_caps_done;
++	bool sw_cal_ver_caps_done;
++	bool hw_tx_power_signed_done;
++	bool coex_fix_chan_caps_done;
++	bool aux_dev_caps_done;
++	bool enhanced_aoa_caps_param_done;
++	bool enhanced_aoa_per_band_caps_done;
++	bool sar_flag_tlv_param_done;
++	bool power_boost_caps_done;
+ };
+ 
+ struct ath12k_wmi_rdy_parse {
+@@ -7188,6 +7208,22 @@ static int ath12k_wmi_tlv_mac_phy_caps_ext(struct ath12k_base *ab, u16 tag,
+ 	return 0;
+ }
+ 
++static void ath12k_wmi_power_boost_caps(struct ath12k_base *ab,
++					const void *ptr, void *data)
++{
++	struct ath12k_wmi_power_boost_caps_parse *pb_caps_parse = data;
++	struct ath12k_wmi_power_boost_capa *pb_capa;
++
++	pb_capa = (struct ath12k_wmi_power_boost_capa *)ptr;
++	pb_caps_parse->power_boost_cap = pb_capa->power_boost_enable;
++
++	ab->power_boost_support = pb_caps_parse->power_boost_cap & WMI_POWER_BOOST_CAP_EN ? 1 : 0;
++
++	if (ab->power_boost_support)
++		ath12k_info(ab, "power boost is found for phy %lx\n",
++			    pb_caps_parse->power_boost_cap & WMI_POWER_BOOST_PHY_MASK);
++}
++
+ static int ath12k_wmi_svc_rdy_ext2_parse(struct ath12k_base *ab,
+ 					 u16 tag, u16 len,
+ 					 const void *ptr, void *data)
+@@ -7236,8 +7272,44 @@ static int ath12k_wmi_svc_rdy_ext2_parse(struct ath12k_base *ab,
+ 			}
+ 
+ 			parse->mac_phy_caps_ext_done = true;
++		} else if (!parse->hal_reg_done) {
++			parse->hal_reg_done = true;
++		} else if (!parse->scan_radio_caps_done) {
++			parse->scan_radio_caps_done = true;
++		} else if (!parse->twt_caps_done) {
++			parse->twt_caps_done = true;
++		} else if (!parse->htt_msdu_idx_to_htt_msdu_qtype_done) {
++			parse->htt_msdu_idx_to_htt_msdu_qtype_done = true;
++		} else if (!parse->dbs_or_sbs_caps_done) {
++			parse->dbs_or_sbs_caps_done = true;
++		} else if (!parse->cust_bdf_ver_caps_done) {
++			parse->cust_bdf_ver_caps_done = true;
++		} else if (!parse->sw_cal_ver_caps_done) {
++			parse->sw_cal_ver_caps_done = true;
++		} else if (!parse->coex_fix_chan_caps_done) {
++			parse->coex_fix_chan_caps_done = true;
++		} else if (!parse->aux_dev_caps_done) {
++			parse->aux_dev_caps_done = true;
++		} else if (!parse->enhanced_aoa_caps_param_done) {
++			parse->enhanced_aoa_caps_param_done = true;
++		} else if (!parse->enhanced_aoa_per_band_caps_done) {
++			parse->enhanced_aoa_per_band_caps_done = true;
++		} else if (!parse->sar_flag_tlv_param_done) {
++			parse->sar_flag_tlv_param_done = true;
++		} else if (!parse->power_boost_caps_done) {
++			ath12k_wmi_power_boost_caps(ab, ptr, &parse->pb_caps_parse);
++
++			parse->power_boost_caps_done = true;
+ 		}
+ 		break;
++	case WMI_TAG_NAN_CAPABILITIES:
++		if (!parse->nan_caps_done)
++			parse->nan_caps_done = true;
++		break;
++	case WMI_TAG_ARRAY_INT32:
++		if (!parse->hw_tx_power_signed_done)
++			parse->hw_tx_power_signed_done = true;
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -15880,6 +15952,159 @@ static void ath12k_wmi_peer_create_conf_event(struct ath12k_base *ab,
+ 		   arg.mac_addr, arg.status);
+ }
+ 
++int ath12k_wmi_power_boost_mem_addr_cmd(struct ath12k *ar, dma_addr_t paddr, u32 size)
++{
++	struct ath12k_wmi_pdev_power_boost_mem_addr_cmd_fixed_param *cmd;
++	struct sk_buff *skb;
++	int ret;
++
++	if (!paddr) {
++		ath12k_warn(ar->ab, "WMI failed power boost cmd invalid paddr ret %d\n", ret);
++		return -EINVAL;
++	}
++
++	skb = ath12k_wmi_alloc_skb(ar->wmi->wmi_ab, sizeof(*cmd));
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (struct ath12k_wmi_pdev_power_boost_mem_addr_cmd_fixed_param *)skb->data;
++
++	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_PDEV_POWER_BOOST_MEM_ADDR_CMD_FIXED_PARAM,
++						 sizeof(*cmd));
++	cmd->pdev_id = cpu_to_le32(ar->pdev->pdev_id);
++	cmd->paddr_aligned_hi = cpu_to_le32(upper_32_bits(paddr));
++	cmd->paddr_aligned_lo = cpu_to_le32(lower_32_bits(paddr));
++	cmd->size = cpu_to_le32(size);
++
++	ret = ath12k_wmi_cmd_send(ar->wmi, skb, WMI_PDEV_POWER_BOOST_MEM_ADDR_CMDID);
++	if (ret) {
++		ath12k_warn(ar->ab, "WMI failed to send powerboost cmd ret %d\n", ret);
++		dev_kfree_skb(skb);
++	}
++
++	ath12k_dbg(ar->ab, ATH12K_DBG_POWER_BOOST,
++		   "WMI power boost cmd addr pdev %d high_addr %x low_addr %x\n",
++		   ar->pdev->pdev_id, cmd->paddr_aligned_hi, cmd->paddr_aligned_lo);
++
++	return ret;
++}
++
++int ath12k_wmi_power_boost_status_cmd(struct ath12k *ar,
++				      struct ath12k_wmi_pdev_power_boost_cmd_fixed_param *arg)
++{
++	struct ath12k_wmi_pdev_power_boost_cmd_fixed_param *cmd;
++	struct sk_buff *skb;
++	int ret;
++
++	skb = ath12k_wmi_alloc_skb(ar->wmi->wmi_ab, sizeof(*cmd));
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (struct ath12k_wmi_pdev_power_boost_cmd_fixed_param *)skb->data;
++	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_PDEV_POWER_BOOST_CMD_FIXED_PARAM,
++						 sizeof(*cmd));
++	cmd->pdev_id = cpu_to_le32(ar->pdev->pdev_id);
++	cmd->status = cpu_to_le32(arg->status);
++	cmd->training_stage = cpu_to_le32(arg->training_stage);
++	cmd->mcs = cpu_to_le32(arg->mcs);
++	cmd->bandwidth = cpu_to_le32(arg->bandwidth);
++	cmd->temperature_degree = cpu_to_le32(arg->temperature_degree);
++	cmd->primary_chan_mhz = cpu_to_le32(arg->primary_chan_mhz);
++	cmd->band_center_freq1 = cpu_to_le32(arg->band_center_freq1);
++	cmd->band_center_freq2 = cpu_to_le32(arg->band_center_freq2);
++	cmd->phy_mode = cpu_to_le32(arg->phy_mode);
++	cmd->tx_evm = cpu_to_le32(arg->tx_evm);
++	cmd->tx_mask_margin = cpu_to_le32(arg->tx_mask_margin);
++
++	ret = ath12k_wmi_cmd_send(ar->wmi, skb, WMI_PDEV_POWER_BOOST_CMDID);
++	if (ret) {
++		ath12k_warn(ar->ab, "WMI failed to send powerboost status cmd ret %d\n", ret);
++		dev_kfree_skb(skb);
++	}
++
++	ath12k_dbg(ar->ab, ATH12K_DBG_POWER_BOOST, "WMI power boost status ar link idx %x pdev_id %d status %d "
++		   "training_stage %d mcs %x bw %x tx_evm %d tx_mask_margin %d\n", ar->link_idx,
++		   cmd->pdev_id, cmd->status, cmd->training_stage, cmd->mcs, cmd->bandwidth,
++		   cmd->tx_evm, cmd->tx_mask_margin);
++
++	return ret;
++}
++
++static void ath12k_wmi_power_boost_event(struct ath12k_base *ab,
++					 struct sk_buff *skb)
++{
++	struct ath12k *ar = NULL;
++	struct ath12k_pdev *pdev;
++	struct ath12k_wmi_pdev_power_boost_event *ev;
++	struct wmi_tlv *tlv;
++	u16 tlv_tag;
++	void *ptr;
++	u32 ev_status, ev_pdev_id, ev_training_stage, ev_mcs, ev_bw;
++	u32 len = 0;
++	int i;
++
++	ptr = skb->data;
++
++	len += sizeof(*ev) + TLV_HDR_SIZE;
++	if (skb->len < len) {
++		ath12k_warn(ab, "pdev power boost event size invalid\n");
++		return;
++	}
++
++	tlv = ptr;
++	tlv_tag = le32_get_bits(tlv->header, WMI_TLV_TAG);
++	if (tlv_tag != WMI_TAG_PDEV_POWER_BOOST_EVENT_FIXED_PARAM) {
++		ath12k_warn(ab, "pdev power boost event receivd with invalid tag %x\n",
++			    tlv_tag);
++		return;
++	}
++
++	ptr += sizeof(*tlv);
++
++	ev = ptr;
++	ev_status = le32_to_cpu(ev->status);
++	ev_pdev_id = le32_to_cpu(ev->pdev_id);
++	ev_training_stage = le32_to_cpu(ev->training_stage);
++	ev_mcs = le32_to_cpu(ev->mcs);
++	ev_bw = le32_to_cpu(ev->bandwidth);
++
++	if (ev_pdev_id > ab->num_radios) {
++		ath12k_warn(ab, "pdev power boost event received invalid pdev_id %x\n",
++			    ev_pdev_id);
++		return;
++	}
++
++	if (ev_status >= WMI_PDEV_POWER_BOOST_EVENT_STATUS_MAX) {
++		ath12k_warn(ab, "pdev power boost event received invalid event status %x\n",
++			    ev_status);
++		return;
++	}
++
++	for (i = 0; i < ab->num_radios; i++) {
++		pdev = &ab->pdevs[i];
++		if (pdev && pdev->pdev_id == ev_pdev_id) {
++			ar = pdev->ar;
++			break;
++		}
++	}
++
++	if (!ar) {
++		ath12k_warn(ab, "pdev power boost event unable to find ar from pdev_id %x\n",
++			    ev_pdev_id);
++		return;
++	}
++
++	ath12k_power_boost_send_event_data(ar, ev);
++
++	ath12k_dbg(ab, ATH12K_DBG_POWER_BOOST,
++		   "powerboost event complete pdev_id %u status %u training stage %u mcs %u bw %u "
++		   "temperature %d primary %u center1 %u center2 %u phy %u size %u\n",
++		   ev->pdev_id, ev->status,
++		   ev->training_stage, ev->mcs, ev->bandwidth, ev->temperature_degree,
++		   ev->primary_chan_mhz, ev->band_center_freq1, ev->band_center_freq2,
++		   ev->phy_mode, ev->size);
++}
++
+ static void ath12k_wmi_op_rx(struct ath12k_base *ab, struct sk_buff *skb)
+ {
+ 	struct wmi_cmd_hdr *cmd_hdr;
+@@ -16089,6 +16314,9 @@ static void ath12k_wmi_op_rx(struct ath12k_base *ab, struct sk_buff *skb)
+ 	case WMI_PEER_CREATE_CONF_EVENTID:
+ 		ath12k_wmi_peer_create_conf_event(ab, skb);
+ 		break;
++	case WMI_PDEV_POWER_BOOST_EVENTID:
++		ath12k_wmi_power_boost_event(ab, skb);
++		break;
+ 	/* TODO: Add remaining events */
+ 	default:
+ 		ath12k_dbg(ab, ATH12K_DBG_WMI, "Unknown eventid: 0x%x\n", id);
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
+index 0211535..a2d3962 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -9224,6 +9224,9 @@ int ath12k_wmi_send_wmi_ctrl_stats_cmd(struct ath12k *ar,
+ int ath12k_wmi_peer_set_cfr_capture_conf(struct ath12k *ar,
+ 					 u32 vdev_id, const u8 *mac,
+ 					 struct wmi_peer_cfr_capture_conf_arg *arg);
++int ath12k_wmi_power_boost_mem_addr_cmd(struct ath12k *ar, dma_addr_t paddr, u32 size);
++int ath12k_wmi_power_boost_status_cmd(struct ath12k *ar,
++				      struct ath12k_wmi_pdev_power_boost_cmd_fixed_param *arg);
+ int ath12k_wmi_mlo_setup(struct ath12k *ar,
+ 			 struct wmi_mlo_setup_params *mlo_params);
+ int ath12k_wmi_mlo_ready(struct ath12k *ar);
+-- 
+2.25.1
+

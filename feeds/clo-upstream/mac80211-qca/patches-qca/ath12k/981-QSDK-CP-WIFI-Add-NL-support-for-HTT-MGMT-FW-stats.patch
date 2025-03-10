@@ -1,0 +1,937 @@
+From f428b61de083b43b68ceb5643949bf49a71632a0 Mon Sep 17 00:00:00 2001
+From: Adwait Nayak <quic_adwaitn@quicinc.com>
+Date: Fri, 15 Nov 2024 11:44:07 +0530
+Subject: [PATCH] QSDK:CP: WIFI: Add NL support for HTT/ MGMT/ FW stats
+
+As per the existing design, debugfs infra is used to
+get htt stats. htt_stats_type can be configured with
+any value ranging from 1 to 62 in order to fetch the
+specific stats.
+(ex: echo [value] > /sys/kernel/debug/ath12k/<hwX>/
+mac0/htt_stats_type)
+
+The stats gets updated into htt_stats file; created
+in the same directory.
+
+Similar process is followed for mgmt and fw stats
+(pdev/ vdev/ beacon stats).
+
+For AI fault detection feature, there is a requirement
+to fetch particular stats using an application (APP).
+Below challenges are faced from APP side with the
+usage of existing debugfs infra:
+-> The configuration and data collection of every stats
+doesn't reside in the same directory. So APP has to do
+multiple file operations from various paths.
+
+-> Not every RDP follows same chip orientation. And,
+using debugfs infra it is bit difficult to understand
+the mapping of chip id and hw.
+
+Ex: Below data does not specify the folders for 2.4G/
+5G/ 6G radio.
+root@OpenWrt:/# ls /sys/kernel/debug/ath12k/
+ipq5332 hw1.0_c000000.wifi/  qcn6432 hw1.0_2/
+qcn6432 hw1.0_1/
+
+So it is bit complicated for the APP to understand the
+collected stats belongs to which chip_id/ radio.
+
+Hence, the request was to enable NL support and
+iw commmand to dump the HTT/ MGMT/ FW stats on
+screen.
+
+This change takes care of the above requirement.
+
+iw command introduced:
+1) For htt stats:
+MLO: iw dev wlanX get wifistats -l <link_id> <value>
+Non_MLO:iw phy <phyname> get wifistats <value>
+
+Ex:
+root@OpenWrt:/# iw dev wlan0 get wifistats -l 0 6
+HTT_TX_TQM_CMN_STATS_TLV:
+mac_id = 0
+max_cmdq_id = 0
+list_mpdu_cnt_hist_intvl = 30
+add_msdu = 0
+q_empty = 0
+q_not_empty = 0
+drop_notification = 0
+desc_threshold = 0
+hwsch_tqm_invalid_status = 0
+missed_tqm_gen_mpdus = 0
+total_msduq_timestamp_updates = 0
+total_msduq_timestamp_updates_by_get_mpdu_head_info_cmd = 0
+total_msduq_timestamp_updates_by_empty_to_nonempty_status = 0
+total_get_mpdu_head_info_cmds_by_sched_algo_la_query = 0
+total_get_mpdu_head_info_cmds_by_tac = 0
+total_gen_mpdu_cmds_by_sched_algo_la_query = 0
+active_tqm_tids = 0
+inactive_tqm_tids = 0
+tqm_active_msduq_flows = 0
+.....
+
+2) For FW stats:
+MLO: iw dev wlanX get fwstats -l <link_id> <pdev/vdev/beacon>
+Non_MLO:iw phy <phyname> get fwstats <pdev/vdev/beacon>
+Ex:
+root@OpenWrt:/# iw dev wlan0 get fwstats -l 0 pdev
+             ath12k PDEV stats
+             =================
+
+           Channel noise floor        -99
+              Channel TX power         54
+                TX frame count    2665360
+                RX frame count   52493404
+                RX clear count   58985908
+                   Cycle count   80560889
+               PHY error count         20
+                soc drop count          0
+
+          ath12k PDEV TX stats
+          ====================
+
+            HTT cookies queued        157
+             HTT cookies disp.        157
+                   MSDU queued        837
+                   MPDU queued        837
+                 MSDUs dropped          0
+                  Local enqued        680
+                   Local freed        679
+                     HW queued       1164
+                  PPDUs reaped       1163
+                 Num underruns          0
+
+3) For Mgmt stats:
+MLO: iw dev wlanX get mgmtstats -l <link_id> <dump>
+Non_MLO:iw phy <phyname> get mgmtstats <dump>
+Ex:
+root@OpenWrt:/# iw dev wlan0 get mgmtstats -l 0 dump
+MGMT frame stats for vdev 0 :
+TX stats :
+Total TX Management = 154
+Total TX Management fail count = 0
+TX Offchan Management count= 0
+TX Offchan Fail count= 0
+  Success frames:
+       assoc_req: 0
+       assoc_resp: 1
+       reassoc_req: 0
+       reassoc_resp: 0
+
+Signed-off-by: Adwait Nayak <quic_adwaitn@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h        |   7 +
+ drivers/net/wireless/ath/ath12k/debugfs.c     |   4 +-
+ .../wireless/ath/ath12k/debugfs_htt_stats.c   |  32 ++
+ .../wireless/ath/ath12k/debugfs_htt_stats.h   |  24 +
+ drivers/net/wireless/ath/ath12k/mac.c         |  22 +
+ drivers/net/wireless/ath/ath12k/vendor.c      | 441 +++++++++++++++++-
+ drivers/net/wireless/ath/ath12k/vendor.h      |  34 ++
+ drivers/net/wireless/ath/ath12k/wmi.c         |   2 +
+ 8 files changed, 561 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 7d50873..e315a60 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -382,6 +382,12 @@ struct ath12k_mgmt_frame_stats {
+ 	u32 rx_cnt[ATH12K_STATS_MGMT_FRM_TYPE_MAX];
+ 	u32 tx_compl_succ[ATH12K_STATS_MGMT_FRM_TYPE_MAX];
+ 	u32 tx_compl_fail[ATH12K_STATS_MGMT_FRM_TYPE_MAX];
++	u64 aggr_tx_mgmt_cnt;
++	u64 aggr_rx_mgmt;
++	u64 aggr_tx_mgmt_fail_cnt;
++	u64 aggr_tx_offchan_mgmt;
++	u64 aggr_tx_offchan_fail;
++	u32 buf_len;
+ };
+ 
+ struct ath12k_tx_conf {
+@@ -874,6 +880,7 @@ struct ath12k_fw_stats {
+ 	struct list_head vdevs;
+ 	struct list_head bcn;
+ 	bool en_vdev_stats_ol;
++	u32 buf_len;
+ };
+ 
+ struct ath12k_dbg_htt_stats {
+diff --git a/drivers/net/wireless/ath/ath12k/debugfs.c b/drivers/net/wireless/ath/ath12k/debugfs.c
+index 86c7554..dace63c 100644
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -742,8 +742,8 @@ void ath12k_debugfs_wmi_ctrl_stats(struct ath12k *ar)
+ 	init_completion(&ar->debug.wmi_ctrl_path_stats_rcvd);
+ }
+ 
+-static int ath12k_debugfs_fw_stats_request(struct ath12k *ar,
+-					   struct stats_request_params *req_param)
++int ath12k_debugfs_fw_stats_request(struct ath12k *ar,
++				    struct stats_request_params *req_param)
+ {
+ 	struct ath12k_base *ab = ar->ab;
+ 	unsigned long timeout, time_left;
+diff --git a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
+index e747fd3..8ef99d9 100644
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
+@@ -3309,16 +3309,40 @@ htt_print_tx_de_eapol_packets_stats_tlv(const void *tag_buf,
+ 			 "HTT_TX_DE_EAPOL_PACKETS_STATS_TLV:\n");
+ 	len += scnprintf(buf + len, buf_len - len, "m1_packets = %u\n",
+ 			 htt_stats_buf->m1_packets);
++	len += scnprintf(buf + len, buf_len - len, "m1_success = %u\n",
++			 htt_stats_buf->m1_success);
++	len += scnprintf(buf + len, buf_len - len, "m1_compl_fail = %u\n",
++			 htt_stats_buf->m1_compl_fail);
+ 	len += scnprintf(buf + len, buf_len - len, "m2_packets = %u\n",
+ 			 htt_stats_buf->m2_packets);
++	len += scnprintf(buf + len, buf_len - len, "m2_success = %u\n",
++			 htt_stats_buf->m2_success);
++	len += scnprintf(buf + len, buf_len - len, "m2_compl_fail = %u\n",
++			 htt_stats_buf->m2_compl_fail);
+ 	len += scnprintf(buf + len, buf_len - len, "m3_packets = %u\n",
+ 			 htt_stats_buf->m3_packets);
++	len += scnprintf(buf + len, buf_len - len, "m3_success = %u\n",
++			 htt_stats_buf->m3_success);
++	len += scnprintf(buf + len, buf_len - len, "m3_compl_fail = %u\n",
++			 htt_stats_buf->m3_compl_fail);
+ 	len += scnprintf(buf + len, buf_len - len, "m4_packets = %u\n",
+ 			 htt_stats_buf->m4_packets);
++	len += scnprintf(buf + len, buf_len - len, "m4_success = %u\n",
++			 htt_stats_buf->m4_success);
++	len += scnprintf(buf + len, buf_len - len, "m4_compl_fail = %u\n",
++			 htt_stats_buf->m4_compl_fail);
+ 	len += scnprintf(buf + len, buf_len - len, "g1_packets = %u\n",
+ 			 htt_stats_buf->g1_packets);
++	len += scnprintf(buf + len, buf_len - len, "g1_success = %u\n",
++			 htt_stats_buf->g1_success);
++	len += scnprintf(buf + len, buf_len - len, "g1_compl_fail = %u\n",
++			 htt_stats_buf->g1_compl_fail);
+ 	len += scnprintf(buf + len, buf_len - len, "g2_packets = %u\n",
+ 			 htt_stats_buf->g2_packets);
++	len += scnprintf(buf + len, buf_len - len, "g2_success = %u\n",
++			 htt_stats_buf->g2_success);
++	len += scnprintf(buf + len, buf_len - len, "g2_compl_fail = %u\n",
++			 htt_stats_buf->g2_compl_fail);
+ 	len += scnprintf(buf + len, buf_len - len, "rc4_packets = %u\n",
+ 			   htt_stats_buf->rc4_packets);
+ 	len += scnprintf(buf + len, buf_len - len, "eap_packets = %u\n",
+@@ -3382,6 +3406,8 @@ htt_print_tx_de_classify_failed_stats_tlv(const void *tag_buf,
+ 			   htt_stats_buf->eapol_duplicate_m3);
+ 	len += scnprintf(buf + len, buf_len - len, "eapol_duplicate_m4 = %u\n",
+ 			   htt_stats_buf->eapol_duplicate_m4);
++	len += scnprintf(buf + len, buf_len - len, "eapol_invalid_mac = %u\n",
++			   htt_stats_buf->eapol_invalid_mac);
+ 
+ 	stats_req->buf_len = len;
+ }
+@@ -3535,6 +3561,12 @@ htt_print_tx_de_enqueue_discard_stats_tlv(const void *tag_buf,
+ 			 htt_stats_buf->local_frames);
+ 	len += scnprintf(buf + len, buf_len - len, "is_ext_msdu = %u\n",
+ 			 htt_stats_buf->is_ext_msdu);
++	len += scnprintf(buf + len, buf_len - len, "mlo_invalid_routing_discard = %u\n",
++			 htt_stats_buf->mlo_invalid_routing_discard);
++	len += scnprintf(buf + len, buf_len - len, "mlo_invalid_routing_dup_entry_discard = %u\n",
++			 htt_stats_buf->mlo_invalid_routing_dup_entry_discard);
++	len += scnprintf(buf + len, buf_len - len, "discard_peer_unauthorized_pkts = %u\n",
++			 htt_stats_buf->discard_peer_unauthorized_pkts);
+ 
+ 	stats_req->buf_len = len;
+ }
+diff --git a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
+index f4545ab..d48b708 100644
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
+@@ -1520,6 +1520,18 @@ struct htt_tx_de_eapol_packets_stats_tlv {
+ 	u32 eapol_start_packets;
+ 	u32 eapol_logoff_packets;
+ 	u32 eapol_encap_asf_packets;
++	u32 m1_success;
++	u32 m1_compl_fail;
++	u32 m2_success;
++	u32 m2_compl_fail;
++	u32 m3_success;
++	u32 m3_compl_fail;
++	u32 m4_success;
++	u32 m4_compl_fail;
++	u32 g1_success;
++	u32 g1_compl_fail;
++	u32 g2_success;
++	u32 g2_compl_fail;
+ };
+ 
+ struct htt_tx_de_classify_failed_stats_tlv {
+@@ -1542,6 +1554,7 @@ struct htt_tx_de_classify_failed_stats_tlv {
+ 	u32 incomplete_llc;
+ 	u32 eapol_duplicate_m3;
+ 	u32 eapol_duplicate_m4;
++	u32 eapol_invalid_mac;
+ };
+ 
+ struct htt_tx_de_classify_stats_tlv {
+@@ -1606,6 +1619,9 @@ struct htt_tx_de_enqueue_discard_stats_tlv {
+ 	u32 discarded_pkts;
+ 	u32 local_frames;
+ 	u32 is_ext_msdu;
++	u32 mlo_invalid_routing_discard;
++	u32 mlo_invalid_routing_dup_entry_discard;
++	u32 discard_peer_unauthorized_pkts;
+ };
+ 
+ struct htt_tx_de_compl_stats_tlv {
+@@ -2900,6 +2916,8 @@ void ath12k_debugfs_htt_stats_init(struct ath12k *ar);
+ void ath12k_debugfs_htt_ext_stats_handler(struct ath12k_base *ab,
+ 					  struct sk_buff *skb);
+ int ath12k_debugfs_htt_stats_req(struct ath12k *ar);
++int ath12k_debugfs_fw_stats_request(struct ath12k *ar,
++				    struct stats_request_params *req_param);
+ 
+ #else /* CPTCFG_ATH12K_DEBUGFS */
+ 
+@@ -2917,6 +2935,12 @@ static inline int ath12k_debugfs_htt_stats_req(struct ath12k *ar)
+ 	return 0;
+ }
+ 
++static inline
++int ath12k_debugfs_fw_stats_request(struct ath12k *ar,
++				    struct stats_request_params *req_param)
++{
++	return 0;
++}
+ #endif /* CPTCFG_ATH12K_DEBUGFS */
+ 
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 7c88ead..e25cf40 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -10584,10 +10584,16 @@ static int ath12k_mac_mgmt_tx_wmi(struct ath12k *ar, struct ath12k_link_vif *arv
+ 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+ 	dma_addr_t paddr;
+ 	struct ath12k_skb_cb *skb_cb;
++	struct ath12k_mgmt_frame_stats *stats;
+ 	int buf_id;
+ 	int ret;
+ 	bool link_agnostic;
+ 	bool tx_params_valid = false;
++	struct ieee80211_vif *vif;
++	struct ath12k_vif *ahvif;
++
++	vif = info->control.vif;
++	ahvif = ath12k_vif_to_ahvif(vif);
+ 
+ 	spin_lock_bh(&ar->txmgmt_idr_lock);
+ 	buf_id = idr_alloc(&ar->txmgmt_idr, skb, 0,
+@@ -10631,8 +10637,22 @@ static int ath12k_mac_mgmt_tx_wmi(struct ath12k *ar, struct ath12k_link_vif *arv
+ 
+ 	skb_cb->paddr = paddr;
+ 
++	stats = &ahvif->mgmt_stats;
++	spin_lock_bh(&ar->txmgmt_idr_lock);
++	stats->aggr_tx_mgmt_cnt++;
++	spin_unlock_bh(&ar->txmgmt_idr_lock);
++
+ 	if (info->flags & IEEE80211_TX_CTL_TX_OFFCHAN) {
+ 		ret = ath12k_wmi_offchan_mgmt_send(ar, arvif->vdev_id, buf_id, skb);
++		if (ret) {
++			spin_lock_bh(&ar->txmgmt_idr_lock);
++			stats->aggr_tx_offchan_fail++;
++			spin_unlock_bh(&ar->txmgmt_idr_lock);
++		} else {
++			spin_lock_bh(&ar->txmgmt_idr_lock);
++			stats->aggr_tx_offchan_mgmt++;
++			spin_unlock_bh(&ar->txmgmt_idr_lock);
++		}
+ 	} else {
+ 		if (ar->cfr.cfr_enabled && ieee80211_is_probe_resp(hdr->frame_control) &&
+ 		    peer_is_in_cfr_unassoc_pool(ar, hdr->addr1))
+@@ -11298,6 +11318,7 @@ static void ath12k_mac_op_tx(struct ieee80211_hw *hw,
+ 			ieee80211_free_txskb(ah->hw, skb);
+ 			spin_lock_bh(&ar->data_lock);
+ 			mgmt_stats->tx_fail_cnt[frm_type]++;
++			mgmt_stats->aggr_tx_mgmt_fail_cnt++;
+ 			spin_unlock_bh(&ar->data_lock);
+ 			rcu_read_unlock();
+ 			return;
+@@ -11310,6 +11331,7 @@ static void ath12k_mac_op_tx(struct ieee80211_hw *hw,
+ 			ieee80211_free_txskb(ah->hw, skb);
+ 			spin_lock_bh(&ar->data_lock);
+ 			mgmt_stats->tx_fail_cnt[frm_type]++;
++			mgmt_stats->aggr_tx_mgmt_fail_cnt++;
+ 			spin_unlock_bh(&ar->data_lock);
+ 		} else {
+ 			spin_lock_bh(&ar->data_lock);
+diff --git a/drivers/net/wireless/ath/ath12k/vendor.c b/drivers/net/wireless/ath/ath12k/vendor.c
+index 10074ff..b7d4399 100644
+--- a/drivers/net/wireless/ath/ath12k/vendor.c
++++ b/drivers/net/wireless/ath/ath12k/vendor.c
+@@ -13,6 +13,7 @@
+ #include "telemetry.h"
+ #include "sawf.h"
+ #include "dp_rx.h"
++#include "debugfs_htt_stats.h"
+ #include "pci.h"
+ #include "power_boost.h"
+ 
+@@ -130,6 +131,11 @@ ath12k_telemetric_req_policy[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MAX + 1] = {
+ 	[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_STA_MAC] = {.type = NLA_BINARY,
+ 						     .len = ETH_ALEN},
+ 	[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_SERVICEID] = {.type = NLA_U8},
++	[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK] = {.type = NLA_U8},
++	[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE] = {.type = NLA_U8},
++	[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE] = {.type = NLA_U8},
++	[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA] = {.type = NLA_BINARY,
++						.len = WIFISTATS_DATA_MAX_SIZE},
+ };
+ 
+ static const struct nla_policy
+@@ -1155,6 +1161,362 @@ static int telemetry_build_nd_send_reply_msg(struct wiphy *wiphy, struct stats_c
+ 	return ret;
+ }
+ 
++static int ath12k_vendor_configure_htt_stats(struct wiphy *wiphy,
++					     struct wireless_dev *wdev,
++					     struct stats_config *cfg)
++{
++	struct ath12k *ar = NULL;
++	struct debug_htt_stats_req *stats_req;
++	struct sk_buff *msg = NULL;
++	struct nlattr *attr;
++	int ret = 0;
++
++	ar = ath12k_get_ar_from_wdev(wdev, cfg->link_id);
++	if (!ar)
++		return -ENODATA;
++
++	ar->debug.htt_stats.type = cfg->htt_stats_type;
++
++	if (ar->debug.htt_stats.type == ATH12K_DBG_HTT_EXT_STATS_PEER_INFO ||
++	    ar->debug.htt_stats.type == ATH12K_DBG_HTT_EXT_PEER_CTRL_PATH_TXRX_STATS)
++		return -EPERM;
++
++	mutex_lock(&ar->conf_mutex);
++	if (ar->state != ATH12K_STATE_ON &&
++	    ar->ab->fw_mode != ATH12K_FIRMWARE_MODE_FTM) {
++		ret = -ENETDOWN;
++		goto err_unlock;
++	}
++
++	stats_req = vzalloc(sizeof(*stats_req) + ATH12K_HTT_STATS_BUF_SIZE);
++	if (!stats_req) {
++		ret = -ENOMEM;
++		goto err_unlock;
++	}
++
++	memset(stats_req, 0, sizeof(struct debug_htt_stats_req));
++
++	ar->debug.htt_stats.stats_req = stats_req;
++	stats_req->type = ar->debug.htt_stats.type;
++	stats_req->cfg_param[0] = ar->debug.htt_stats.cfg_param[0];
++	stats_req->cfg_param[1] = ar->debug.htt_stats.cfg_param[1];
++	stats_req->cfg_param[2] = ar->debug.htt_stats.cfg_param[2];
++	stats_req->cfg_param[3] = ar->debug.htt_stats.cfg_param[3];
++	stats_req->override_cfg_param = !!stats_req->cfg_param[0] ||
++		!!stats_req->cfg_param[1] ||
++		!!stats_req->cfg_param[2] ||
++		!!stats_req->cfg_param[3];
++
++	ret = ath12k_debugfs_htt_stats_req(ar);
++	if (ret < 0)
++		goto out;
++
++	if (stats_req->buf_len == 0) {
++		ath12k_err(NULL, "stats_req->buf doesn't have any data\n");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	msg = cfg80211_vendor_cmd_alloc_reply_skb(wiphy, stats_req->buf_len * 2);
++	if (!msg) {
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	attr = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
++	if (!attr) {
++		kfree_skb(msg);
++		ret = -ENOBUFS;
++		goto out;
++	}
++
++	if (nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_LEVEL, cfg->lvl) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_OBJECT, cfg->obj) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_TYPE, cfg->type) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_SERVICEID, cfg->serviceid) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK, cfg->link_id) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE,
++		       cfg->htt_stats_type) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE,
++		       cfg->fw_stats_type) ||
++	    nla_put_flag(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_AGGREGATE)) {
++		kfree_skb(msg);
++		ret = -ENOBUFS;
++		goto out;
++	}
++
++	if (nla_put(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA,
++		    stats_req->buf_len, stats_req->buf)) {
++		kfree_skb(msg);
++		ret = -EINVAL;
++		goto out;
++	}
++
++	ret = cfg80211_vendor_cmd_reply(msg);
++	mutex_unlock(&ar->conf_mutex);
++	vfree(stats_req);
++	return 0;
++out:
++	vfree(stats_req);
++	ar->debug.htt_stats.stats_req = NULL;
++err_unlock:
++	mutex_unlock(&ar->conf_mutex);
++	return ret;
++}
++
++static int ath12k_vendor_get_mgmt_stats(struct wiphy *wiphy,
++					struct wireless_dev *wdev,
++					struct stats_config *cfg)
++{
++	struct ath12k *ar = NULL;
++	struct ath12k_mgmt_frame_stats *mgmt_stats;
++	struct ath12k_link_vif *arvif = NULL;
++	struct sk_buff *msg = NULL;
++	int size = (TARGET_NUM_VDEVS - 1) * 1500;
++	char *buf;
++	struct nlattr *attr;
++	int len = 0, i, ret = 0;
++	const char *mgmt_frm_type[ATH12K_STATS_MGMT_FRM_TYPE_MAX - 1] = {
++		"assoc_req", "assoc_resp",
++		"reassoc_req", "reassoc_resp",
++		"probe_req", "probe_resp",
++		"timing_advertisement", "reserved",
++		"beacon", "atim", "disassoc",
++		"auth", "deauth", "action", "action_no_ack"};
++
++	ar = ath12k_get_ar_from_wdev(wdev, cfg->link_id);
++	if (!ar)
++		return -ENODATA;
++
++	if (ar->state != ATH12K_STATE_ON)
++		return -ENETDOWN;
++
++	buf = kzalloc(size, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	mutex_lock(&ar->conf_mutex);
++	spin_lock_bh(&ar->data_lock);
++	list_for_each_entry(arvif, &ar->arvifs, list) {
++		if (!arvif)
++			break;
++
++		if (arvif->ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR ||
++		    ath12k_mac_is_bridge_vdev(arvif))
++			continue;
++		mgmt_stats = &arvif->ahvif->mgmt_stats;
++		len += scnprintf(buf + len, size - len,
++				 "MGMT frame stats for vdev %u :\n",
++				 arvif->vdev_id);
++		len += scnprintf(buf + len, size - len, "TX stats :\n ");
++		len += scnprintf(buf + len, size - len,
++				 "Total TX Management = %llu\n",
++				 mgmt_stats->aggr_tx_mgmt_cnt);
++		len += scnprintf(buf + len, size - len,
++				 "Total TX Management fail count = %llu\n",
++				 mgmt_stats->aggr_tx_mgmt_fail_cnt);
++		len += scnprintf(buf + len, size - len,
++				 "TX Offchan Management count= %llu\n",
++				 mgmt_stats->aggr_tx_offchan_mgmt);
++		len += scnprintf(buf + len, size - len,
++				 "TX Offchan Fail count= %llu\n",
++				 mgmt_stats->aggr_tx_offchan_fail);
++		len += scnprintf(buf + len, size - len, "  Success frames:\n");
++		for (i = 0; i < ATH12K_STATS_MGMT_FRM_TYPE_MAX - 1; i++)
++			len += scnprintf(buf + len, size - len, "    %s: %d\n",
++				mgmt_frm_type[i], mgmt_stats->tx_succ_cnt[i]);
++
++		len += scnprintf(buf + len, size - len, "  Failed frames:\n");
++		for (i = 0; i < ATH12K_STATS_MGMT_FRM_TYPE_MAX - 1; i++)
++			len += scnprintf(buf + len, size - len, "       %s: %d\n",
++				 mgmt_frm_type[i], mgmt_stats->tx_fail_cnt[i]);
++
++		len += scnprintf(buf + len, size - len, "  RX stats :\n");
++		len += scnprintf(buf + len, size - len,
++				 "Total Rx Management= %llu\n",
++				 mgmt_stats->aggr_rx_mgmt);
++		len += scnprintf(buf + len, size - len, "  Success frames:\n");
++		for (i = 0; i < ATH12K_STATS_MGMT_FRM_TYPE_MAX - 1; i++)
++			len += scnprintf(buf + len, size - len, "    %s: %d\n",
++				mgmt_frm_type[i], mgmt_stats->rx_cnt[i]);
++
++		len += scnprintf(buf + len, size - len,
++				 " Tx completion stats :\n");
++		len += scnprintf(buf + len, size - len,
++				 " success completions:\n");
++
++		for (i = 0; i < ATH12K_STATS_MGMT_FRM_TYPE_MAX - 1; i++)
++			len += scnprintf(buf + len, size - len, "  %s: %d\n",
++				mgmt_frm_type[i], mgmt_stats->tx_compl_succ[i]);
++
++		len += scnprintf(buf + len, size - len,
++				 "failure completions:\n");
++
++		for (i = 0; i < ATH12K_STATS_MGMT_FRM_TYPE_MAX - 1; i++)
++			len += scnprintf(buf + len, size - len, " %s: %d\n",
++				mgmt_frm_type[i], mgmt_stats->tx_compl_fail[i]);
++		len += scnprintf(buf + len, size - len, "  Link Stats :\n ");
++		len += scnprintf(buf + len, size - len,
++				 "Number of connected clients = %d\n",
++				 arvif->num_stations);
++	}
++
++	spin_unlock_bh(&ar->data_lock);
++	if (len > size)
++		len = size;
++
++	msg = cfg80211_vendor_cmd_alloc_reply_skb(wiphy, size);
++	if (!msg) {
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	attr = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
++	if (!attr) {
++		kfree_skb(msg);
++		ret = -ENOBUFS;
++		goto out;
++	}
++
++	if (nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_LEVEL, cfg->lvl) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_OBJECT, cfg->obj) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_TYPE, cfg->type) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_SERVICEID, cfg->serviceid) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK, cfg->link_id) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE,
++		       cfg->htt_stats_type) ||
++	    nla_put_flag(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_AGGREGATE)) {
++		kfree_skb(msg);
++		ret = -ENOBUFS;
++		goto out;
++	}
++
++	if (nla_put(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA, len, buf)) {
++		kfree_skb(msg);
++		ret = -EINVAL;
++		goto out;
++	}
++
++	ret = cfg80211_vendor_cmd_reply(msg);
++	mutex_unlock(&ar->conf_mutex);
++	kfree(buf);
++	return 0;
++out:
++	mutex_unlock(&ar->conf_mutex);
++	kfree(buf);
++	return ret;
++}
++
++static int ath12k_vendor_get_fw_stats(struct wiphy *wiphy,
++				      struct wireless_dev *wdev,
++				      struct stats_config *cfg)
++{
++	struct ath12k *ar = NULL;
++	struct ath12k_fw_stats *fw_stats;
++	struct stats_request_params req_param;
++	struct ath12k_link_vif *arvif;
++	struct sk_buff *msg = NULL;
++	void *stats_buf = NULL;
++	struct nlattr *attr;
++	int ret = 0;
++
++	ar = ath12k_get_ar_from_wdev(wdev, cfg->link_id);
++	if (!ar)
++		return -ENODATA;
++
++	mutex_lock(&ar->conf_mutex);
++
++	if (ar->state != ATH12K_STATE_ON &&
++	    ar->ab->fw_mode != ATH12K_FIRMWARE_MODE_FTM) {
++		ret = -ENETDOWN;
++		goto err_unlock;
++	}
++
++	stats_buf = kzalloc(ATH12K_FW_STATS_BUF_SIZE, GFP_KERNEL);
++	if (!stats_buf) {
++		ret = -ENOMEM;
++		goto err_unlock;
++	}
++
++	if (cfg->fw_stats_type == PDEV_STATS) {
++		req_param.pdev_id = ar->pdev->pdev_id;
++		req_param.vdev_id = 0;
++		req_param.stats_id = WMI_REQUEST_PDEV_STAT;
++	}
++
++	if (cfg->fw_stats_type == VDEV_STATS) {
++		req_param.pdev_id = ar->pdev->pdev_id;
++		req_param.vdev_id = 0;
++		req_param.stats_id = WMI_REQUEST_VDEV_STAT;
++	}
++
++	if (cfg->fw_stats_type == BEACON_STATS) {
++		req_param.stats_id = WMI_REQUEST_BCN_STAT;
++		req_param.pdev_id = ar->pdev->pdev_id;
++		list_for_each_entry(arvif, &ar->arvifs, list) {
++			if (!arvif->is_up)
++				continue;
++
++			req_param.vdev_id = arvif->vdev_id;
++		}
++	}
++
++	ret = ath12k_debugfs_fw_stats_request(ar, &req_param);
++	if (ret)
++		goto out;
++
++	fw_stats = &ar->fw_stats;
++	ath12k_wmi_fw_stats_fill(ar, &ar->fw_stats, req_param.stats_id, stats_buf);
++
++	msg = cfg80211_vendor_cmd_alloc_reply_skb(wiphy, ATH12K_FW_STATS_BUF_SIZE);
++	if (!msg) {
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	attr = nla_nest_start(msg, NL80211_ATTR_VENDOR_DATA);
++	if (!attr) {
++		kfree_skb(msg);
++		ret = -ENOBUFS;
++		goto out;
++	}
++
++	if (nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_LEVEL, cfg->lvl) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_OBJECT, cfg->obj) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_TYPE, cfg->type) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_SERVICEID, cfg->serviceid) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK, cfg->link_id) ||
++	    nla_put_u8(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE,
++		       cfg->fw_stats_type) ||
++	    nla_put_flag(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_AGGREGATE)) {
++		kfree_skb(msg);
++		ret = -ENOBUFS;
++		goto out;
++	}
++
++	if (nla_put(msg, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA,
++		    fw_stats->buf_len, stats_buf)) {
++		kfree_skb(msg);
++		ret = -EINVAL;
++		goto out;
++	}
++
++	ret = cfg80211_vendor_cmd_reply(msg);
++	if (cfg->fw_stats_type == BEACON_STATS) {
++		spin_lock_bh(&ar->data_lock);
++		ath12k_fw_stats_bcn_free(&ar->fw_stats.bcn);
++		spin_unlock_bh(&ar->data_lock);
++	}
++	mutex_unlock(&ar->conf_mutex);
++	kfree(stats_buf);
++	return 0;
++out:
++	kfree(stats_buf);
++err_unlock:
++	mutex_unlock(&ar->conf_mutex);
++	return ret;
++}
++
+ static int ath12k_vendor_telemetry_getstats(struct wiphy *wiphy,
+ 					    struct wireless_dev *wdev,
+ 					    const void *data,
+@@ -1170,9 +1532,6 @@ static int ath12k_vendor_telemetry_getstats(struct wiphy *wiphy,
+ 	u16 peer_id = 0xFFFF;
+ 	u8 mac_addr[ETH_ALEN] = { 0 };
+ 
+-	if (!ath12k_sawf_enable)
+-		return -EOPNOTSUPP;
+-
+ 	ret = nla_parse(tb, QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MAX, data, data_len,
+ 			ath12k_telemetric_req_policy, NULL);
+ 
+@@ -1206,6 +1565,82 @@ static int ath12k_vendor_telemetry_getstats(struct wiphy *wiphy,
+ 	if (!(cfg.feat))
+ 		return -EINVAL;
+ 
++	if (cfg.feat & STATS_FEAT_FLG_HTT) {
++		if (wdev->valid_links) { /* MLO case */
++			if (!tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK])
++				return -EINVAL;
++			cfg.link_id = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK]);
++			if (!(wdev->valid_links & BIT(cfg.link_id)))
++				return -ENOLINK;
++		} else { /* NON-MLO case */
++			if (!tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK])
++				cfg.link_id = 0;
++			else
++				return -EINVAL;
++		}
++		if (tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE])
++			cfg.htt_stats_type =
++				nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE]);
++
++		ret = ath12k_vendor_configure_htt_stats(wiphy, wdev, &cfg);
++		if (ret) {
++			ath12k_err(NULL, "Failed to configure HTT stats %d\n", ret);
++			return ret;
++		}
++		return 0;
++	}
++
++	if (cfg.feat & STATS_FEAT_FLG_MGMT) {
++		if (wdev->valid_links) { /* MLO case */
++			if (!tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK])
++				return -EINVAL;
++			cfg.link_id = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK]);
++			if (!(wdev->valid_links & BIT(cfg.link_id)))
++				return -ENOLINK;
++		} else { /* NON-MLO case */
++			if (!tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK])
++				cfg.link_id = 0;
++			else
++				return -EINVAL;
++		}
++
++		ret = ath12k_vendor_get_mgmt_stats(wiphy, wdev, &cfg);
++		if (ret) {
++			ath12k_err(NULL, "Failed to get mgmt stats %d\n", ret);
++			return ret;
++		}
++		return 0;
++	}
++
++	if (cfg.feat & STATS_FEAT_FLG_FWSTATS) {
++		if (wdev->valid_links) { /* MLO case */
++			if (!tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK])
++				return -EINVAL;
++			cfg.link_id = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK]);
++			if (!(wdev->valid_links & BIT(cfg.link_id)))
++				return -ENOLINK;
++		} else { /* NON-MLO case */
++			if (!tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK])
++				cfg.link_id = 0;
++			else
++				return -EINVAL;
++		}
++
++		if (tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE])
++			cfg.fw_stats_type =
++				nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE]);
++
++		ret = ath12k_vendor_get_fw_stats(wiphy, wdev, &cfg);
++		if (ret) {
++			ath12k_err(NULL, "Failed to get fw stats %d\n", ret);
++			return ret;
++		}
++		return 0;
++	}
++
++	if (!ath12k_sawf_enable)
++		return -EOPNOTSUPP;
++
+ 	ab = ath12k_sawf_get_ab_from_netdev(wdev->netdev, mac_addr, &peer_id);
+ 	if (!ab)
+ 		return -ENODATA;
+diff --git a/drivers/net/wireless/ath/ath12k/vendor.h b/drivers/net/wireless/ath/ath12k/vendor.h
+index fe85e72..532b009 100644
+--- a/drivers/net/wireless/ath/ath12k/vendor.h
++++ b/drivers/net/wireless/ath/ath12k/vendor.h
+@@ -365,6 +365,17 @@ enum qca_wlan_vendor_sdwf_sla_breach_type {
+  *
+  * @QCA_WLAN_VENDOR_ATTR_TELEMETRIC_SERVICEID: Defines serviceid for sawf stats.
+  *
++ * @QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK: Defines MLD link in case of mlo
++ * enabled configuration.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE: Defines htt stats types
++ *
++ * @QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE: Defines FW stats types
++ * such as pdev stats/ vdev stats/ beacon stats per vdev
++ *
++ * @QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA: Defines buffer data for
++ * HTT stats/ mgmt stats/ various fw stats
++ *
+  * @QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MAX: Defines maximum attribute counts to be
+  * used in QCA_NL80211_VENDOR_SUBCMD_TELEMETRIC_DATA vendor command request.
+  */
+@@ -377,6 +388,9 @@ enum qca_wlan_vendor_attr_telemetric {
+ 	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_STA_MAC,
+ 	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_SERVICEID,
+ 	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MLD_LINK,
++	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_HTT_STATS_TYPE,
++	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_FW_STATS_TYPE,
++	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA,
+ 
+ 	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_AFTER_LAST,
+ 	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MAX =
+@@ -641,6 +655,18 @@ enum stats_type {
+ 	STATS_TYPE_MAX = STATS_TYPE_CTRL,
+ };
+ 
++/**
++ * enum fw_stats_type: Defines the Stats for specific category
++ * @PDEV_STATS: Stats for PDEV
++ * @VDEV_STATS: Stats for VDEV
++ * @BEACON_STATS:  Beacon stats per vdev
++ */
++enum fw_stats_type {
++	PDEV_STATS   = 1,
++	VDEV_STATS   = 2,
++	BEACON_STATS = 3,
++};
++
+ /**
+  * struct stats_config: Structure to hold user configurations
+  * @wiphy:  Pointer to wiphy structure which came as part of User request
+@@ -658,10 +684,18 @@ struct stats_config {
+ 	enum stats_object obj;
+ 	enum stats_type type;
+ 	bool aggregate;
++	u8 link_id;
+ 	u8 serviceid;
++	u8 htt_stats_type;
++	enum fw_stats_type fw_stats_type;
+ 	u8 *mac;
+ };
+ 
++#define WIFISTATS_DATA_MAX_SIZE 32768
++#define STATS_FEAT_FLG_HTT          0x10000000
++#define STATS_FEAT_FLG_MGMT         0x20000000
++#define STATS_FEAT_FLG_FWSTATS      0x40000000
++
+ #define STATS_FEAT_FLG_SAWFDELAY 0x00400000
+ #define STATS_FEAT_FLG_SAWFTX 0x00800000
+ /**
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
+index c8ebe01..4c801f0 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -9858,6 +9858,7 @@ void ath12k_wmi_fw_stats_fill(struct ath12k *ar,
+ 			ath12k_wmi_fw_bcn_stats_fill(ar, bcn, buf, &len);
+ 	}
+ 
++	fw_stats->buf_len = len;
+ unlock:
+ 	spin_unlock_bh(&ar->data_lock);
+ 
+@@ -12762,6 +12763,7 @@ static void ath12k_mgmt_rx_event(struct ath12k_base *ab, struct sk_buff *skb)
+ 	ahvif = ath12k_vif_to_ahvif(vif);
+ 	mgmt_stats = &ahvif->mgmt_stats;
+ 	mgmt_stats->rx_cnt[frm_type]++;
++	mgmt_stats->aggr_rx_mgmt++;
+ 
+ 	spin_unlock_bh(&ar->data_lock);
+ 
+-- 
+2.34.1
+

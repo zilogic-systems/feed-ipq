@@ -1,0 +1,24 @@
+From 2f37eaa39c6fb845c181281d5708b3413cf29b79 Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Wed, 6 Sep 2023 11:10:35 +0530
+Subject: [PATCH] iw: print NO-EHT flags for reg get command
+
+If a reg rule is marked with NO-EHT flag, print "NO-EHT" while
+displaying the reg rules via reg get command.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ nl80211.h | 2 ++
+ reg.c     | 1 +
+ 2 files changed, 3 insertions(+)
+
+--- a/reg.c
++++ b/reg.c
+@@ -251,6 +251,7 @@ static int print_reg_handler(struct nl_m
+ 		PARSE_FLAG(NL80211_RRF_NO_160MHZ, "NO-160MHZ");
+ 		PARSE_FLAG(NL80211_RRF_NO_HE, "NO-HE");
+ 		PARSE_FLAG(NL80211_RRF_NO_320MHZ, "NO-320MHZ");
++		PARSE_FLAG(NL80211_RRF_NO_EHT, "NO-EHT");
+ 
+ 		/* Kernels that support NO_IR always turn on both flags */
+ 		if ((flags & NL80211_RRF_NO_IR) && (flags & __NL80211_RRF_NO_IBSS)) {

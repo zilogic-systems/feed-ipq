@@ -1,0 +1,164 @@
+From 31a98225052de5573001ab6b6778eeb60760b222 Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Wed, 23 Oct 2024 22:52:01 +0530
+Subject: [PATCH] QSDK: wifi: ath12k: configure secure reg for io-coherency
+
+IO-Coherency is the HW feature which supported in IPQ5424.
+The RAM and low level caches will be always coherent. This
+will help in performance and KPI improvement.
+
+Host need to configure registers of internal radio i.e
+IPQ5424 and external attached devices i.e QCN9274 for
+io-coherency those register are protected which cannot be
+read/write directly. To write secure register kernel has IPC
+mechanism within 'tmelcom_secure_io_write' which is used to
+write in secure registers.
+
+The 'secure-reg' property has address and value which is referred
+from DTS and has to be configured with secure io write.
+
+This secure io write has to be done after FW MODE configure during
+FW start and this register value need to reset before FW MODE OFF
+during stop FW.
+
+This secure io write should not be done during coldboot.
+
+Patch-dependency: None
+Patch-work: None
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 84 +++++++++++++++++++++++++-
+ 1 file changed, 83 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
+index 7127b45..e5bbfbe 100644
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -11,6 +11,9 @@
+ #include <linux/panic_notifier.h>
+ #include <linux/of.h>
+ #include <linux/of_platform.h>
++#ifdef CONFIG_IO_COHERENCY
++#include <linux/tmelcom_ipc.h>
++#endif
+ 
+ #include "peer.h"
+ #include "core.h"
+@@ -100,11 +103,73 @@ module_param_named(rx_nwifi_err_dump, ath12k_rx_nwifi_err_dump, bool, 0644);
+ MODULE_PARM_DESC(rx_nwifi_err_dump,
+ 		 "rx nwifi err dump: 0-disable, 1-enable");
+ 
++#ifdef CONFIG_IO_COHERENCY
++bool ath12k_io_coherency_enabled = true;
++module_param_named(io_coherency, ath12k_io_coherency_enabled, bool, 0644);
++MODULE_PARM_DESC(io_coherency, "Enable io_coherency (0 - disable, 1 - enable)");
++#endif
++
+ static DEFINE_MUTEX(ath12k_hw_lock);
+ static struct list_head ath12k_hw_groups = LIST_HEAD_INIT(ath12k_hw_groups);
+ 
+ extern struct ath12k_coredump_info ath12k_coredump_ram_info;
+ 
++#ifdef CONFIG_IO_COHERENCY
++static int ath12k_core_config_iocoherency(struct ath12k_base *ab, bool enable)
++{
++	int ret, num_elem, idx = 0;
++	struct tmel_secure_io secure_reg;
++
++	if (!ath12k_io_coherency_enabled) {
++		ath12k_err(ab, "io-coherency Disabled\n");
++		return 0;
++	}
++
++	num_elem = of_property_count_elems_of_size(ab->dev->of_node, "secure-reg",
++						   sizeof(u32));
++
++	if (num_elem < 0) {
++		ath12k_err(ab, "secure-reg not configured for io-coherency\n");
++		return 0;
++	}
++
++	while (idx < num_elem) {
++		ret = of_property_read_u32_index(ab->dev->of_node, "secure-reg", idx++,
++						 &secure_reg.reg_addr);
++		if (ret) {
++			ath12k_err(ab, "failed to get the secure reg addr %d\n", (idx - 1));
++			goto err;
++		}
++
++		if (enable) {
++			ret = of_property_read_u32_index(ab->dev->of_node, "secure-reg", idx++,
++							 &secure_reg.reg_val);
++
++			if (ret) {
++				ath12k_err(ab, "failed to get the secure reg val %d\n", (idx - 1));
++				goto err;
++			}
++		} else {
++			secure_reg.reg_val = 0;
++		}
++
++		ath12k_info(ab, "Configuring secure reg: 0x%x val: 0x%x\n",
++			    secure_reg.reg_addr, secure_reg.reg_val);
++
++		ret = tmelcom_secure_io_write(&secure_reg, sizeof(struct tmel_secure_io));
++
++		if (ret) {
++			ath12k_err(ab, "Failed to update secure_reg settings, ret = %d reg: 0x%x val: 0x%x\n",
++				   ret, secure_reg.reg_addr, secure_reg.reg_val);
++			goto err;
++		}
++	}
++
++err:
++	return ret;
++}
++#endif
++
+ /* This function needs to be used only when dt has multi chip grouping information */
+ static struct ath12k_hw_group *ath12k_core_hw_group_find_by_id(u8 group_id)
+ {
+@@ -1013,6 +1078,14 @@ static void ath12k_core_stop(struct ath12k_base *ab)
+ 	lockdep_assert_held(&ab->ag->mutex_lock);
+ 	lockdep_assert_held(&ab->core_lock);
+ 
++#ifdef CONFIG_IO_COHERENCY
++	int ret;
++
++	ret = ath12k_core_config_iocoherency(ab, false);
++	if (ret)
++		ath12k_err(ab, "failed to configure IOCoherency: %d\n", ret);
++#endif
++
+ 	ab->ag->num_started--;
+ 
+ 	if (!test_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags))
+@@ -1803,7 +1876,11 @@ static int ath12k_core_start_firmware(struct ath12k_base *ab,
+ 		ath12k_err(ab, "failed to send firmware start: %d\n", ret);
+ 		return ret;
+ 	}
+-
++#ifdef CONFIG_IO_COHERENCY
++	ret = ath12k_core_config_iocoherency(ab, true);
++	if (ret)
++		ath12k_err(ab, "failed to configure IOCoherency: %d\n", ret);
++#endif
+ 	return ret;
+ }
+ 
+@@ -1944,6 +2021,11 @@ err_dp_free:
+ 	mutex_unlock(&ab->core_lock);
+ 	mutex_unlock(&ag->mutex_lock);
+ err_firmware_stop:
++#ifdef CONFIG_IO_COHERENCY
++	ret = ath12k_core_config_iocoherency(ab, false);
++	if (ret)
++		ath12k_err(ab, "failed to configure IOCoherency: %d\n", ret);
++#endif
+ 	ath12k_qmi_firmware_stop(ab);
+ 
+ 	return ret;
+-- 
+2.34.1
+

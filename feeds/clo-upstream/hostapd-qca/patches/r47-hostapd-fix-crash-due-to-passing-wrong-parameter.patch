@@ -1,0 +1,41 @@
+From d1c44af46e3a868be9e05d200f3280dd88d4a37e Mon Sep 17 00:00:00 2001
+From: Karthik M <quic_karm@quicinc.com>
+Date: Tue, 1 Oct 2024 10:20:07 +0530
+Subject: [PATCH] hostapd : Fix crash due to passing wrong parameter
+
+Hostapd crashes when the repeater tries to associate with the root AP.
+
+wpa_supplicant_event expects bss->ctx but we are making it to point to
+bss-flink->ctx in the function.
+
+Fix by holding the bss->ctx pointer and send it to wpa_supplicant_event call.
+
+Signed-off-by: Karthik M <quic_karm@quicinc.com>
+---
+ src/drivers/driver_nl80211.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index a889c9f..7cc8d51 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -11272,6 +11272,7 @@ static int driver_nl80211_link_remove(void *priv, enum wpa_driver_if_type type,
+ {
+ 	struct i802_bss *bss = priv;
+ 	struct wpa_driver_nl80211_data *drv = bss->drv;
++	void *hapd = bss->ctx;
+ 	int ret;
+ 
+ 	if (type != WPA_IF_AP_BSS ||
+@@ -11297,7 +11298,7 @@ static int driver_nl80211_link_remove(void *priv, enum wpa_driver_if_type type,
+ 			return ret;
+ 
+ 		/* Notify that the MLD interface is removed */
+-		wpa_supplicant_event(bss->ctx, EVENT_MLD_INTERFACE_FREED, NULL);
++		wpa_supplicant_event(hapd, EVENT_MLD_INTERFACE_FREED, NULL);
+ 	}
+ 
+ 	return 0;
+-- 
+2.34.1
+

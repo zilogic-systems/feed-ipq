@@ -1,0 +1,109 @@
+From 8e0836f0ed1a85846efa8974fd3bb30c6bca90b1 Mon Sep 17 00:00:00 2001
+From: Mohan Raj <quic_mrajraje@quicinc.com>
+Date: Fri, 4 Oct 2024 19:24:31 +0530
+Subject: [PATCH] hostapd: add puncture bitmap info of supported links
+
+Puncturing bitmap provides the list of disabled sub-channels
+on supported links.
+The bitmap is used to identify the 20 MHz subchannels that are
+punctured within the bandwidth.
+
+usage:hostapd_cli -i <interface> -l <link> status
+
+Output:
+
+state=ENABLED
+phy=phy0
+freq=5180
+num_sta_non_erp=0
+num_sta_no_short_slot_time=0
+num_sta_no_short_preamble=0
+olbc=0
+num_sta_ht_no_gf=0
+num_sta_no_ht=0
+num_sta_ht_20_mhz=0
+num_sta_ht40_intolerant=0
+olbc_ht=0
+ht_op_mode=0x0
+hw_mode=a
+cac_time_seconds=0
+cac_time_left_seconds=N/A
+channel=36
+punct_bitmap=0x0008
+edmg_enable=0
+edmg_channel=0
+secondary_channel=1
+ieee80211n=1
+ieee80211ac=1
+ieee80211ax=1
+ieee80211be=1
+beacon_int=100
+dtim_period=2
+eht_oper_chwidth=1
+eht_oper_centr_freq_seg0_idx=42
+eht_oper_centr_freq_seg1_idx=0
+num_links=3
+link_id=1
+link_addr=00:03:7f:12:74:74
+link_id=0
+link_addr=00:03:7f:12:73:73
+link_id=2
+link_addr=00:03:7f:12:75:75
+sta_num_links=0
+he_oper_chwidth=1
+he_oper_centr_freq_seg0_idx=42
+he_oper_centr_freq_seg1_idx=0
+he_bss_color=8 (enabled)
+vht_oper_chwidth=0
+vht_oper_centr_freq_seg0_idx=38
+vht_oper_centr_freq_seg1_idx=0
+vht_caps_info=338819f2
+rx_vht_mcs_map=ffaa
+tx_vht_mcs_map=ffaa
+vht_max_mcs=9
+ht_caps_info=09ef
+ht_mcs_bitmask=ffffffff000000000000
+supported_rates=0c 12 18 24 30 48 60 6c
+max_mcs=31
+max_rate=540
+max_nss=4
+max_txpower=30
+bss[0]=wlan0
+bssid[0]=00:03:7f:12:74:74
+ssid[0]=bitmap
+num_sta[0]=0
+mld_addr[0]=00:03:7f:12:73:73
+mld_id[0]=0
+mld_link_id[0]=1
+
+Patch-dependency: none
+Patch-work: none
+
+Signed-off-by: Mohan Raj <quic_mrajraje@quicinc.com>
+---
+ src/ap/ctrl_iface_ap.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/ap/ctrl_iface_ap.c b/src/ap/ctrl_iface_ap.c
+index 554e294..cde8b53 100644
+--- a/src/ap/ctrl_iface_ap.c
++++ b/src/ap/ctrl_iface_ap.c
+@@ -1126,6 +1126,15 @@ int hostapd_ctrl_iface_status(struct hostapd_data *hapd, char *buf,
+ 			len += ret;
+ 		}
+ 
++		if (hapd->iconf->punct_bitmap) {
++			ret = os_snprintf(buf + len, buflen - len,
++					 "punct_bitmap=0x%x\n",
++					 hapd->iconf->punct_bitmap);
++			if (os_snprintf_error(buflen - len, ret))
++				return len;
++			len += ret;
++		}
++
+ 		if (hapd->conf->mld_ap) {
+ 			struct hostapd_data *link_bss;
+ 
+-- 
+2.34.1
+

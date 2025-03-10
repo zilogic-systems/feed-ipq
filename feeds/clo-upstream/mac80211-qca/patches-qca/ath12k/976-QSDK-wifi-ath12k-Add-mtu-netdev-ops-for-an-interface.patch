@@ -1,0 +1,116 @@
+From 31d71429bda951ac5743267516b7f8ccca1601db Mon Sep 17 00:00:00 2001
+From: Parikshit Gune <quic_pgune@quicinc.com>
+Date: Fri, 13 Sep 2024 14:50:58 +0530
+Subject: [PATCH] QSDK: wifi: ath12k: Add mtu netdev ops for an interface.
+
+Add a change_mtu ops in ath12k driver to change the mtu
+of an interface.
+
+Patch-dependency: None
+Patch-work: None
+
+Signed-off-by: Parikshit Gune <quic_pgune@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 33 +++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/ppe.c | 19 +++++++++++++++
+ drivers/net/wireless/ath/ath12k/ppe.h |  3 +++
+ 3 files changed, 55 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index e1be25e..99c6a76 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -12348,6 +12348,36 @@ out:
+ 	return arvif->ar;
+ }
+ 
++#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
++static int ath12k_mac_op_set_mtu(struct ieee80211_hw *hw,
++				 struct ieee80211_vif *vif,
++				 int mtu)
++{
++	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
++	struct ath12k_hw *ah = hw->priv;
++	struct wireless_dev *wdev = ieee80211_vif_to_wdev(vif);
++	int ret = 0;
++
++	if (!wdev)
++		return -ENODEV;
++
++	mutex_lock(&ah->conf_mutex);
++	if ((ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR) || (!wdev->netdev)) {
++		mutex_unlock(&ah->conf_mutex);
++		return 0;
++	}
++
++	if ((ahvif->ppe_vp_type != ATH12K_INVALID_PPE_VP_TYPE) &&
++			(ahvif->ppe_vp_num != ATH12K_INVALID_PPE_VP_NUM)) {
++		ret = ath12k_vif_set_mtu(ahvif, mtu);
++	}
++
++	mutex_unlock(&ah->conf_mutex);
++
++	return ret;
++}
++#endif
++
+ static int ath12k_mac_op_add_interface(struct ieee80211_hw *hw,
+ 				       struct ieee80211_vif *vif)
+ {
+@@ -18095,6 +18125,9 @@ static const struct ieee80211_ops ath12k_ops = {
+ 	.set_radar_background		= ath12k_mac_op_set_radar_background,
+ 	.link_reconfig_remove		= ath12k_mac_op_link_reconfig_remove,
+ 	.removed_link_is_primary	= ath12k_mac_op_removed_link_is_primary,
++#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
++	.change_mtu			= ath12k_mac_op_set_mtu,
++#endif
+ };
+ 
+ static void ath12k_mac_update_ch_list(struct ath12k *ar,
+diff --git a/drivers/net/wireless/ath/ath12k/ppe.c b/drivers/net/wireless/ath/ath12k/ppe.c
+index 3160dc6..2e72680 100644
+--- a/drivers/net/wireless/ath/ath12k/ppe.c
++++ b/drivers/net/wireless/ath/ath12k/ppe.c
+@@ -1534,6 +1534,25 @@ exit:
+ 	return ret;
+ }
+ 
++#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
++int ath12k_vif_set_mtu(struct ath12k_vif *ahvif, int mtu)
++{
++	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
++	int ppe_vp_num = ahvif->ppe_vp_num;
++
++	if (!wdev)
++		return -ENODEV;
++
++	if (ppe_vp_mtu_set(ppe_vp_num, mtu) != PPE_VP_STATUS_SUCCESS) {
++		ath12k_err("\ndev:%p, dev->name:%s mtu %d vp num = %d set failed ",
++			wdev->netdev, wdev->netdev->name, mtu, ppe_vp_num);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++#endif
++
+ int ath12k_vif_alloc_vp(struct ath12k_vif *ahvif, int ppe_vp_type, int *core_mask)
+ {
+ 	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
+diff --git a/drivers/net/wireless/ath/ath12k/ppe.h b/drivers/net/wireless/ath/ath12k/ppe.h
+index 222c708..f6c358e 100644
+--- a/drivers/net/wireless/ath/ath12k/ppe.h
++++ b/drivers/net/wireless/ath/ath12k/ppe.h
+@@ -35,6 +35,9 @@ int ath12k_change_core_mask_for_ppe_rfs(struct ath12k_base *ab,
+ int ath12k_vif_update_vp_config(struct ath12k_vif *ahvif, int vp_type);
+ int ath12k_vif_alloc_vp(struct ath12k_vif *ahvif, int vp_type, int *core_mask);
+ void ath12k_vif_free_vp(struct ath12k_vif *ahvif);
++#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
++int ath12k_vif_set_mtu(struct ath12k_vif *ahvif, int mtu);
++#endif
+ 
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ struct ath12k_ppeds_stats {
+-- 
+2.45.2
+

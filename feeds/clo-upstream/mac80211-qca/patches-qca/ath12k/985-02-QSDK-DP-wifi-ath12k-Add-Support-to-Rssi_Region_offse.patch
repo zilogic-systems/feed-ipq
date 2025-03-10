@@ -1,0 +1,102 @@
+From d2a87113336093274d199cbb950a0c48e57b527c Mon Sep 17 00:00:00 2001
+From: Girish Kumar M P <quic_gmp@quicinc.com>
+Date: Mon, 25 Nov 2024 10:35:40 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: apply rssi region offset in the
+rssi signal
+
+Currently, rssi_signal is calculated with rssi_combi,min_nf and
+rssi_temp_offset.
+To improve the accuracy of the signal. FW provide Rssi_region_offset
+and ath driver should fetch and update the calculation with this value
+if (ab->rssi_accuracy_support) is enabled through wmi event
+WMI_RSSI_ACCURACY_IMPROVEMENT_CAPABILITIES
+
+signal calculation :
+rssi signal = rssi_combi + min_nf + rssi_temp_offset + region_offset
+
+Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h   |  1 +
+ drivers/net/wireless/ath/ath12k/dp_mon.c | 11 ++++++++++-
+ drivers/net/wireless/ath/ath12k/hal_rx.h |  9 +++++++--
+ 3 files changed, 18 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1779,6 +1779,7 @@ struct ath12k_base {
+ 	bool ce_pipe_init_done;
+ 	bool rxgainlut_support;
+ 	bool power_boost_support;
++	bool rssi_accuracy_support;
+ 
+ 	struct wsi_info wsi_info;
+ 	u32 dp_mon_alloc_cnt;
+--- a/drivers/net/wireless/ath/ath12k/dp_mon.c
++++ b/drivers/net/wireless/ath/ath12k/dp_mon.c
+@@ -1624,7 +1624,7 @@ ath12k_dp_mon_rx_parse_status_tlv(struct
+ 		struct hal_rx_phyrx_rssi_legacy_info *rssi =
+ 			(struct hal_rx_phyrx_rssi_legacy_info *)tlv_data;
+ 		u32 rssi_legacy_info = __le32_to_cpu(rssi->info0);
+-
++		u32 rssi_region_offset = __le32_to_cpu(rssi->rssi_region_offset);
+ 		info[0] = __le32_to_cpu(rssi->info1);
+ 
+ 		/* TODO: Please note that the combined rssi will not be accurate
+@@ -1635,6 +1635,11 @@ ath12k_dp_mon_rx_parse_status_tlv(struct
+ 			u32_get_bits(info[0],
+ 				     HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO1_RSSI_COMB);
+ 
++		if (ab->rssi_accuracy_support) {
++			ppdu_info->rssi_region_offset_support = true;
++			ppdu_info->rssi_region_offset = u32_get_bits(rssi_region_offset,HAL_RX_PHYRX_RSSI_LEGACY_REGION_OFFSET);
++		}
++
+ 		for (i = 0; i < HAL_RX_MAX_NSS; i++)
+ 			ppdu_info->rssi_chain_pri20[i] =
+ 				le32_get_bits(rssi->preamble[i].rssi_2040,
+@@ -2132,6 +2137,10 @@ static void ath12k_dp_mon_update_radiota
+ 
+ 	rxs->flag |= RX_FLAG_MACTIME_START;
+ 	rxs->signal = ppduinfo->rssi_comb + ar->rssi_offsets.rssi_offset;
++	if (ppduinfo->rssi_region_offset_support){
++		rxs->signal += ppduinfo->rssi_region_offset;
++	}
++
+ 	rxs->nss = ppduinfo->nss + 1;
+ 
+ 	if (ampdu_present) {
+--- a/drivers/net/wireless/ath/ath12k/hal_rx.h
++++ b/drivers/net/wireless/ath/ath12k/hal_rx.h
+@@ -266,6 +266,8 @@ struct hal_rx_mon_ppdu_info {
+ 	u8 ltf_size;
+ 	u8 rxpcu_filter_pass;
+ 	s8 rssi_chain[8][8];
++	bool rssi_region_offset_support;
++	u8 rssi_region_offset;
+ 	u32 num_users;
+ 	u32 mpdu_fcs_ok_bitmap[HAL_RX_NUM_WORDS_PER_PPDU_BITMAP];
+ 	u8 addr1[ETH_ALEN];
+@@ -510,6 +512,7 @@ enum hal_rx_ul_reception_type {
+ #define HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO0_RECEPTION   GENMASK(3, 0)
+ #define HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO0_RX_BW	GENMASK(7, 5)
+ #define HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO1_RSSI_COMB   GENMASK(15, 8)
++#define HAL_RX_PHYRX_RSSI_LEGACY_REGION_OFFSET		GENMASK(31, 9)
+ #define HAL_RX_PHYRX_RSSI_PREAMBLE_PRI20		GENMASK(7, 0)
+ 
+ struct hal_rx_phyrx_chain_rssi {
+@@ -519,11 +522,13 @@ struct hal_rx_phyrx_chain_rssi {
+ 
+ struct hal_rx_phyrx_rssi_legacy_info {
+ 	__le32 info0;
+-	__le32 rsvd0[7];
++	__le32 rsvd0[4];
++	__le32 rssi_region_offset;
++	__le32 rsvd1[2];
+ 	struct hal_rx_phyrx_chain_rssi pre_rssi[HAL_RX_MAX_NSS];
+ 	struct hal_rx_phyrx_chain_rssi preamble[HAL_RX_MAX_NSS];
+ 	__le32 info1;
+-	__le32 rsvd1;
++	__le32 rsvd2;
+ } __packed;
+ 
+ #define HAL_RX_MPDU_START_INFO0_PPDU_ID		GENMASK(31, 16)

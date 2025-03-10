@@ -1,0 +1,216 @@
+From 7377742385c93887bc125cecc21204387112517d Mon Sep 17 00:00:00 2001
+From: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
+Date: Tue, 16 Aug 2022 17:53:38 -0700
+Subject: [PATCH] hostapd: Update 11be EHT elements to Draft 2.0 version
+
+Update the EHT operations elements to Draft 2.0 and fix interop
+issues with stations
+
+Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
+---
+ hostapd/config_file.c        |  2 ++
+ src/ap/ap_config.h           |  9 +++++++++
+ src/ap/beacon.c              |  5 +++++
+ src/ap/ctrl_iface_ap.c       |  6 ++++--
+ src/ap/ieee802_11.c          |  2 ++
+ src/ap/ieee802_11_eht.c      | 25 +++++++++++++++++++++++++
+ src/common/ieee802_11_defs.h | 33 ++++++++++++++++++++++-----------
+ wpa_supplicant/mesh_mpm.c    | 10 +++++-----
+ 8 files changed, 74 insertions(+), 18 deletions(-)
+
+--- a/hostapd/config_file.c
++++ b/hostapd/config_file.c
+@@ -5126,6 +5126,8 @@ static int hostapd_config_fill(struct ho
+ 		conf->eht_oper_chwidth = atoi(pos);
+ 	} else if (os_strcmp(buf, "eht_oper_centr_freq_seg0_idx") == 0) {
+ 		conf->eht_oper_centr_freq_seg0_idx = atoi(pos);
++	} else if (os_strcmp(buf, "eht_oper_centr_freq_seg1_idx") == 0) {
++		conf->eht_oper_centr_freq_seg1_idx = atoi(pos);
+ 	} else if (os_strcmp(buf, "eht_su_beamformer") == 0) {
+ 		conf->eht_phy_capab.su_beamformer = atoi(pos);
+ 	} else if (os_strcmp(buf, "eht_su_beamformee") == 0) {
+--- a/src/ap/ap_config.h
++++ b/src/ap/ap_config.h
+@@ -1253,6 +1253,7 @@ struct hostapd_config {
+ #ifdef CONFIG_IEEE80211BE
+ 	enum oper_chan_width eht_oper_chwidth;
+ 	u8 eht_oper_centr_freq_seg0_idx;
++	u8 eht_oper_centr_freq_seg1_idx;
+ 	struct eht_phy_capabilities_info eht_phy_capab;
+ 	u16 punct_bitmap; /* a bitmap of disabled 20 MHz channels */
+ 	u8 punct_acs_threshold;
+@@ -1346,6 +1347,10 @@ hostapd_set_oper_centr_freq_seg0_idx(str
+ static inline u8
+ hostapd_get_oper_centr_freq_seg1_idx(struct hostapd_config *conf)
+ {
++#ifdef CONFIG_IEEE80211BE
++	if (conf->ieee80211be)
++		return conf->eht_oper_centr_freq_seg1_idx;
++#endif /* CONFIG_IEEE80211BE */
+ #ifdef CONFIG_IEEE80211AX
+ 	if (conf->ieee80211ax)
+ 		return conf->he_oper_centr_freq_seg1_idx;
+@@ -1357,6 +1362,10 @@ static inline void
+ hostapd_set_oper_centr_freq_seg1_idx(struct hostapd_config *conf,
+ 				     u8 oper_centr_freq_seg1_idx)
+ {
++#ifdef CONFIG_IEEE80211BE
++	if (conf->ieee80211be)
++		conf->eht_oper_centr_freq_seg1_idx = oper_centr_freq_seg1_idx;
++#endif /* CONFIG_IEEE80211BE */
+ #ifdef CONFIG_IEEE80211AX
+ 	if (conf->ieee80211ax)
+ 		conf->he_oper_centr_freq_seg1_idx = oper_centr_freq_seg1_idx;
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -946,7 +946,7 @@ static u8 * hostapd_probe_resp_fill_elem
+ 				pos, !!params->mld_ap);
+ 
+ 		pos = hostapd_eid_eht_capab(hapd, pos, IEEE80211_MODE_AP);
+-		pos = hostapd_eid_eht_operation(hapd, pos);
++		pos = hostapd_eid_eht_operation(hapd, pos, IEEE80211_MODE_AP);
+ 	}
+ #endif /* CONFIG_IEEE80211BE */
+ 
+@@ -2491,7 +2491,7 @@ int ieee802_11_build_ap_params(struct ho
+ 							    tailpos, false);
+ 		tailpos = hostapd_eid_eht_capab(hapd, tailpos,
+ 						IEEE80211_MODE_AP);
+-		tailpos = hostapd_eid_eht_operation(hapd, tailpos);
++		tailpos = hostapd_eid_eht_operation(hapd, tailpos, IEEE80211_MODE_AP);
+ 	}
+ #endif /* CONFIG_IEEE80211BE */
+ 
+--- a/src/ap/ctrl_iface_ap.c
++++ b/src/ap/ctrl_iface_ap.c
+@@ -975,9 +975,11 @@ int hostapd_ctrl_iface_status(struct hos
+ 	if (iface->conf->ieee80211be && !hapd->conf->disable_11be) {
+ 		ret = os_snprintf(buf + len, buflen - len,
+ 				  "eht_oper_chwidth=%d\n"
+-				  "eht_oper_centr_freq_seg0_idx=%d\n",
++				  "eht_oper_centr_freq_seg0_idx=%d\n"
++				  "eht_oper_centr_freq_seg1_idx=%d\n",
+ 				  iface->conf->eht_oper_chwidth,
+-				  iface->conf->eht_oper_centr_freq_seg0_idx);
++				  iface->conf->eht_oper_centr_freq_seg0_idx,
++				  iface->conf->eht_oper_centr_freq_seg1_idx);
+ 		if (os_snprintf_error(buflen - len, ret))
+ 			return len;
+ 		len += ret;
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -4522,7 +4522,7 @@ static void ieee80211_ml_build_assoc_res
+ 		p = hostapd_eid_he_6ghz_band_cap(hapd, p);
+ 		if (hapd->iconf->ieee80211be && !hapd->conf->disable_11be) {
+ 			p = hostapd_eid_eht_capab(hapd, p, IEEE80211_MODE_AP);
+-			p = hostapd_eid_eht_operation(hapd, p);
++			p = hostapd_eid_eht_operation(hapd, p, IEEE80211_MODE_AP);
+ 		}
+ 	}
+ 
+@@ -5079,7 +5079,7 @@ rsnxe_done:
+ 		if (hapd->conf->mld_ap)
+ 			p = hostapd_eid_eht_ml_assoc(hapd, sta, p);
+ 		p = hostapd_eid_eht_capab(hapd, p, IEEE80211_MODE_AP);
+-		p = hostapd_eid_eht_operation(hapd, p);
++		p = hostapd_eid_eht_operation(hapd, p, IEEE80211_MODE_AP);
+ 	}
+ #endif /* CONFIG_IEEE80211BE */
+ 
+--- a/src/ap/ieee802_11.h
++++ b/src/ap/ieee802_11.h
+@@ -244,7 +244,8 @@ size_t hostapd_eid_eht_capab_len(struct
+ 				 enum ieee80211_op_mode opmode);
+ u8 * hostapd_eid_eht_capab(struct hostapd_data *hapd, u8 *eid,
+ 			   enum ieee80211_op_mode opmode);
+-u8 * hostapd_eid_eht_operation(struct hostapd_data *hapd, u8 *eid);
++u8 * hostapd_eid_eht_operation(struct hostapd_data *hapd, u8 *eid,
++				enum ieee80211_op_mode opmode);
+ u16 copy_sta_eht_capab(struct hostapd_data *hapd, struct sta_info *sta,
+ 		       enum ieee80211_op_mode opmode,
+ 		       const u8 *he_capab, size_t he_capab_len,
+--- a/src/ap/ieee802_11_eht.c
++++ b/src/ap/ieee802_11_eht.c
+@@ -213,11 +213,12 @@ u8 * hostapd_eid_eht_capab(struct hostap
+ }
+ 
+ 
+-u8 * hostapd_eid_eht_operation(struct hostapd_data *hapd, u8 *eid)
++u8 * hostapd_eid_eht_operation(struct hostapd_data *hapd, u8 *eid,
++			       enum ieee80211_op_mode opmode)
+ {
+ 	struct hostapd_config *conf = hapd->iconf;
+ 	struct ieee80211_eht_operation *oper;
+-	u8 *pos = eid, seg0 = 0, seg1 = 0;
++	u8 *pos = eid, seg0 = 0, seg1 = 0, *length_pos;
+ 	enum oper_chan_width chwidth;
+ 	size_t elen = 1 + 4;
+ 	bool eht_oper_info_present;
+@@ -241,7 +242,7 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 		elen += EHT_OPER_DISABLED_SUBCHAN_BITMAP_SIZE;
+ 
+ 	*pos++ = WLAN_EID_EXTENSION;
+-	*pos++ = 1 + elen;
++	length_pos = pos++;
+ 	*pos++ = WLAN_EID_EXT_EHT_OPERATION;
+ 
+ 	oper = (struct ieee80211_eht_operation *) pos;
+@@ -275,6 +276,15 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 		break;
+ 	case CONF_OPER_CHWIDTH_160MHZ:
+ 		oper->oper_info.control |= EHT_OPER_CHANNEL_WIDTH_160MHZ;
++		if (!oper->oper_info.ccfs1) {
++			/* CCFS0 points to center channel frequency in config */
++			oper->oper_info.ccfs1 = oper->oper_info.ccfs0;
++			if (hapd->iconf->channel < oper->oper_info.ccfs0)
++				oper->oper_info.ccfs0 = oper->oper_info.ccfs1 - 8;
++			else
++				oper->oper_info.ccfs0 = oper->oper_info.ccfs1 + 8;
++		}
++
+ 		seg1 = seg0;
+ 		if (hapd->iconf->channel < seg0)
+ 			seg0 -= 8;
+@@ -307,7 +317,10 @@ u8 * hostapd_eid_eht_operation(struct ho
+ 			host_to_le16(punct_bitmap);
+ 	}
+ 
+-	return pos + elen;
++	pos += 8;
++	*length_pos = pos - (eid + 2);
++
++	return pos;
+ }
+ 
+ 
+--- a/src/common/ieee802_11_defs.h
++++ b/src/common/ieee802_11_defs.h
+@@ -2673,6 +2673,8 @@ struct ieee80211_he_mu_edca_parameter_se
+ #define EHT_OPER_CHANNEL_WIDTH_160MHZ                  3
+ #define EHT_OPER_CHANNEL_WIDTH_320MHZ                  4
+ 
++#define DISABLED_SUBCHANNEL_BITMAP_BYTES_SIZE          2
++
+ /* Figure 9-1002c: EHT Operation Information field format */
+ struct ieee80211_eht_oper_info {
+ 	u8 control; /* B0..B2: Channel Width */
+--- a/wpa_supplicant/mesh_mpm.c
++++ b/wpa_supplicant/mesh_mpm.c
+@@ -270,6 +270,8 @@ static void mesh_mpm_send_plink_action(s
+ 		buf_len += 3 + 2 + EHT_PHY_CAPAB_LEN + EHT_MCS_NSS_CAPAB_LEN +
+ 			EHT_PPE_THRESH_CAPAB_LEN;
+ 		buf_len += 3 + sizeof(struct ieee80211_eht_operation);
++		if (bss->iconf->punct_bitmap)
++			buf_len +=  DISABLED_SUBCHANNEL_BITMAP_BYTES_SIZE;
+ }
+ #endif /* CONFIG_IEEE80211BE */
+ 
+@@ -425,7 +427,7 @@ static void mesh_mpm_send_plink_action(s
+ 				 3 + sizeof(struct ieee80211_eht_operation)];
+ 		pos = hostapd_eid_eht_capab(bss, eht_capa_oper,
+ 					    IEEE80211_MODE_MESH);
+-		pos = hostapd_eid_eht_operation(bss, pos);
++		pos = hostapd_eid_eht_operation(bss, pos, IEEE80211_MODE_MESH);
+ 		wpabuf_put_data(buf, eht_capa_oper, pos - eht_capa_oper);
+ 	}
+ #endif /* CONFIG_IEEE80211BE */

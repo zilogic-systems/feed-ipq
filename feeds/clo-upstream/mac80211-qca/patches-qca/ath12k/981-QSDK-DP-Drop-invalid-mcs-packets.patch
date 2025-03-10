@@ -1,0 +1,156 @@
+From a8e264f3849e9efebc56f4407946ad49ef02aec1 Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Wed, 13 Nov 2024 14:25:15 +0530
+Subject: [PATCH] QSDK:DP: Drop invalid mcs packets
+
+Currently, some packets received with invalid MCS  trigger a WARN_ON.
+This is because some clients support higher capabilities than the AP,
+allowing them to send packets in higher MCS 12 and 13 rates, causing
+this issue. Hence, add a WARN_ON_ONCE in driver and drop the invalid
+mcs packets.
+
+patch-dependency: none
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 36 +++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/dp_rx.h |  1 +
+ 2 files changed, 37 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index eb28b87..e927c96 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3053,6 +3053,8 @@ static void ath12k_dp_rx_h_rate(struct ath12k *ar, struct ath12k_dp_rx_info *rx_
+ 	if (rx_info->filled & BIT_ULL(ATH12K_RX_INFO_SGI))
+ 		sgi = rx_info->sgi;
+ 
++	rx_info->is_invalid_mcs = false;
++
+ 	switch (pkt_type) {
+ 	case RX_MSDU_START_PKT_TYPE_11A:
+ 	case RX_MSDU_START_PKT_TYPE_11B:
+@@ -3064,9 +3066,11 @@ static void ath12k_dp_rx_h_rate(struct ath12k *ar, struct ath12k_dp_rx_info *rx_
+ 	case RX_MSDU_START_PKT_TYPE_11N:
+ 		rx_status->encoding = RX_ENC_HT;
+ 		if (rate_mcs > ATH12K_HT_MCS_MAX) {
++			rx_info->is_invalid_mcs = true;
+ 			ath12k_warn(ar->ab,
+ 				    "Received with invalid mcs in HT mode %d\n",
+ 				     rate_mcs);
++			WARN_ON_ONCE(1);
+ 			break;
+ 		}
+ 		rx_status->rate_idx = rate_mcs + (8 * (nss - 1));
+@@ -3078,9 +3082,11 @@ static void ath12k_dp_rx_h_rate(struct ath12k *ar, struct ath12k_dp_rx_info *rx_
+ 		rx_status->encoding = RX_ENC_VHT;
+ 		rx_status->rate_idx = rate_mcs;
+ 		if (rate_mcs > ATH12K_VHT_MCS_MAX) {
++			rx_info->is_invalid_mcs = true;
+ 			ath12k_warn(ar->ab,
+ 				    "Received with invalid mcs in VHT mode %d\n",
+ 				     rate_mcs);
++			WARN_ON_ONCE(1);
+ 			break;
+ 		}
+ 		rx_status->nss = nss;
+@@ -3091,9 +3097,11 @@ static void ath12k_dp_rx_h_rate(struct ath12k *ar, struct ath12k_dp_rx_info *rx_
+ 	case RX_MSDU_START_PKT_TYPE_11AX:
+ 		rx_status->rate_idx = rate_mcs;
+ 		if (rate_mcs > ATH12K_HE_MCS_MAX) {
++			rx_info->is_invalid_mcs = true;
+ 			ath12k_warn(ar->ab,
+ 				    "Received with invalid mcs in HE mode %d\n",
+ 				    rate_mcs);
++			WARN_ON_ONCE(1);
+ 			break;
+ 		}
+ 		rx_status->encoding = RX_ENC_HE;
+@@ -3104,9 +3112,11 @@ static void ath12k_dp_rx_h_rate(struct ath12k *ar, struct ath12k_dp_rx_info *rx_
+ 	case RX_MSDU_START_PKT_TYPE_11BE:
+ 		rx_status->rate_idx = rate_mcs;
+ 		if (rate_mcs > ATH12K_EHT_MCS_MAX) {
++			rx_info->is_invalid_mcs = true;
+ 			ath12k_warn(ar->ab,
+ 				    "Received with invalid mcs in EHT mode %d\n",
+ 				    rate_mcs);
++			WARN_ON_ONCE(1);
+ 			break;
+ 		}
+ 		rx_status->encoding = RX_ENC_EHT;
+@@ -3420,6 +3430,11 @@ static int ath12k_dp_rx_process_msdu(struct ath12k *ar,
+ 
+ 	ath12k_dp_rx_h_ppdu(ar, rx_info);
+ 
++	if (unlikely(rx_info->is_invalid_mcs)) {
++		ret = -EINVAL;
++		goto free_out;
++	}
++
+ 	rx_info->rx_status->flag |= RX_FLAG_SKIP_MONITOR | RX_FLAG_DUP_VALIDATED;
+ 
+ 	return 0;
+@@ -3931,6 +3946,10 @@ mic_fail:
+ 	}
+ 
+ 	ath12k_dp_rx_h_ppdu(ar, &rx_info);
++
++	if (unlikely(rx_info.is_invalid_mcs))
++		return -EINVAL;
++
+ 	ath12k_dp_rx_h_undecap(ar, msdu, rx_desc,
+ 			       HAL_ENCRYPT_TYPE_TKIP_MIC, rxs, true);
+ 	ieee80211_rx(ar->ah->hw, msdu);
+@@ -4767,6 +4786,12 @@ static int ath12k_dp_rx_h_null_q_desc(struct ath12k *ar, struct sk_buff *msdu,
+ 	}
+ 
+ 	ath12k_dp_rx_h_ppdu(ar, rx_info);
++
++	if (unlikely(rx_info->is_invalid_mcs)) {
++		ret = -EINVAL;
++		goto exit;
++	}
++
+ 	fast_rx = false;
+ 	ath12k_dp_rx_h_mpdu(ar, msdu, desc, rx_info, &fast_rx);
+ 
+@@ -4881,6 +4906,11 @@ static bool ath12k_dp_rx_h_tkip_mic_err(struct ath12k *ar, struct sk_buff *msdu,
+ 
+ 	ath12k_dp_rx_h_ppdu(ar, rx_info);
+ 
++	if (unlikely(rx_info->is_invalid_mcs)) {
++		drop = true;
++		goto exit;
++	}
++
+ 	rx_info->rx_status->flag |= (RX_FLAG_MMIC_STRIPPED | RX_FLAG_MMIC_ERROR |
+ 				     RX_FLAG_DECRYPTED);
+ 
+@@ -5003,6 +5033,12 @@ static bool ath12k_dp_rx_h_4addr_null_frame_handler(struct ath12k *ar,
+ 
+ 	ath12k_dp_rx_h_ppdu(ar, rx_info);
+ 
++	if (unlikely(rx_info->is_invalid_mcs)) {
++		ath12k_dbg(ab, ATH12K_DBG_DATA, "4addr Null frame received with invalid mcs\n");
++		drop = true;
++		goto exit;
++	}
++
+ 	ath12k_dp_rx_h_mpdu(ar, msdu, rx_desc, rx_info, &fast_rx);
+ 
+ 	rxcb->tid = ath12k_dp_rx_h_tid(ab, rx_desc);
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.h b/drivers/net/wireless/ath/ath12k/dp_rx.h
+index 953b9af..561ffd4 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.h
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.h
+@@ -152,6 +152,7 @@ struct ath12k_dp_rx_info {
+ 	bool flow_idx_invalid;
+ 	bool flow_idx_timeout;
+ 	u16 flow_metadata;
++	bool is_invalid_mcs;
+ };
+ 
+ #define ATH12K_DP_MIN_FST_CORE_MASK 0x1
+-- 
+2.34.1
+

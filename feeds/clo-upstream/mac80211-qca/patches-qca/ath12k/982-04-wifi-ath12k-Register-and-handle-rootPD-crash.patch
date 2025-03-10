@@ -1,0 +1,182 @@
+From 308e45cd5c67001c7d19acb4202640938c1c49d8 Mon Sep 17 00:00:00 2001
+From: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+Date: Sat, 12 Oct 2024 16:31:48 +0530
+Subject: [PATCH 4/5] wifi: ath12k: Register and handle rootPD crash
+
+Register for rootPD crash notifier for only one userPD as rootPD is
+common for all userPD. Queue reset work on rootPD crash notification.
+Release all userPD on BEFORE_SHUTDOWN event to allow rproc to collect
+the dump for entire Q6 memory regions.
+
+Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c | 46 +++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/ahb.h |  2 ++
+ 2 files changed, 48 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -1196,6 +1196,61 @@ static int ath12k_ahb_config_rproc_irq(s
+ 	return 0;
+ }
+ 
++int ath12k_ahb_root_pd_fatal_notifier(struct notifier_block *nb,
++				      const unsigned long event, void *data)
++{
++	struct ath12k_ahb *ab_ahb = container_of(nb, struct ath12k_ahb, rpd_fatal_nb);
++	struct ath12k_base *ab = ab_ahb->ab;
++	struct ath12k_hw_group *ag = ab->ag;
++
++	if (event != ATH12K_ROOTPD_NOTIFY_CRASH)
++		return NOTIFY_DONE;
++
++	ath12k_info(ab, "RootPD CRASHED\n");
++	if (!test_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags))
++		return NOTIFY_DONE;
++
++	if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ag->dev_flags))) {
++		set_bit(ATH12K_FLAG_RECOVERY, &ag->dev_flags);
++		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ag->dev_flags);
++		ab_ahb->crash_type = ATH12K_RPROC_ROOTPD_CRASH;
++		queue_work(ab->workqueue_aux, &ag->reset_work);
++	}
++
++	return NOTIFY_OK;
++}
++
++static int ath12k_ahb_release_all_userpd(struct ath12k_base *ab)
++{
++	struct ath12k_hw_group *ag = ab->ag;
++	struct ath12k_ahb *ab_ahb;
++	struct ath12k_base *partner_ab;
++	int i, ret;
++	u32 pasid;
++
++	for (i = 0; i < ag->num_chip; i++) {
++		partner_ab = ag->ab[i];
++
++		if (!(partner_ab->hif.bus == ATH12K_BUS_AHB ||
++		      partner_ab->hif.bus == ATH12K_BUS_HYBRID))
++			continue;
++
++		ab_ahb = ath12k_ahb_priv(partner_ab);
++		if (ab_ahb->scm_auth_enabled) {
++			pasid = (u32_encode_bits(ab_ahb->userpd_id, ATH12K_USERPD_ID_MASK)) |
++				ATH12K_AHB_UPD_SWID;
++			ret = qcom_scm_pas_shutdown(pasid);
++			if (ret) {
++				ath12k_err(ab, "userpd ID:- %u release failed\n",
++					   ab_ahb->userpd_id);
++				return ret;
++			}
++		}
++	}
++
++	return 0;
++}
++
+ static int ath12k_ahb_root_pd_state_notifier(struct notifier_block *nb,
+ 					     const unsigned long event, void *data)
+ {
+@@ -1207,6 +1262,9 @@ static int ath12k_ahb_root_pd_state_noti
+ 		ath12k_dbg(ab, ATH12K_DBG_AHB, "Root PD is UP\n");
+ 		complete(&ab_ahb->rootpd_ready);
+ 		return NOTIFY_OK;
++	case ATH12K_ROOTPD_BEFORE_SHUTDOWN:
++		ath12k_ahb_release_all_userpd(ab);
++		return NOTIFY_OK;
+ 	}
+ 
+ 	return NOTIFY_DONE;
+@@ -1217,6 +1275,8 @@ static int ath12k_ahb_register_rproc_not
+ 	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+ 	ab_ahb->rpd_nb.notifier_call = ath12k_ahb_root_pd_state_notifier;
++	ab_ahb->rpd_fatal_nb.notifier_call = ath12k_ahb_root_pd_fatal_notifier;
++
+ 	init_completion(&ab_ahb->rootpd_ready);
+ 
+ 	/* RootPD notification can be registered only once */
+@@ -1229,6 +1289,15 @@ static int ath12k_ahb_register_rproc_not
+ 	if (!ab_ahb->rpd_notifier)
+ 		return -EINVAL;
+ 
++	ab_ahb->rpd_fatal_notifier =
++			qcom_register_ssr_atomic_notifier(ab_ahb->tgt_rproc->name,
++							  &ab_ahb->rpd_fatal_nb);
++
++	if (!ab_ahb->rpd_fatal_notifier) {
++		qcom_unregister_ssr_notifier(ab_ahb->rpd_notifier, &ab_ahb->rpd_nb);
++		return -EINVAL;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -1239,12 +1308,13 @@ static void ath12k_ahb_unregister_rproc_
+ 	if (ab_ahb->userpd_id != ATH12K_AHB_USERPD1)
+ 		return;
+ 
+-	if (!ab_ahb->rpd_notifier) {
+-		ath12k_err(ab, "Rproc notifier not registered\n");
+-		return;
++	if (ab_ahb->rpd_fatal_notifier) {
++		qcom_unregister_ssr_atomic_notifier(ab_ahb->rpd_fatal_notifier,
++						    &ab_ahb->rpd_fatal_nb);
+ 	}
+ 
+-	qcom_unregister_ssr_notifier(ab_ahb->rpd_notifier, &ab_ahb->rpd_nb);
++	if (ab_ahb->rpd_notifier)
++		qcom_unregister_ssr_notifier(ab_ahb->rpd_notifier, &ab_ahb->rpd_nb);
+ }
+ 
+ static int ath12k_ahb_get_rproc(struct ath12k_base *ab)
+--- a/drivers/net/wireless/ath/ath12k/ahb.h
++++ b/drivers/net/wireless/ath/ath12k/ahb.h
+@@ -22,6 +22,7 @@
+ #define ATH12K_PCI_CE_WAKE_IRQ	2
+ #define ATH12K_ROOTPD_READY_TIMEOUT		(5 * HZ)
+ #define ATH12K_ROOTPD_AFTER_POWERUP		QCOM_SSR_AFTER_POWERUP
++#define ATH12K_ROOTPD_NOTIFY_CRASH		QCOM_SSR_NOTIFY_CRASH
+ #define ATH12K_ROOTPD_BEFORE_SHUTDOWN		QCOM_SSR_BEFORE_SHUTDOWN
+ #define ATH12K_AHB_FW_PREFIX			"q6_fw"
+ #define ATH12K_AHB_FW_SUFFIX			".mdt"
+@@ -78,8 +79,10 @@ struct ath12k_ahb {
+ 	size_t mem_size;
+ 	void *mem_region;
+ 	void *rpd_notifier;
++	void *rpd_fatal_notifier;
+ 	struct completion rootpd_ready;
+ 	struct notifier_block rpd_nb;
++	struct notifier_block rpd_fatal_nb;
+ 	struct qcom_smem_state *spawn_state;
+ 	struct qcom_smem_state *stop_state;
+ 	struct completion userpd_spawned;
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -190,7 +190,7 @@ void ath12k_core_put_hw_group(struct ath
+  * scenarios driver can queue ab->reset_work for all ahb and
+  * hybrid chipset's.
+  */
+-static void ath12k_core_hw_group_reset(struct work_struct *work)
++static void ath12k_core_update_userpd_state(struct work_struct *work)
+ {
+ 	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_work);
+ 	struct ath12k_base *ab;
+@@ -207,7 +207,6 @@ static void ath12k_core_hw_group_reset(s
+ 			set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
+ 			set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
+ 			ab_ahb->crash_type = ATH12K_RPROC_ROOTPD_CRASH;
+-			queue_work(ab->workqueue_aux, &ab->reset_work);
+ 		}
+ 
+ 		ath12k_hal_dump_srng_stats(ab);
+@@ -238,7 +237,7 @@ ath12k_core_hw_group_alloc(u8 id, u8 max
+ 	mutex_init(&ag->mlomem_arena.mutex_lock);
+ 	ag->hw_queues_stopped = false;
+ 	ag->recovery_mode = ATH12K_MLO_RECOVERY_MODE0;
+-	INIT_WORK(&ag->reset_work, ath12k_core_hw_group_reset);
++	INIT_WORK(&ag->reset_work, ath12k_core_update_userpd_state);
+ 	ag->fst = NULL;
+ 	ag->wsi_load_info = NULL;
+ #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION

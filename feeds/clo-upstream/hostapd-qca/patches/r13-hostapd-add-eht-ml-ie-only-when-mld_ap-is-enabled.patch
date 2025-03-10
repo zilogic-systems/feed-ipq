@@ -1,0 +1,27 @@
+From cfbd21663ab0b888405284022ac55676104d985f Mon Sep 17 00:00:00 2001
+From: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
+Date: Mon, 29 Jan 2024 11:58:17 +0530
+Subject: [PATCH] hostapd: add eht ml ie only when mld_ap is enabled
+
+When mld_ap is disabled mld info will be NULL and
+hostapd_eid_eht_basic_ml is called from wpa_ft_add_bmle
+this causes NULL crash due to empty mld information.
+
+EHT ML IE should be added only when mld_ap is enabled.
+
+Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
+---
+ src/ap/ieee802_11_eht.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/src/ap/ieee802_11_eht.c
++++ b/src/ap/ieee802_11_eht.c
+@@ -560,6 +560,8 @@ static u8 * hostapd_eid_eht_basic_ml_com
+ 	u16 mld_cap;
+ 	u8 max_simul_links, active_links;
+ 
++	if (!hapd->conf->mld_ap)
++		return pos;
+ 	/*
+ 	 * As the Multi-Link element can exceed the size of 255 bytes need to
+ 	 * first build it and then handle fragmentation.

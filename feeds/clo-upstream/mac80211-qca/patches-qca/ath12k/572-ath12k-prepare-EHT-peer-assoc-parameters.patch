@@ -1,0 +1,59 @@
+From b19d9de8b7144390a9003fd243d4aef3c47b23c5 Mon Sep 17 00:00:00 2001
+From: Aloka Dixit <quic_alokad@quicinc.com>
+Date: Tue, 31 Aug 2021 13:45:27 -0700
+Subject: [PATCH] ath12k: prepare EHT peer assoc parameters
+
+Add new parameters and prepare the association data for an EHT peer.
+MCS data passed by the userspace uses the format described in
+IEEE P802.11be/D1.1 July 2021 (section 9.4.2.295c.4 Supported
+EHT-MCS And NSS Set field), convert it into the format expected by
+the target.
+
+Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
+Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 161 ++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.c |   7 ++
+ drivers/net/wireless/ath/ath12k/wmi.h |  28 +++++
+ 3 files changed, 196 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -2102,12 +2102,6 @@ int ath12k_wmi_send_peer_assoc_cmd(struc
+ 		ptr += sizeof(*he_mcs);
+ 	}
+ 
+-	/* MLO header tag with 0 length */
+-	len = 0;
+-	tlv = ptr;
+-	tlv->header = ath12k_wmi_tlv_hdr(WMI_TAG_ARRAY_STRUCT, len);
+-	ptr += TLV_HDR_SIZE;
+-
+ 	/* Loop through the EHT rate set */
+ 	len = arg->peer_eht_mcs_count * sizeof(*eht_mcs);
+ 	tlv = ptr;
+@@ -2146,6 +2140,13 @@ int ath12k_wmi_send_peer_assoc_cmd(struc
+ 		   cmd->peer_eht_cap_phy[0], cmd->peer_eht_cap_phy[1],
+ 		   cmd->peer_eht_cap_phy[2]);
+ 
++	/* fill ML Partner links Header TAG */
++	len = 0;
++	tlv = ptr;
++	tlv->header = FIELD_PREP(WMI_TLV_TAG, WMI_TAG_ARRAY_STRUCT) |
++		      FIELD_PREP(WMI_TLV_LEN, len);
++	ptr += TLV_HDR_SIZE;
++
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_PEER_ASSOC_CMDID);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab,
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -2179,6 +2179,8 @@ enum wmi_tlv_service {
+ 	WMI_MAX_EXT_SERVICE = 256,
+ 
+ 	WMI_TLV_SERVICE_REG_CC_EXT_EVENT_SUPPORT = 281,
++
++	WMI_TLV_SERVICE_BE = 289,
+ 	WMI_MAX_EXT2_SERVICE,
+ };
+ 

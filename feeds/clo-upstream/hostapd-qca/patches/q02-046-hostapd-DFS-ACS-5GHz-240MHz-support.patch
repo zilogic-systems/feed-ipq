@@ -1,0 +1,113 @@
+From 19cb10a62d2cd4507cbe28bf36a1522fd8d5870a Mon Sep 17 00:00:00 2001
+From: Karthik M <quic_karm@quicinc.com>
+Date: Fri, 24 Jun 2022 10:28:31 +0530
+Subject: [PATCH] hostapd: Add ACS and DFS support for 5GHz BW240MHZ
+
+ACS dynamically punctures the channels based on the
+noise levels. Incase of 5G 240MHZ bandwidth, we need
+to use static punturing bitmap.
+
+In case of radar, We have only one channel in 240MHz.
+The bandwidth should downgrade to 160MHz
+and choose a channel.
+
+Signed-off-by: Karthik M <quic_karm@quicinc.com>
+---
+ src/ap/dfs.c | 34 ++++++++++++++++++++++++++++++----
+ 2 files changed, 45 insertions(+), 8 deletions(-)
+
+--- a/src/ap/dfs.c
++++ b/src/ap/dfs.c
+@@ -51,7 +51,8 @@ static int dfs_get_used_n_chans(struct h
+ 	if (iface->conf->ieee80211n && iface->conf->secondary_channel)
+ 		n_chans = 2;
+ 
+-	if (iface->conf->ieee80211ac || iface->conf->ieee80211ax) {
++	if (iface->conf->ieee80211ac || iface->conf->ieee80211ax ||
++	    iface->conf->ieee80211be) {
+ 		switch (hostapd_get_oper_chwidth(iface->conf)) {
+ 		case CONF_OPER_CHWIDTH_USE_HT:
+ 			break;
+@@ -65,6 +66,9 @@ static int dfs_get_used_n_chans(struct h
+ 			n_chans = 4;
+ 			*seg1 = 4;
+ 			break;
++		case CONF_OPER_CHWIDTH_320MHZ:
++			n_chans = 12;
++			break;
+ 		default:
+ 			break;
+ 		}
+@@ -127,6 +131,12 @@ static int dfs_is_chan_allowed(struct ho
+ 	 * 50, 114, 163
+ 	 */
+ 	int allowed_160[] = { 36, 100, 149 };
++	/*
++	 * EHT320 valid channels based on center frequency:
++	 * 100
++	 */
++	int allowed_320[] = {100};
++
+ 	int *allowed = allowed_40;
+ 	unsigned int i, allowed_no = 0;
+ 
+@@ -143,6 +153,10 @@ static int dfs_is_chan_allowed(struct ho
+ 		allowed = allowed_160;
+ 		allowed_no = ARRAY_SIZE(allowed_160);
+ 		break;
++	case 16:
++		allowed = allowed_320;
++		allowed_no = ARRAY_SIZE(allowed_320);
++		break;
+ 	default:
+ 		wpa_printf(MSG_DEBUG, "Unknown width for %d channels", n_chans);
+ 		break;
+@@ -381,7 +395,8 @@ static void dfs_adjust_center_freq(struc
+ 				   u8 *oper_centr_freq_seg0_idx,
+ 				   u8 *oper_centr_freq_seg1_idx)
+ {
+-	if (!iface->conf->ieee80211ac && !iface->conf->ieee80211ax)
++	if (!iface->conf->ieee80211ac && !iface->conf->ieee80211ax &&
++	    !iface->conf->ieee80211be)
+ 		return;
+ 
+ 	if (!chan)
+@@ -408,7 +423,9 @@ static void dfs_adjust_center_freq(struc
+ 		*oper_centr_freq_seg0_idx = chan->chan + 6;
+ 		*oper_centr_freq_seg1_idx = sec_chan_idx_80p80 + 6;
+ 		break;
+-
++	case CONF_OPER_CHWIDTH_320MHZ:
++		*oper_centr_freq_seg0_idx = chan->chan + 30;
++		break;
+ 	default:
+ 		wpa_printf(MSG_INFO,
+ 			   "DFS: Unsupported channel width configuration");
+@@ -800,7 +817,7 @@ static int set_dfs_state(struct hostapd_
+ 		frequency = cf1 - 70;
+ 		break;
+ 	case CHAN_WIDTH_320:
+-		n_chans = 16;
++		n_chans = 12;
+ 		frequency = cf1 - 150;
+ 		break;
+ 	default:
+@@ -864,6 +881,10 @@ static int dfs_are_channels_overlapped(s
+ 		radar_n_chans = 8;
+ 		frequency = cf1 - 70;
+ 		break;
++	case CHAN_WIDTH_320:
++		radar_n_chans = 12;
++		frequency = cf1 - 150;
++		break;
+ 	default:
+ 		wpa_printf(MSG_INFO, "DFS chan_width %d not supported",
+ 			   chan_width);
+@@ -1408,6 +1429,7 @@ dfs_downgrade_bandwidth(struct hostapd_i
+ 			enum dfs_channel_type *channel_type)
+ {
+ 	struct hostapd_channel_data *channel;
++	int oper_chwidth;
+ 
+ 	for (;;) {
+ 		channel = dfs_get_valid_channel(iface, secondary_channel,

@@ -1,0 +1,160 @@
+From 5d41302e0f22369decbb8345e0b9d610c78b835d Mon Sep 17 00:00:00 2001
+From: Thomas Wu <quic_wthomas@quicinc.com>
+Date: Wed, 9 Oct 2024 12:42:51 -0700
+Subject: [PATCH 1/6] wifi: ath12k: Add Power Boost - WMI
+
+This commit contains the WMI TLVs, Tags,
+and message structures to communicate with
+firmware.
+
+For sending,
+
+WMI_PDEV_POWER_BOOST_CMDID with
+WMI_TAG_PDEV_POWER_BOOST_CMD_FIXED_PARAM is used
+for abort, ready, and result commands to firmware.
+
+WMI_PDEV_POWER_BOOST_MEM_ADDR_CMDID with
+WMI_TAG_PDEV_POWER_BOOST_MEM_ADDR_CMD_FIXED_PARAM is used
+for sending shared memory address to firmware.
+
+For receiving,
+
+WMI_SERVICE_READY_EXT2_EVENTID with
+WMI_TAG_PDEV_POWER_BOOST_CAPABILITY is used
+to identify that firmware has Power Boost Feature capability.
+
+WMI_PDEV_POWER_BOOST_EVENTID with
+WMI_TAG_PDEV_POWER_BOOST_EVENT_FIXED_PARAM is used
+for handling training received from firmware.
+
+Signed-off-by: Thomas Wu <quic_wthomas@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/wmi.h | 77 +++++++++++++++++++++++++++
+ 1 file changed, 77 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
+index 5f1c653..0211535 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -491,6 +491,12 @@ enum wmi_tlv_cmd_id {
+ 	WMI_PDEV_SET_TGTR2P_TABLE_CMDID,
+ 	WMI_PDEV_SET_RF_PATH_CMDID,
+ 	WMI_PDEV_WSI_STATS_INFO_CMDID,
++	WMI_PDEV_RESERVED_0,
++	WMI_PDEV_RESERVED_1,
++	WMI_PDEV_RESERVED_2,
++	WMI_PDEV_RESERVED_3,
++	WMI_PDEV_POWER_BOOST_CMDID,
++	WMI_PDEV_POWER_BOOST_MEM_ADDR_CMDID,
+ 	WMI_VDEV_CREATE_CMDID = WMI_TLV_CMD(WMI_GRP_VDEV),
+ 	WMI_VDEV_DELETE_CMDID,
+ 	WMI_VDEV_START_REQUEST_CMDID,
+@@ -921,6 +927,13 @@ enum wmi_tlv_event_id {
+ 	WMI_PDEV_FIPS_EXTEND_EVENTID,
+ 	WMI_PDEV_PKTLOG_DECODE_INFO_EVENTID,
+ 	WMI_PDEV_RSSI_DBM_CONVERSION_PARAMS_INFO_EVENTID,
++	WMI_PDEV_RESERVED0_EVENTID,
++	WMI_PDEV_RESERVED1_EVENTID,
++	WMI_PDEV_RESERVED2_EVENTID,
++	WMI_PDEV_RESERVED3_EVENTID,
++	WMI_PDEV_RESERVED4_EVENTID,
++	WMI_PDEV_RESERVED5_EVENTID,
++	WMI_PDEV_POWER_BOOST_EVENTID,
+ 	WMI_VDEV_START_RESP_EVENTID = WMI_TLV_CMD(WMI_GRP_VDEV),
+ 	WMI_VDEV_STOPPED_EVENTID,
+ 	WMI_VDEV_INSTALL_KEY_COMPLETE_EVENTID,
+@@ -1428,6 +1441,7 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_ARRAY_STRUCT,
+ 	WMI_TAG_ARRAY_FIXED_STRUCT,
+ 	WMI_TAG_ARRAY_INT16,
++	WMI_TAG_ARRAY_INT32,
+ 	WMI_TAG_LAST_ARRAY_ENUM = 31,
+ 	WMI_TAG_SERVICE_READY_EVENT,
+ 	WMI_TAG_HAL_REG_CAPABILITIES,
+@@ -2189,6 +2203,7 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_PDEV_SRG_OBSS_BSSID_ENABLE_BITMAP_CMD,
+ 	WMI_TAG_PDEV_NON_SRG_OBSS_COLOR_ENABLE_BITMAP_CMD,
+ 	WMI_TAG_PDEV_NON_SRG_OBSS_BSSID_ENABLE_BITMAP_CMD,
++	WMI_TAG_NAN_CAPABILITIES = 0x387,
+ 	/* TODO add all the missing cmds */
+ 	WMI_CTRL_PATH_STATS_CMD_FIXED_PARAM =
+ 		WMI_TAG_PDEV_NON_SRG_OBSS_BSSID_ENABLE_BITMAP_CMD + 4,
+@@ -2261,6 +2276,10 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_MLO_LINK_REMOVAL_CMD_FIXED_PARAM = 0x464,
+ 	WMI_TAG_PDEV_WSI_STATS_INFO_CMD = 0x4b1,
+ 	WMI_TAG_PDEV_DFS_RADAR_FLAGS = 0x4b4,
++	WMI_TAG_PDEV_POWER_BOOST_EVENT_FIXED_PARAM = 0x4E8,
++	WMI_TAG_PDEV_POWER_BOOST_CMD_FIXED_PARAM,
++	WMI_TAG_PDEV_POWER_BOOST_MEM_ADDR_CMD_FIXED_PARAM,
++	WMI_TAG_PDEV_POWER_BOOST_CAPABILITY = 0x4EF,
+ 	WMI_TAG_MAX
+ };
+ 
+@@ -5597,6 +5616,64 @@ struct wmi_pdev_radar_flags_param {
+ } __packed;
+ #define WMI_PDEV_RADAR_FLAGS_FULL_BW_NOL_MARK_BIT 0
+ 
++#define WMI_POWER_BOOST_PHY_MASK GENMASK(3, 0)
++#define WMI_POWER_BOOST_CAP_EN BIT(4)
++struct ath12k_wmi_power_boost_capa {
++	u32 tlv_header;
++	u32 power_boost_enable;
++} __packed;
++
++struct ath12k_wmi_pdev_power_boost_mem_addr_cmd_fixed_param {
++	__le32 tlv_header;
++	__le32 pdev_id;
++	__le32 paddr_aligned_lo;
++	__le32 paddr_aligned_hi;
++	__le32 size;
++} __packed;
++
++enum wmi_pdev_power_boost_event_status {
++	WMI_PDEV_POWER_BOOST_EVENT_STATUS_START_TRAINING = 0,
++	WMI_PDEV_POWER_BOOST_EVENT_STATUS_ABORT,
++	WMI_PDEV_POWER_BOOST_EVENT_STATUS_MAX,
++};
++
++enum wmi_pdev_power_boost_status_type {
++	WMI_CMD_POWER_BOOST_READY = 0,
++	WMI_CMD_POWER_BOOST_ESTIMATED_DATA,
++	WMI_CMD_POWER_BOOST_ABORT,
++	WMI_CMD_POWER_BOOST_MAX,
++};
++
++struct ath12k_wmi_pdev_power_boost_cmd_fixed_param {
++	__le32 tlv_header;
++	__le32 pdev_id;
++	enum wmi_pdev_power_boost_status_type status;
++	__le32 training_stage;
++	__le32 mcs;
++	__le32 bandwidth;
++	__s32 temperature_degree;
++	__le32 primary_chan_mhz;
++	__le32 band_center_freq1;
++	__le32 band_center_freq2;
++	__le32 phy_mode;
++	__s32 tx_evm;
++	__s32 tx_mask_margin;
++} __packed;
++
++struct ath12k_wmi_pdev_power_boost_event {
++	__le32 pdev_id;
++	enum wmi_pdev_power_boost_event_status status;
++	__le32 training_stage;
++	__le32 mcs;
++	__le32 bandwidth;
++	__s32 temperature_degree;
++	__le32 primary_chan_mhz;
++	__le32 band_center_freq1;
++	__le32 band_center_freq2;
++	__le32 phy_mode;
++	__le32 size;
++} __packed;
++
+ #define WMI_DCS_CW_INTF         0x01
+ #define WMI_DCS_WLAN_INTF       0x02
+ #define WMI_DCS_AWGN_INTF       0x04
+-- 
+2.25.1
+

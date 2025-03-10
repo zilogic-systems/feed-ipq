@@ -1,0 +1,41 @@
+From fffdf96e9ee00b544c85dbcd2ee6f2b92dab81d1 Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Fri, 3 May 2024 14:56:11 +0530
+Subject: [PATCH] wifi: ath12k: wmi initialization for ipq5424
+
+- Added interface for wmi initialization
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/hw.c  | 2 ++
+ drivers/net/wireless/ath/ath12k/wmi.c | 1 -
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/hw.c b/drivers/net/wireless/ath/ath12k/hw.c
+index 517170b..31edce7 100644
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -2340,6 +2340,8 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+ 		.num_tcl_banks = 48,
+ 		.max_tx_ring = 4,
+ 
++		.wmi_init = ath12k_wmi_init_ipq5332,
++
+ 		.supports_ap_ps = true,
+ 		.credit_flow = false,
+ 		.alloc_cacheable_memory = true,
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
+index 76d6fc5..e34186b 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -522,7 +522,6 @@ static const int ath12k_hw_mode_pri_map[] = {
+ 	PRIMAP(WMI_HOST_HW_MODE_MAX),
+ };
+ 
+-
+ enum wmi_host_channel_width
+ ath12k_wmi_get_host_chan_width(u32 width)
+ {
+-- 
+2.34.1
+

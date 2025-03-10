@@ -1,0 +1,41 @@
+From e32bcf5f4bfcf2da18aebb3640a2eb3371e99e2d Mon Sep 17 00:00:00 2001
+From: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+Date: Fri, 9 Aug 2024 14:57:09 +0530
+Subject: [PATCH 1/4] wifi: ath12k: Add ML reconfig offloaded feature flag
+
+This is a preparation for supporting Multi-Link reconfigure link removal
+procedure[IEEE P802.11be/D5.0 - 35.3.6.3 Removing affiliated APs] for
+driver which supports offloaded Multi-Link reconfigure link removal.
+
+ML link removal offloaded drivers will take care of updating
+the reconfiguration MLE in self and partner beacons. It also updates
+the AP removal timer automatically and notifies once the counter is
+expired.
+
+Add feature flag to let userspace handle the link reconfigure removal request
+in offloaded way.
+
+Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 8a79c9c..1bbf14b 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -18644,6 +18644,9 @@ static int __ath12k_mac_register(struct ath12k *ar)
+ 		}
+ 	}
+ 
++	wiphy_ext_feature_set(hw->wiphy,
++			      NL80211_EXT_FEATURE_MLD_LINK_REMOVAL_OFFLOAD);
++
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac pdev %u freq limits %u->%u MHz no. of channels %u\n",
+ 		   ar->pdev->pdev_id, ar->chan_info.low_freq,
+ 		   ar->chan_info.high_freq, ar->chan_info.num_channels);
+
+base-commit: 5bb828d201f16b1315b3a6bf92f0f63ad91cdf66
+-- 
+2.34.1
+

@@ -1,0 +1,242 @@
+From ce31c8ea0b31000157bc20b3b3d4001a206aa695 Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Thu, 2 May 2024 16:38:25 +0530
+Subject: [PATCH] wifi: ath12k: Add varies memory config for ipq5424
+
+- Add memory config for ce mem remap, pmm, cmem
+- Made generic hif ops api
+- Add generic api to get cmem address
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c | 42 +++++++++++++---
+ drivers/net/wireless/ath/ath12k/hal.h |  3 ++
+ drivers/net/wireless/ath/ath12k/hw.c  | 69 ++++++++++++++++++++-------
+ 3 files changed, 90 insertions(+), 24 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/ahb.c b/drivers/net/wireless/ath/ath12k/ahb.c
+index 673696b..00317e2 100644
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -136,6 +136,17 @@ enum ext_irq_num {
+ 	umac_reset,
+ };
+ 
++static inline u32 ath12k_ahb_get_cmem_base(struct ath12k_base *ab)
++{
++	switch (ab->hw_params->hw_rev) {
++	case ATH12K_HW_IPQ5332_HW10:
++	case ATH12K_HW_IPQ5424_HW10:
++		return HAL_IPQ5332_CMEM_BASE;
++	default:
++		return NULL;
++	}
++}
++
+ static inline u32 ath12k_ahb_pmm_read32(struct ath12k_base *ab, u32 offset)
+ {
+ 	ath12k_dbg(ab, ATH12K_DBG_OFFSET, "Mem_pmm :%p offset:%x\n",
+@@ -146,7 +157,15 @@ static inline u32 ath12k_ahb_pmm_read32(struct ath12k_base *ab, u32 offset)
+ 
+ static inline u32 ath12k_ahb_cmem_read32(struct ath12k_base *ab, u32 offset)
+ {
+-	offset = offset - HAL_IPQ5332_CMEM_BASE;
++	u32 cmem_base;
++
++	cmem_base = ath12k_ahb_get_cmem_base(ab);
++
++	if (!cmem_base) {
++		ath12k_err(ab, "Invalid cmem base\n");
++		return 0;
++	}
++	offset = offset - cmem_base;
+ 	ath12k_dbg(ab, ATH12K_DBG_OFFSET, "Mem_cmem:%p offset:%x\n",
+ 		   ab->mem_cmem, offset);
+ 	return ioread32(ab->mem_cmem + offset);
+@@ -156,7 +175,15 @@ static inline u32 ath12k_ahb_cmem_read32(struct ath12k_base *ab, u32 offset)
+ static inline void ath12k_ahb_cmem_write32(struct ath12k_base *ab, u32 offset,
+ 					   u32 value)
+ {
+-	offset = offset - HAL_IPQ5332_CMEM_BASE;
++	u32 cmem_base;
++
++	cmem_base = ath12k_ahb_get_cmem_base(ab);
++
++	if (!cmem_base) {
++		ath12k_err(ab, "Invalid cmem base\n");
++		return;
++	}
++	offset = offset - cmem_base;
+ 	ath12k_dbg(ab, ATH12K_DBG_OFFSET, "Mem_cmem:%p offset:%x value:%x\n",
+ 		   ab->mem_cmem, offset, value);
+ 	iowrite32(value, ab->mem_cmem + offset);
+@@ -741,7 +768,7 @@ static int ath12k_ahb_ssr_notifier_unreg(struct ath12k_base *ab)
+ 	return ath12k_rproc_unregister_subsys_notifier(ab);
+ }
+ 
+-static const struct ath12k_hif_ops ath12k_ahb_hif_ops_ipq5332 = {
++static const struct ath12k_hif_ops ath12k_ahb_hif_ops = {
+ 	.start = ath12k_ahb_start,
+ 	.stop = ath12k_ahb_stop,
+ 	.read32 = ath12k_ahb_read32,
+@@ -1139,7 +1166,8 @@ static int ath12k_ahb_probe(struct platform_device *pdev)
+ 
+ 	switch (hw_rev) {
+ 	case ATH12K_HW_IPQ5332_HW10:
+-		hif_ops = &ath12k_ahb_hif_ops_ipq5332;
++	case ATH12K_HW_IPQ5424_HW10:
++		hif_ops = &ath12k_ahb_hif_ops;
+ 		bus_params = &ath12k_ahb_bus_params;
+ 		bus_type = ATH12K_BUS_AHB;
+ 		break;
+@@ -1189,7 +1217,7 @@ static int ath12k_ahb_probe(struct platform_device *pdev)
+ 			goto err_core_free;
+ 		}
+ 		ab->ce_remap = true;
+-		ab->ce_remap_base_addr = HAL_IPQ5332_CE_WFSS_REG_BASE;
++		ab->ce_remap_base_addr = ce_remap->base;
+ 	}
+ 	if (ab->hw_params->cmem_remap) {
+ 		const struct cmem_remap *cmem = ab->hw_params->cmem_remap;
+@@ -1204,7 +1232,7 @@ static int ath12k_ahb_probe(struct platform_device *pdev)
+ 			goto err_core_free;
+ 		}
+ 		ab->cmem_remap = true;
+-		ab->cmem_remap_base_addr = HAL_IPQ5332_CMEM_REG_BASE;
++		ab->cmem_remap_base_addr = cmem->base;
+ 	}
+ 
+ 	if (ab->hw_params->pmm_remap) {
+@@ -1217,7 +1245,7 @@ static int ath12k_ahb_probe(struct platform_device *pdev)
+ 			goto err_core_free;
+ 		}
+ 		ab->pmm_remap = true;
+-		ab->pmm_remap_base_addr = HAL_IPQ5332_PMM_REG_BASE;
++		ab->pmm_remap_base_addr = pmm->base;
+ 	}
+ 
+ 	ret = ath12k_ahb_setup_resources(ab);
+diff --git a/drivers/net/wireless/ath/ath12k/hal.h b/drivers/net/wireless/ath/ath12k/hal.h
+index 0553b95..4ad26cb 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.h
++++ b/drivers/net/wireless/ath/ath12k/hal.h
+@@ -448,6 +448,9 @@ struct ath12k_dp_rx_info;
+ #define HAL_QCN6432_CMEM_SIZE		0x40000
+ #define HAL_QCN6432_CMEM_BASE		0x100000
+ 
++#define HAL_IPQ5424_CE_WFSS_REG_BASE	0x00200000
++#define HAL_IPQ5424_CE_SIZE				0x200000
++
+ enum hal_srng_ring_id {
+ 	HAL_SRNG_RING_ID_REO2SW0 = 0,
+ 	HAL_SRNG_RING_ID_REO2SW1,
+diff --git a/drivers/net/wireless/ath/ath12k/hw.c b/drivers/net/wireless/ath/ath12k/hw.c
+index 88912bf..2f7fc67 100644
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -15,6 +15,13 @@
+ #include "mhi.h"
+ #include "dp_rx.h"
+ 
++enum ath12k_hw_index {
++	ATH12K_IPQ5332 = 0,
++	ATH12K_IPQ5424 = 1,
++	/* Should be last */
++	ATH12K_MAX_HW_INDEX
++};
++
+ static u8 ath12k_hw_qcn9274_mac_from_pdev_id(int pdev_idx)
+ {
+ 	return pdev_idx;
+@@ -1757,25 +1764,49 @@ static const struct ath12k_hw_hal_params ath12k_hw_hal_params_wcn7850 = {
+ 			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW4_EN,
+ };
+ 
+-const struct ce_ie_addr ath12k_ce_ie_addr_ipq5332 = {
+-	.ie1_reg_addr = CE_HOST_IE_ADDRESS,
+-	.ie2_reg_addr = CE_HOST_IE_2_ADDRESS,
+-	.ie3_reg_addr = CE_HOST_IE_3_ADDRESS,
++
++const struct ce_ie_addr ath12k_ce_ie_addr[ATH12K_MAX_HW_INDEX] = {
++	/* 0 -> ATH12K_IPQ5332 */
++	{
++		.ie1_reg_addr = 0x75804c,
++		.ie2_reg_addr = 0x758050,
++		.ie3_reg_addr = 0x75804c,
++	},
++	/* 1 -> ATH12K_IPQ5424 */
++	{
++		.ie1_reg_addr = 0x21804C,
++		.ie2_reg_addr = 0x218050,
++		.ie3_reg_addr = 0x21804C,
++	}
+ };
+ 
+-const struct ce_remap ath12k_ce_remap_ipq5332 = {
+-	.base = HAL_IPQ5332_CE_WFSS_REG_BASE,
+-	.size = HAL_IPQ5332_CE_SIZE,
++const struct ce_remap ath12k_external_ce[ATH12K_MAX_HW_INDEX] = {
++	/* 0 -> ATH12K_IPQ5332 */
++	{
++		.base = HAL_IPQ5332_CE_WFSS_REG_BASE,
++		.size = HAL_IPQ5332_CE_SIZE,
++	},
++	/* 1 -> ATH12K_IPQ5424 */
++	{
++		.base = HAL_IPQ5424_CE_WFSS_REG_BASE,
++		.size = HAL_IPQ5424_CE_SIZE,
++	}
+ };
+ 
+-const struct cmem_remap ath12k_cmem_ipq5332 = {
+-	.base = HAL_IPQ5332_CMEM_REG_BASE,
+-	.size = HAL_IPQ5332_CMEM_SIZE,
++struct cmem_remap ath12k_external_cmem[ATH12K_MAX_HW_INDEX] = {
++	/* 0 -> ATH12K_IPQ5332 */
++	{
++		.base = HAL_IPQ5332_CMEM_REG_BASE,
++		.size = HAL_IPQ5332_CMEM_SIZE,
++	}
+ };
+ 
+-const struct pmm_remap ath12k_pmm_ipq5332 = {
+-	.base = HAL_IPQ5332_PMM_REG_BASE,
+-	.size = HAL_IPQ5332_PMM_SIZE,
++struct pmm_remap ath12k_external_pmm[ATH12K_MAX_HW_INDEX] = {
++	/* 0 -> ATH12K_IPQ5332 */
++	{
++		.base = HAL_IPQ5332_PMM_REG_BASE,
++		.size = HAL_IPQ5332_PMM_SIZE,
++	}
+ };
+ 
+ static const struct ath12k_hw_hal_params ath12k_hw_hal_params_ipq5332 = {
+@@ -2148,10 +2179,10 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+ 		.num_local_link = 0,
+ 		.m3_fw_support = false,
+ 		.compact_rx_tlv = true,
+-		.ce_ie_addr = &ath12k_ce_ie_addr_ipq5332,
+-		.ce_remap = &ath12k_ce_remap_ipq5332,
+-		.cmem_remap = &ath12k_cmem_ipq5332,
+-		.pmm_remap = &ath12k_pmm_ipq5332,
++		.ce_ie_addr = &ath12k_ce_ie_addr[ATH12K_IPQ5332],
++		.ce_remap = &ath12k_external_ce[ATH12K_IPQ5332],
++		.cmem_remap = &ath12k_external_cmem[ATH12K_IPQ5332],
++		.pmm_remap = &ath12k_external_pmm[ATH12K_IPQ5332],
+ 		.send_platform_model = true,
+ 		.en_fwlog = true,
+ 		.support_umac_reset = true,
+@@ -2333,6 +2364,10 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+ 		.num_local_link = 0,
+ 		.m3_fw_support = false,
+ 		.compact_rx_tlv = true,
++		.ce_ie_addr = &ath12k_ce_ie_addr[ATH12K_IPQ5424],
++		.ce_remap = &ath12k_external_ce[ATH12K_IPQ5424],
++		.cmem_remap = &ath12k_external_cmem[ATH12K_IPQ5332],
++		.pmm_remap = &ath12k_external_pmm[ATH12K_IPQ5332],
+ 		.send_platform_model = true,
+ 		.en_fwlog = true,
+ 		.support_umac_reset = false,
+-- 
+2.34.1
+

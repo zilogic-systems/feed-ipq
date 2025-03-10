@@ -1,0 +1,33 @@
+From 11873ac90db3f8c73088a1d7b4bd44509b832348 Mon Sep 17 00:00:00 2001
+From: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+Date: Fri, 21 Oct 2022 19:20:46 +0530
+Subject: [PATCH] hostapd: Fix tx power envelope for non PSD countries
+
+TX power envelope will contain PSD value for countries.
+In case of non PSD countries, it is expected to carry
+max EIRP for the channel received from FW through reg
+rules.
+Updated the power value in IE with max EIRP power for
+other non PSD countries
+
+Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -7211,6 +7211,8 @@ u8 * hostapd_eid_txpower_envelope(struct
+ 	if (i == mode->num_channels)
+ 		return eid;
+ 
++	chan = &mode->channels[i];
++
+ #ifdef CONFIG_IEEE80211AX
+ 	/* IEEE Std 802.11ax-2021, Annex E.2.7 (6 GHz band in the United
+ 	 * States): An AP that is an Indoor Access Point per regulatory rules
+@@ -7335,7 +7337,6 @@ u8 * hostapd_eid_txpower_envelope(struct
+ 	 * channel in Country element and local pwr constraint is specified
+ 	 * for channel in this Power Constraint element.
+ 	 */
+-	chan = &mode->channels[i];
+ 	max_tx_power = chan->max_tx_power - local_pwr_constraint;
+ 
+ 	/*

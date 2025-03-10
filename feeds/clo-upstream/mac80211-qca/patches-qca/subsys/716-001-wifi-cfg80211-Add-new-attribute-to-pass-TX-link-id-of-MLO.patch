@@ -1,0 +1,78 @@
+From 0994588eeb523f375745c2b5189ea82f1e6df6e3 Mon Sep 17 00:00:00 2001
+From: Rameshkumar Sundaram <quic_ramess@quicinc.com>
+Date: Sat, 4 Mar 2023 11:44:34 +0530
+Subject: [PATCH 1/4] wifi : cfg80211 : Add new attribute to pass TX link id of
+ MLO MBSSID
+
+For MLD if transmitting link of an MBSSID group is part of MLD then
+link id of TX link BSS along with TX interface index has
+to be specified to map non-tx link with right tx link of tx MLD.
+Add new MBSSID NL attribute to get link id of transmitting vap link in case
+TX vap is and MLD.
+
+Signed-off-by: Rameshkumar Sundaram <quic_ramess@quicinc.com>
+---
+ include/net/cfg80211.h       |  2 ++
+ include/uapi/linux/nl80211.h |  6 ++++++
+ net/wireless/nl80211.c       | 13 +++++++++++++
+ 3 files changed, 21 insertions(+)
+
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -1303,11 +1303,13 @@ struct cfg80211_crypto_settings {
+  * struct cfg80211_mbssid_config - AP settings for multi bssid
+  *
+  * @tx_wdev: pointer to the transmitted interface in the MBSSID set
++ * @tx_link_id: linkid of transmitting link if @tx_wdev is an MLD.
+  * @index: index of this AP in the multi bssid group.
+  * @ema: set to true if the beacons should be sent out in EMA mode.
+  */
+ struct cfg80211_mbssid_config {
+ 	struct wireless_dev *tx_wdev;
++	int tx_link_id;
+ 	u8 index;
+ 	bool ema;
+ };
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -470,6 +470,8 @@ nl80211_mbssid_config_policy[NL80211_MBS
+ 	[NL80211_MBSSID_CONFIG_ATTR_INDEX] = { .type = NLA_U8 },
+ 	[NL80211_MBSSID_CONFIG_ATTR_TX_IFINDEX] = { .type = NLA_U32 },
+ 	[NL80211_MBSSID_CONFIG_ATTR_EMA] = { .type = NLA_FLAG },
++	[NL80211_MBSSID_CONFIG_ATTR_TX_LINK_ID] = NLA_POLICY_RANGE(NLA_U8, 0,
++							IEEE80211_MLD_MAX_NUM_LINKS),
+ };
+ 
+ static const struct nla_policy
+@@ -5918,6 +5920,7 @@ static int nl80211_parse_mbssid_config(s
+ 				       u8 num_elems)
+ {
+ 	struct nlattr *tb[NL80211_MBSSID_CONFIG_ATTR_MAX + 1];
++	struct nlattr *tx_link_id;
+ 
+ 	if (!wiphy->mbssid_max_interfaces)
+ 		return -EOPNOTSUPP;
+@@ -5927,6 +5930,7 @@ static int nl80211_parse_mbssid_config(s
+ 	    !tb[NL80211_MBSSID_CONFIG_ATTR_INDEX])
+ 		return -EINVAL;
+ 
++	tx_link_id = tb[NL80211_MBSSID_CONFIG_ATTR_TX_LINK_ID];
+ 	config->ema = nla_get_flag(tb[NL80211_MBSSID_CONFIG_ATTR_EMA]);
+ 	if (config->ema) {
+ 		if (!wiphy->ema_max_profile_periodicity)
+@@ -5971,6 +5975,15 @@ static int nl80211_parse_mbssid_config(s
+ 		return -EINVAL;
+ 	}
+ 
++	if (!config->tx_wdev->valid_links && tx_link_id)
++		return -EINVAL;
++
++	if (config->tx_wdev->valid_links &&
++	    (!tx_link_id ||
++	     !(config->tx_wdev->valid_links & BIT(nla_get_u8(tx_link_id)))))
++		return -ENOLINK;
++
++	config->tx_link_id = tx_link_id ? nla_get_u8(tx_link_id) : 0;
+ 	return 0;
+ }
+ 

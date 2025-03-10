@@ -1,0 +1,563 @@
+From 01a26f7d0e414d0a7f02d3ffdff3c50865fadb5c Mon Sep 17 00:00:00 2001
+From: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+Date: Tue, 17 Sep 2024 08:01:54 +0530
+Subject: [PATCH] ath12k: Compilation warning fixes for ath12k Control path files
+
+cfr.c           - Removed typecast for void pointer
+debugfs.c       - Removed const from function param of wmi_ctrl_path_mem_stat, ath12k_read_ppe_rfs_core_mask
+                   ath12k_debug_write_dbs_power_reduction and ath12k_debugfs_dump_ppeds_stats
+debugfs_htt_stats.c   - Added typecast for htt_stats_buf as u32*
+debugfs_sta.c   - Updated ath11k_warn API with ar->ab
+mac.c           - Updated access specifier to unsigned long valid_links
+                  Added typecast for ag->ah, addresses and iface_combinations
+		  Added const to mlo_phy_name and ieee80211_ops *ops
+sawf.c         -  Removed const from ath_sawf_callbacks
+                  Added typecast for cmd value assignment based on the respective structure
+		  Modified datatype of u32* data to u8* in ath12k_htt_sawf_streaming_stats_ind_handler
+spectral.c     -  Updated return value of ath12k_spectral_get_vdev from ath12k_vif to ath12k_link_vif
+telemetry.c    -  Assigned values for the pointers mov_avg and pkt_num
+vendor.c       -  Removed const from struct netlink_range_validation and function ath12k_read_erp_rescan_pcie
+wmi.c          -  Updated variable vdev_map_cat1 and vdev_map_cat2 from u64 to ulong
+		  Added const to  ath12k_mgmt_rx_mlo_link_removal_info *info and ev
+		  Added const to pktlog_info and added local varaible to handle pktlog_info->pdev_id,
+                  Added const for reconfig_ml_ie in ath12k_wmi_mlo_reconfig_link_removal and added typecast for ptr
+ath_sawf.h     -  Modified service_class_id data type from u8 to u32 in sawf_dl_callback
+telemetry_agent_if.c - Added 8th param ath12k_sawf_notify_breach to inline with the sawf_notify_breach
+telemetry_agent_if.h - Added 8th param ath12k_sawf_notify_breach to inline with the sawf_notify_breach
+reg.c & reg.h  -  Modified start_freq param to value from pointer in ath12k_reg_get_afc_eirp_power_for_bw
+wmi.h          - Added const for reconfig_ml_ie in ath12k_wmi_mlo_reconfig_link_removal
+
+Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/cfr.c         |  2 +-
+ drivers/net/wireless/ath/ath12k/debugfs.c     | 10 +++---
+ .../wireless/ath/ath12k/debugfs_htt_stats.c   |  2 +-
+ drivers/net/wireless/ath/ath12k/debugfs_sta.c |  2 +-
+ drivers/net/wireless/ath/ath12k/mac.c         | 31 ++++++++++---------
+ drivers/net/wireless/ath/ath12k/sawf.c        | 10 +++---
+ drivers/net/wireless/ath/ath12k/spectral.c    |  2 +-
+ drivers/net/wireless/ath/ath12k/telemetry.c   |  4 +--
+ drivers/net/wireless/ath/ath12k/vendor.c      |  6 ++--
+ drivers/net/wireless/ath/ath12k/wmi.c         | 13 ++++----
+ include/ath/ath_sawf.h                        |  2 +-
+ .../wireless/ath/ath12k/telemetry_agent_if.c  |  2 +-
+ .../wireless/ath/ath12k/telemetry_agent_if.h  |  2 +-
+ include/net/wmi.h                             |  2 +-
+ drivers/net/wireless/ath/ath12k/reg.c         |  4 ++--
+ drivers/net/wireless/ath/ath12k/reg.h         |  2 +-
+16 files changed, 47 insertions(+), 45 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/cfr.c
++++ b/drivers/net/wireless/ath/ath12k/cfr.c
+@@ -191,8 +191,7 @@ static int ath12k_cfr_correlate_and_rela
+ 
+ static u8 freeze_reason_to_capture_type(struct ath12k_base *ab, void *freeze_tlv)
+ {
+-	struct macrx_freeze_capture_channel *freeze =
+-		(struct macrx_freeze_capture_channel_v3 *)freeze_tlv;
++	struct macrx_freeze_capture_channel *freeze = freeze_tlv;
+ 	u8 capture_reason = FIELD_GET(MACRX_FREEZE_CC_INFO0_CAPTURE_REASON,
+ 				      freeze->info0);
+ 
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -627,7 +627,7 @@ int wmi_ctrl_path_btcoex_stat(struct ath
+ 	return ret_val;
+ }
+ 
+-int wmi_ctrl_path_mem_stat(struct ath12k *ar, const char __user *ubuf,
++int wmi_ctrl_path_mem_stat(struct ath12k *ar, char __user *ubuf,
+ 			   size_t count, loff_t *ppos)
+ {
+ 	struct wmi_ctrl_path_stats_list *stats, *tmp;
+@@ -2428,7 +2428,7 @@ static const struct file_operations fops
+ 
+ #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
+ static ssize_t ath12k_debug_write_dbs_power_reduction(struct file *file,
+-						      char __user *user_buf,
++						      const char __user *user_buf,
+ 						      size_t count, loff_t *ppos)
+ {
+ 	struct ath12k_base *ab = file->private_data;
+@@ -2470,7 +2470,7 @@ static const struct file_operations dbs_
+ };
+ 
+ static ssize_t ath12k_debug_write_eth_power_reduction(struct file *file,
+-						      char __user *user_buf,
++						      const char __user *user_buf,
+ 						      size_t count, loff_t *ppos)
+ {
+ 	struct ath12k_base *ab = file->private_data;
+@@ -3133,7 +3133,7 @@ int ath12k_print_arvif_link_stats(struct
+ 
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ static ssize_t ath12k_debugfs_dump_ppeds_stats(struct file *file,
+-					       const char __user *user_buf,
++					       char __user *user_buf,
+ 					       size_t count, loff_t *ppos)
+ {
+ 	struct ath12k_base *ab = file->private_data;
+@@ -3428,7 +3428,7 @@ void ath12k_debugfs_fw_stats_init(struct
+ }
+ 
+ int ath12k_pktlog_rx_filter_setting(struct ath12k *ar,
+-                                    struct htt_tx_ring_tlv_filter
++                                    struct htt_rx_ring_tlv_filter
+                                     *tlv_filter)
+ {
+ 	int ret = 0, i;
+@@ -3439,7 +3439,7 @@ int ath12k_pktlog_rx_filter_setting(stru
+ 	                                           ar->dp.mac_id + i,
+ 	                                           HAL_RXDMA_MONITOR_DST,
+ 	                                           DP_RXDMA_REFILL_RING_SIZE,
+-	                                           &tlv_filter);
++	                                           tlv_filter);
+ 		if(ret)
+ 			break;
+ 	}
+@@ -6169,7 +6169,7 @@ static const struct file_operations ath1
+ };
+ 
+ static ssize_t ath12k_write_power_save_gtx(struct file *file,
+-					   char __user *user_buf,
++					   const char __user *user_buf,
+ 					   size_t count, loff_t *ppos)
+ {
+ 	struct ath12k_link_vif *arvif = file->private_data;
+@@ -6238,7 +6238,7 @@ out:
+ }
+ 
+ static ssize_t ath12k_read_ppe_rfs_core_mask(struct file *file,
+-					     const char __user *user_buf,
++					     char __user *user_buf,
+ 					     size_t count, loff_t *ppos)
+ {
+ 	struct ath12k_vif *ahvif = file->private_data;
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
+@@ -1023,7 +1023,7 @@ static inline void htt_print_peer_detail
+ 	u8 *buf = stats_req->buf;
+ 	u32 len = stats_req->buf_len;
+ 	u32 buf_len = ATH12K_HTT_STATS_BUF_SIZE;
+-	u32 *htt_buf_ptr = htt_stats_buf;
++	u32 *htt_buf_ptr = (u32 *)htt_stats_buf;
+ 	u32 ast_idx = __le32_to_cpu(htt_stats_buf->vdev_pdev_ast_idx);
+ 	u32 mac_addr = __le32_to_cpu(htt_stats_buf->mac_addr.mac_addr_l32);
+ 	u32 mac_addr_16 = __le32_to_cpu(htt_stats_buf->mac_addr.mac_addr_h16);
+--- a/drivers/net/wireless/ath/ath12k/debugfs_sta.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_sta.c
+@@ -2043,7 +2043,7 @@ static ssize_t ath12k_dbg_sta_write_cfr_
+ 	ret = ath12k_wmi_peer_set_cfr_capture_conf(ar, arsta->arvif->vdev_id,
+ 						   link_sta->addr, &arg);
+ 	if (ret) {
+-		ath12k_warn(ar, "failed to send cfr capture info: vdev_id %u peer %pM\n",
++		ath12k_warn(ar->ab, "failed to send cfr capture info: vdev_id %u peer %pM\n",
+ 			    arsta->arvif->vdev_id, link_sta->addr);
+ 		goto out;
+ 	}
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -8777,7 +8777,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+ 		ath12k_mac_unmap_link_sta(ahsta, link);
+ 
+ 		ath12k_dbg(NULL, ATH12K_DBG_MAC | ATH12K_DBG_BOOT,
+-			   "mac reconfig unmap link sta: link_id:%d sta link_map:0x%lx vif link_map:0x%lx sta valid links:%d\n",
++			   "mac reconfig unmap link sta: link_id:%d sta link_map:0x%lx vif link_map:0x%lx sta valid links:%ld\n",
+ 			   link, ahsta->links_map,
+ 			   ahvif->links_map, sta->valid_links);
+ 	}
+@@ -8788,7 +8788,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+ 						 ahsta->link[link],
+ 						 ahvif, link);
+ 		ath12k_dbg(NULL, ATH12K_DBG_MAC | ATH12K_DBG_BOOT,
+-			   "mac reconfig assign link sta: link_id:%d sta link_map:0x%lx vif link_map:0x%lx sta valid links:%d\n",
++			   "mac reconfig assign link sta: link_id:%d sta link_map:0x%lx vif link_map:0x%lx sta valid links:%ld\n",
+ 			   link, ahsta->links_map,
+ 			   ahvif->links_map, sta->valid_links);
+ 		if (ret)
+@@ -10501,7 +10501,7 @@ static int ath12k_mac_mgmt_action_frame_
+ 	}
+ 
+ 	mgmt = (struct ieee80211_mgmt *)hdr;
+-	buf = &mgmt->u.action;
++	buf = (u8 *)&(mgmt->u.action);
+ 
+ 	/* FCTL_PROTECTED frame might have extra space added for HDR_LEN. Offset that
+ 	 * many bytes if it is there
+@@ -10876,11 +10876,11 @@ static u8 ath12k_mac_get_tx_link(struct
+ 
+ 
+ 			ath12k_dbg(NULL, ATH12K_DBG_MAC,
+-				   "unable to determine link sta addr for translation - Frame control %x link %d sta links %x ahsta links %lu\n",
++				   "unable to determine link sta addr for translation - Frame control %x link %d sta links %lx ahsta links %lu\n",
+ 				   hdr->frame_control, link, sta->valid_links,
+ 				   ahsta->links_map);
+ 		} else {
+-			ath12k_err(NULL, "unable to determine Tx link for frame %x link %d\n vif links %x sta links %x ahvif links %lu ahsta links %lu",
++			ath12k_err(NULL, "unable to determine Tx link for frame %x link %d\n vif links %lx sta links %lx ahvif links %lu ahsta links %lu",
+ 				   hdr->frame_control, link, vif->valid_links,
+ 				   sta->valid_links, ahvif->links_map, ahsta->links_map);
+ 			link = IEEE80211_MLD_MAX_NUM_LINKS;
+@@ -15509,7 +15509,7 @@ stop_primary:
+ 		else
+ 			sta = ieee80211_find_sta_by_ifaddr(hw, peer->addr, NULL);
+ 		ath12k_dbg(ab, ATH12K_DBG_MAC,
+-			   "peer delete check links 0x%x vdev id %i peer %pM link id %d sta %pK\n",
++			   "peer delete check links 0x%lx vdev id %i peer %pM link id %d sta %pK\n",
+ 			   vif->valid_links, arvif->vdev_id,
+ 			   peer->addr, sta_link_id, sta);
+ 
+@@ -18308,8 +18308,9 @@ static bool ath12k_mac_op_removed_link_i
+ {
+ 	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
+ 	u16 link_id;
++	unsigned long removed_link = removed_links;
+ 
+-	for_each_set_bit(link_id, &removed_links, ATH12K_NUM_MAX_LINKS)
++	for_each_set_bit(link_id, &removed_link, ATH12K_NUM_MAX_LINKS)
+ 		if (ahsta->primary_link_id == link_id)
+ 			return true;
+ 
+@@ -19061,7 +19062,8 @@ static int __ath12k_mac_register(struct
+ static int ath12k_setup_per_hw_if_comb(struct ath12k_hw *ah) {
+ 	struct ieee80211_iface_per_hw *if_per_hw;
+ 	struct ieee80211_hw *hw = ah->hw;
+-	struct ieee80211_iface_combination *if_comb = hw->wiphy->iface_combinations;
++	struct ieee80211_iface_combination *if_comb = (struct ieee80211_iface_combination *)
++								hw->wiphy->iface_combinations;
+ 	int i;
+ 
+ 	if_per_hw  = kzalloc(sizeof(struct ieee80211_iface_per_hw) * ah->num_radio,
+@@ -19201,7 +19203,7 @@ static int ath12k_alloc_per_hw_mac_addr(
+ 		return -ENOMEM;
+ 
+ 	for (i = 0; i < ah->num_radio; i++) {
+-		ether_addr_copy(&addresses[i], ar->mac_addr);
++		ether_addr_copy((u8 *)(&addresses[i]), ar->mac_addr);
+ 		ar++;
+ 	}
+ 	hw->wiphy->addresses = addresses;
+@@ -19614,7 +19616,7 @@ int ath12k_mac_allocate(struct ath12k_hw
+ 	int mac_id, chip_id;
+ 	u8 link_id, num_hw, total_vdevs;
+ 	struct ath12k_pdev *pdev;
+-	char *mlo_phy_name;
++	const char *mlo_phy_name;
+ 
+ 	total_radio = 0;
+ 	for (i = 0; i < ag->num_chip; i++)
+@@ -19770,10 +19772,10 @@ err_mac_destroy:
+ void ath12k_mac_destroy(struct ath12k_hw_group *ag)
+ {
+ 	struct ath12k_base *ab;
+-	struct ath12k_hw *ah = ag->ah;
++	struct ath12k_hw *ah = (struct ath12k_hw *)ag->ah;
+ 	struct ath12k *ar;
+ 	struct ath12k_pdev *pdev;
+-	struct ieee80211_ops *ops;
++	const struct ieee80211_ops *ops;
+ 	int i, j;
+ 	u16 hw_link_id;
+ 
+--- a/drivers/net/wireless/ath/ath12k/sawf.c
++++ b/drivers/net/wireless/ath/ath12k/sawf.c
+@@ -22,7 +22,7 @@ bool ath12k_sawf_enable;
+ module_param_named(sawf, ath12k_sawf_enable, bool, 0444);
+ MODULE_PARM_DESC(sawf, "Enable SAWF feature (Default: false)");
+ 
+-static const struct ath_sawf_callbacks ath_wifi_sawf_callback = {
++static struct ath_sawf_callbacks ath_wifi_sawf_callback = {
+ 	.sawf_dl_callback = ath12k_sawf_get_msduq,
+ 	.sawf_ul_callback = ath12k_sawf_config_ul,
+ };
+@@ -745,7 +745,7 @@ int ath12k_sawf_htt_h2t_def_q_map_req(st
+ 	}
+ 
+ 	skb_put(skb, len);
+-	cmd = (struct htt_h2t_sawf_def_q_map_req *)skb->data;
++	cmd = (struct ath12k_htt_h2t_sawf_def_q_map_req *)skb->data;
+ 	cmd->info = u32_encode_bits(HTT_H2T_MSG_TYPE_SAWF_DEF_Q_MAP_REQ,
+ 				    HTT_H2T_MSG_TYPE_ID) |
+ 		    u32_encode_bits(DRV_TO_FW_SVC_ID(svc_id),
+@@ -780,7 +780,7 @@ int ath12k_sawf_htt_h2t_def_q_unmap_req(
+ 	}
+ 
+ 	skb_put(skb, len);
+-	cmd = (struct ath12k_htt_h2t_sawf_def_q_umap_req *)skb->data;
++	cmd = (struct ath12k_htt_h2t_sawf_def_q_unmap_req *)skb->data;
+ 	cmd->info = u32_encode_bits(HTT_H2T_MSG_TYPE_SAWF_DEF_Q_UNMAP_REQ,
+ 				    HTT_H2T_MSG_TYPE_ID) |
+ 		    u32_encode_bits(DRV_TO_FW_SVC_ID(svc_id),
+@@ -815,7 +815,7 @@ int ath12k_sawf_htt_h2t_def_q_map_report
+ 	}
+ 
+ 	skb_put(skb, len);
+-	cmd = (struct htt_h2c_sawf_def_q_map_req_report *)skb->data;
++	cmd = (struct ath12k_htt_h2t_sawf_def_q_map_report_req *)skb->data;
+ 
+ 	cmd->info = u32_encode_bits(HTT_H2T_MSG_TYPE_SAWF_DEF_Q_MAP_REPORT_REQ,
+ 				    HTT_H2T_MSG_TYPE_ID) |
+@@ -1333,23 +1333,22 @@ void ath12k_htt_sawf_streaming_stats_ind
+ 	struct htt_stats_strm_gen_mpdus_tlv *mpdus_tlv;
+         struct htt_stats_strm_gen_mpdus_details_tlv *mpdus_detail_tlv;
+ 	const struct htt_tlv *tlv;
+-	u32 *data = NULL;
++	u8 *data = NULL;
+ 	u8 *tlv_data;
+ 	u32 len, tlv_tag, tlv_len;
+ 	u16 info;
+ 	u8 tid, q_type;
+ 
+-	data = skb->data;
++	data = skb->data + HTT_T2H_STREAMING_STATS_IND_HDR_SIZE;
+ 	len = skb->len;
+ 
+-	data++;
+ 	if (len > HTT_T2H_STREAMING_STATS_IND_HDR_SIZE)
+ 		len -= HTT_T2H_STREAMING_STATS_IND_HDR_SIZE;
+ 	else
+ 		return;
+ 
+ 	while(len > 0) {
+-		tlv_data = (u8 *)data;
++		tlv_data = data;
+ 		tlv = (struct htt_tlv *)data;
+ 		tlv_tag = u32_get_bits(*data, HTT_TLV_TAG);
+ 		tlv_len = u32_get_bits(*data, HTT_TLV_LEN);
+@@ -1405,7 +1404,7 @@ void ath12k_htt_sawf_streaming_stats_ind
+ 				   __le16_to_cpu(mpdus_detail_tlv->burst_size_burst_size_spec),
+ 				   __le16_to_cpu(mpdus_detail_tlv->burst_size_margin_bytes));
+ 		}
+-		data = (u32 *)(tlv_data + tlv_len);
++		data = (tlv_data + tlv_len);
+ 		len -= tlv_len;
+ 	}
+ 	return;
+--- a/drivers/net/wireless/ath/ath12k/spectral.c
++++ b/drivers/net/wireless/ath/ath12k/spectral.c
+@@ -155,7 +155,7 @@ static struct rchan_callbacks rfs_scan_c
+ 	.remove_buf_file = remove_buf_file_handler,
+ };
+ 
+-static struct ath12k_vif *ath12k_spectral_get_vdev(struct ath12k *ar)
++static struct ath12k_link_vif *ath12k_spectral_get_vdev(struct ath12k *ar)
+ {
+ 	struct ath12k_link_vif *arvif;
+ 
+--- a/drivers/net/wireless/ath/ath12k/telemetry.c
++++ b/drivers/net/wireless/ath/ath12k/telemetry.c
+@@ -211,7 +211,7 @@ int ath12k_telemetry_sawf_sla_detection_
+ bool ath12k_telemetry_get_sla_mov_avg_num_pkt(u32 *mov_avg)
+ {
+ 	if (!telemetry_ctx) {
+-		mov_avg = 1;
++		*mov_avg = 1;
+ 		return false;
+ 	}
+ 
+@@ -222,7 +222,7 @@ bool ath12k_telemetry_get_sla_mov_avg_nu
+ bool ath12k_telemetry_get_sla_num_pkts(u32 *pkt_num)
+ {
+ 	if (!telemetry_ctx) {
+-		pkt_num = 1;
++		*pkt_num = 1;
+ 		return false;
+ 	}
+ 
+--- a/drivers/net/wireless/ath/ath12k/vendor.c
++++ b/drivers/net/wireless/ath/ath12k/vendor.c
+@@ -152,7 +152,7 @@ ath12k_vendor_dcs_policy[QCA_WLAN_VENDOR
+ 	[QCA_WLAN_VENDOR_ATTR_DCS_WLAN_INTERFERENCE_CONFIGURE] = {.type = NLA_U8},
+ };
+ 
+-static const struct netlink_range_validation
++static struct netlink_range_validation
+ ath12k_vendor_erp_config_trigger_range = {
+ 	.min = 1,
+ 	.max = BIT(QCA_WLAN_VENDOR_TRIGGER_TYPE_MAX) - 1,
+@@ -2082,7 +2082,7 @@ out:
+ }
+ 
+ static ssize_t ath12k_read_erp_rescan_pcie(struct file *file,
+-					   const char __user *ubuf,
++					   char __user *ubuf,
+ 					   size_t count, loff_t *ppos)
+ {
+ 	int len = 0;
+@@ -2623,7 +2623,7 @@ static int ath12k_vendor_receive_afc_res
+ 	struct ath12k_hw *ah = hw->priv;
+ 	struct ath12k *ar;
+ 	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_AFC_RESP_MAX + 1];
+-	struct ath12_afc_host_resp *afc_rsp = NULL;
++	struct ath12k_afc_host_resp *afc_rsp = NULL;
+ 	int afc_resp_len = 0;
+ 	enum ath12k_nl_afc_resp_type afc_resp_format;
+ 	int ret = 0;
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -2102,7 +2102,7 @@ int ath12k_wmi_set_peer_intra_bss_cmd(st
+ 	if (!skb)
+ 		return -ENOMEM;
+ 
+-	cmd = (struct wmi_peer_set_intra_bss_param_cmd *)skb->data;
++	cmd = (struct wmi_peer_set_intra_bss_cmd *)skb->data;
+ 	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_PEER_SET_INTRA_BSS_PARAMS,
+ 						 sizeof(*cmd));
+ 	ether_addr_copy(cmd->peer_macaddr.addr, peer_addr);
+@@ -2873,8 +2873,8 @@ static void ath12k_wmi_bcn_fill_ml_info(
+ 	struct ieee80211_bss_conf *link_conf, *tx_link_conf;
+ 	struct ath12k_link_vif *arvif_iter;
+ 	u32 vdev_id = arvif->vdev_id;
+-	u64 vdev_map_cat1 = 0;
+-	u64 vdev_map_cat2 = 0;
++	unsigned long vdev_map_cat1 = 0;
++	unsigned long vdev_map_cat2 = 0;
+ 
+ 	rcu_read_lock();
+ 
+@@ -8344,7 +8344,7 @@ static int ath12k_wmi_tlv_mgmt_rx_parse(
+ 		} else if (!parse->bpcc_buf_done) {
+ 			if (len == 0)
+ 				break;
+-			parse->cu_params.bpcc_bufp = ptr;
++			parse->cu_params.bpcc_bufp = (u8 *)ptr;
+ 			parse->bpcc_buf_done = true;
+ 		}
+ 		break;
+@@ -8473,7 +8473,7 @@ ath12k_update_link_removal_params(struct
+ {
+ 	struct ath12k *ar;
+ 	struct ath12k_link_vif *arvif;
+-	struct ath12k_mgmt_rx_mlo_link_removal_info *info;
++	const struct ath12k_mgmt_rx_mlo_link_removal_info *info;
+ 	u32 i;
+ 
+ 	/*
+@@ -14077,8 +14077,9 @@ ath12k_wmi_pktlog_decode_info(struct ath
+ 	struct ath12k *ar;
+         const void **tb;
+ 	int ret;
++	u32 pdev_id;
+ 	struct ath12k_pktlog *pktlog;
+-	struct ath12k_pl_fw_info *pktlog_info;
++	const struct ath12k_pl_fw_info *pktlog_info;
+ 
+ 	if (!test_bit(WMI_TLV_SERVICE_PKTLOG_DECODE_INFO_SUPPORT, ab->wmi_ab.svc_map)) {
+                 ath12k_warn(ab, "firmware doesn't support pktlog decode info support\n");
+@@ -14097,7 +14098,7 @@ ath12k_wmi_pktlog_decode_info(struct ath
+                 return;
+         }
+ 
+-	pktlog_info->pdev_id = DP_SW2HW_MACID(pktlog_info->pdev_id);
++	pdev_id = DP_SW2HW_MACID(pktlog_info->pdev_id);
+         ath12k_dbg(ab, ATH12K_DBG_WMI,
+                    "pktlog pktlog_defs_json_version: %d", pktlog_info->pktlog_defs_json_version);
+ 	ath12k_dbg(ab, ATH12K_DBG_WMI,
+@@ -14105,11 +14106,11 @@ ath12k_wmi_pktlog_decode_info(struct ath
+ 	ath12k_dbg(ab, ATH12K_DBG_WMI,
+                    "pktlog chip_info: %s", pktlog_info->chip_info);
+ 	 ath12k_dbg(ab, ATH12K_DBG_WMI,
+-                   "pktlog pdev_id: %d", pktlog_info->pdev_id);
++                   "pktlog pdev_id: %d", pdev_id);
+ 
+-        ar = ath12k_mac_get_ar_by_pdev_id(ab, pktlog_info->pdev_id);
++        ar = ath12k_mac_get_ar_by_pdev_id(ab, pdev_id);
+         if (!ar) {
+-                ath12k_warn(ab, "invalid pdev id in pktlog decode info %d", pktlog_info->pdev_id);
++                ath12k_warn(ab, "invalid pdev id in pktlog decode info %d", pdev_id);
+                 kfree(tb);
+                 return;
+         }
+@@ -14365,7 +14366,7 @@ static void ath12k_wmi_thermal_throt_sta
+ 	struct ath12k *ar;
+ 	const void **tb;
+ 	int ret;
+-	struct wmi_therm_throt_stats_event *ev;
++	const struct wmi_therm_throt_stats_event *ev;
+ 
+ 	tb = ath12k_wmi_tlv_parse_alloc(ab, skb->data, skb->len, GFP_ATOMIC);
+ 	if (IS_ERR(tb)) {
+@@ -16487,7 +16488,7 @@ int ath12k_wmi_mlo_teardown(struct ath12
+ }
+ 
+ int ath12k_wmi_mlo_reconfig_link_removal(struct ath12k *ar, u32 vdev_id,
+-					 u8 *reconfig_ml_ie,
++					 const u8 *reconfig_ml_ie,
+ 					 size_t reconfig_ml_ie_len)
+ {
+ 	struct ath12k_wmi_pdev *wmi = ar->wmi;
+--- a/include/ath/ath_sawf.h
++++ b/include/ath/ath_sawf.h
+@@ -12,7 +12,7 @@
+ struct ath_sawf_callbacks {
+ 	u16 (*sawf_dl_callback)(struct ieee80211_vif *vif,
+ 				 u8 dest_mac[],
+-				 u8 service_class_id,
++				 u32 service_class_id,
+ 				 u32 dscp,
+ 				 u32 rule_id);
+ 	void (*sawf_ul_callback)(struct ieee80211_vif *dest_vif,
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
+@@ -342,7 +342,7 @@ void ath12k_sawf_notify_breach(u8 *mac_a
+ 			       u8 svc_id,
+ 			       u8 param,
+ 			       bool set_clear,
+-			       u8 tid)
++			       u8 tid, u8 queue)
+ {
+ 	ath12k_telemetry_notify_breach(mac_addr, svc_id, param, set_clear, tid);
+ }
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
+@@ -19,7 +19,7 @@ int ath12k_sawf_get_drop_stats(void *soc
+ 			       u64 *drop, u64 *drop_ttl,
+ 			       u8 tid, u8 msduq);
+ void ath12k_sawf_notify_breach(u8 *mac_addr, u8 svc_id, u8 param,
+-			       bool set_clear, u8 tid);
++			       bool set_clear, u8 tid, u8 queue);
+ void *ath12k_telemetry_peer_ctx_alloc(void *peer, void *sawf_stats,
+ 				      u8 *mac_addr,
+ 				      u8 svc_id, u8 hostq_id);
+--- a/drivers/net/wireless/ath/ath12k/reg.c
++++ b/drivers/net/wireless/ath/ath12k/reg.c
+@@ -1096,7 +1096,7 @@ ret:
+ 	return eirp_pwr;
+ }
+ 
+-void ath12k_reg_get_afc_eirp_power_for_bw(struct ath12k *ar, u16 *start_freq,
++void ath12k_reg_get_afc_eirp_power_for_bw(struct ath12k *ar, u16 start_freq,
+ 					  u16 *center_freq, int pwr_level,
+ 					  struct cfg80211_chan_def *chan_def,
+ 					  s8 *tx_power)
+@@ -1106,7 +1106,7 @@ void ath12k_reg_get_afc_eirp_power_for_b
+ 	if (chan_def->width == NL80211_CHAN_WIDTH_80P80 && pwr_level == 3)
+ 		*center_freq = (u16)chan_def->center_freq2;
+ 	else
+-		*center_freq = *start_freq + (10 * (BIT(pwr_level) - 1));
++		*center_freq = start_freq + (10 * (BIT(pwr_level) - 1));
+ 
+ 	/* For 20 MHz, no +10 offset is required */
+ 	if (pwr_level != 0)
+--- a/drivers/net/wireless/ath/ath12k/reg.h
++++ b/drivers/net/wireless/ath/ath12k/reg.h
+@@ -314,7 +314,7 @@ int ath12k_reg_get_num_chans_in_band(str
+ 			             u32 freq_low, u32 freq_high);
+ s8 ath12k_reg_get_afc_eirp_power(struct ath12k *ar, enum nl80211_chan_width bw,
+ 				 int cfi);
+-void ath12k_reg_get_afc_eirp_power_for_bw(struct ath12k *ar, u16 *start_freq,
++void ath12k_reg_get_afc_eirp_power_for_bw(struct ath12k *ar, u16 start_freq,
+ 					  u16 *center_freq, int pwr_level,
+ 					  struct cfg80211_chan_def *chan_def,
+ 					  s8 *tx_power);
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -9181,7 +9181,7 @@ void ath12k_wmi_peer_chan_width_switch_w
+ int ath12k_wmi_set_latency(struct ath12k *ar, struct ath12k_latency_params *params);
+ int ath12k_wmi_pdev_get_ani_level(struct ath12k *ar, u32 param_id, u8 pdev_id);
+ int ath12k_wmi_mlo_reconfig_link_removal(struct ath12k *ar, u32 vdev_id,
+-					 u8 *reconfig_ml_ie,
++					 const u8 *reconfig_ml_ie,
+ 					 size_t reconfig_ml_ie_len);
+ int ath12k_wmi_send_wsi_stats_info(struct ath12k *ar,
+ 				   struct ath12k_wmi_wsi_stats_info_param *param);

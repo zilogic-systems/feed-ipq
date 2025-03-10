@@ -1,0 +1,78 @@
+From bb5a4c780c64cbbff00ff1f5bdcfd7998bc6e3e3 Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Sat, 7 Sep 2024 09:11:28 +0530
+Subject: [PATCH] scan: pass correct link ID in all cases
+
+In hostapd, when a scan was initiated, the link ID parameter was not
+populated in all scenarios, such as ACS. Additionally, each caller of
+hostapd_driver_scan() provided the link ID. However, since
+hostapd_driver_scan() has access to the hapd pointer, it can populate the
+link ID itself.
+
+And from wpa_supplicant, link ID was passed as 0 which does not seem to be
+correct. Fix that as well.
+
+Patch-dependency: None
+Patch-work: [PATCH] scan: pass correct link ID in all cases
+Tag: Scan
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ src/ap/ap_drv_ops.c       |  6 ++++++
+ src/ap/hw_features.c      | 11 -----------
+ wpa_supplicant/driver_i.h |  2 ++
+ 3 files changed, 8 insertions(+), 11 deletions(-)
+
+--- a/src/ap/ap_drv_ops.c
++++ b/src/ap/ap_drv_ops.c
+@@ -866,6 +866,12 @@ bool hostapd_drv_nl80211(struct hostapd_
+ int hostapd_driver_scan(struct hostapd_data *hapd,
+ 			struct wpa_driver_scan_params *params)
+ {
++	params->link_id = -1;
++#ifdef CONFIG_IEEE80211BE
++	if (hapd->conf->mld_ap)
++		params->link_id = hapd->mld_link_id;
++#endif /* CONFIG_IEEE80211BE */
++
+ 	if (hapd->driver && hapd->driver->scan2)
+ 		return hapd->driver->scan2(hapd->drv_priv, params);
+ 	return -1;
+--- a/src/ap/hw_features.c
++++ b/src/ap/hw_features.c
+@@ -528,12 +528,6 @@ static void ap_ht40_scan_retry(void *elo
+ 	else
+ 		ieee80211n_scan_channels_5g(iface, &params);
+ 
+-	params.link_id = -1;
+-#ifdef CONFIG_IEEE80211BE
+-	if (iface->bss[0]->conf->mld_ap)
+-		params.link_id = iface->bss[0]->mld_link_id;
+-#endif /* CONFIG_IEEE80211BE */
+-
+ 	if (iface->num_multi_hws) {
+ 		params.bssid = iface->bss[0]->conf->bssid;
+ 		wpa_printf(MSG_DEBUG, "HT40 scan triggered with bssid" MACSTR "\n",
+@@ -598,11 +592,6 @@ static int ieee80211n_check_40mhz(struct
+ 			   MAC2STR(params.bssid));
+ 	}
+ 
+-	params.link_id = -1;
+-#ifdef CONFIG_IEEE80211BE
+-	if (iface->bss[0]->conf->mld_ap)
+-		params.link_id = iface->bss[0]->mld_link_id;
+-#endif /* CONFIG_IEEE80211BE */
+ 	ret = hostapd_driver_scan(iface->bss[0], &params);
+ 	os_free(params.freqs);
+ 
+--- a/wpa_supplicant/driver_i.h
++++ b/wpa_supplicant/driver_i.h
+@@ -104,6 +104,8 @@ static inline int wpa_drv_mesh_link_prob
+ static inline int wpa_drv_scan(struct wpa_supplicant *wpa_s,
+ 			       struct wpa_driver_scan_params *params)
+ {
++	params->link_id = -1;
++
+ #ifdef CONFIG_TESTING_OPTIONS
+ 	if (wpa_s->test_failure == WPAS_TEST_FAILURE_SCAN_TRIGGER)
+ 		return -EBUSY;

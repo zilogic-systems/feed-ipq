@@ -1,0 +1,40 @@
+From 6365c8e02f8bdce76b1fd44c8e13942ad566efc8 Mon Sep 17 00:00:00 2001
+From: Arunpandi Kannan <quic_arunpand@quicinc.com>
+Date: Thu, 29 Aug 2024 14:47:48 +0530
+Subject: [PATCH] wifi: ath12k: Enable management IV generation flag and MIC
+length for ccmp-256
+
+Enable Management IV generation flag for CCMP-256 to add CCMP header in
+management action packet. And set the required MIC length of 16 for
+CCMP-256.
+
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 00feca9..6a69cf7 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -6328,6 +6328,7 @@ static int ath12k_install_key(struct ath12k_link_vif *arvif,
+ 		break;
+ 	case WLAN_CIPHER_SUITE_CCMP_256:
+ 		arg.key_cipher = WMI_CIPHER_AES_CCM;
++		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV_MGMT;
+ 		break;
+ 	case WLAN_CIPHER_SUITE_GCMP:
+ 	case WLAN_CIPHER_SUITE_GCMP_256:
+@@ -10114,6 +10115,9 @@ static int ath12k_mac_mgmt_tx_wmi(struct ath12k *ar, struct ath12k_link_vif *arv
+ 				case WLAN_CIPHER_SUITE_CCMP:
+ 					mic_len = IEEE80211_CCMP_MIC_LEN;
+ 					break;
++				case WLAN_CIPHER_SUITE_CCMP_256:
++					mic_len = IEEE80211_CCMP_256_MIC_LEN;
++					break;
+ 				case WLAN_CIPHER_SUITE_GCMP:
+ 				case WLAN_CIPHER_SUITE_GCMP_256:
+ 					mic_len = IEEE80211_GCMP_MIC_LEN;
+-- 
+2.34.1
+

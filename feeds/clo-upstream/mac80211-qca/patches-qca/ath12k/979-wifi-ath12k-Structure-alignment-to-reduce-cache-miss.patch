@@ -1,0 +1,109 @@
+From 4d527c81c173477c93eb79d9d51b28c116f58b84 Mon Sep 17 00:00:00 2001
+From: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+Date: Thu, 3 Oct 2024 12:56:02 +0530
+Subject: [PATCH] UPSTREAM: DP: wifi: ath12k: Structure alignment to 
+reduce cache miss in DL flow
+
+Align frequently used structure members within same cache line
+to avoid mutiple cache line access which reduce cache misses
+and optimizes CPU usage.
+
+Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h | 18 +++++++++---------
+ drivers/net/wireless/ath/ath12k/dp.h   |  1 +
+ 2 files changed, 10 insertions(+), 9 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1349,10 +1349,10 @@ struct ath12k_bus_params {
+ };
+ 
+ struct ath12k_soc_dp_tx_err_stats {
+-	/* TCL Ring Descriptor unavailable */
+-	u32 desc_na[DP_TCL_NUM_RING_MAX];
+ 	/* TCL Ring Buffers unavailable */
+ 	u32 txbuf_na[DP_TCL_NUM_RING_MAX];
++	/* TCL Ring Descriptor unavailable */
++	u32 desc_na[DP_TCL_NUM_RING_MAX];
+ 
+ 	u32 peers_not_present;
+ 
+@@ -1366,6 +1366,9 @@ struct ath12k_soc_dp_tx_err_stats {
+ };
+ 
+ struct ath12k_soc_dp_stats {
++	u32 tx_wbm_rel_source[HAL_WBM_REL_SRC_MODULE_MAX];
++	u32 tx_completed[MAX_TCL_RING];
++	u32 tqm_rel_reason[MAX_TQM_RELEASE_REASON];
+ 	u32 ppe_vp_mode_update_fail;
+ 	u32 err_ring_pkts;
+ 	u32 invalid_rbm;
+@@ -1379,11 +1382,8 @@ struct ath12k_soc_dp_stats {
+ 	u32 mcast_enqueued;
+ 	u32 ucast_enqueued;
+ 	u32 mcast_reinject;
+-	u32 tx_wbm_rel_source[HAL_WBM_REL_SRC_MODULE_MAX];
+-	u32 tqm_rel_reason[MAX_TQM_RELEASE_REASON];
+ 	u32 fw_tx_status[MAX_FW_TX_STATUS];
+ 	u32 tx_enqueued[MAX_TCL_RING];
+-	u32 tx_completed[MAX_TCL_RING];
+ 	u32 null_tx_complete[MAX_TCL_RING];
+ 	u32 reo_rx[DP_REO_DST_RING_MAX] [ATH12K_MAX_SOCS];
+ 	u32 ppe_vp_rx[DP_REO_DST_RING_MAX] [ATH12K_MAX_SOCS];
+@@ -1393,14 +1393,14 @@ struct ath12k_soc_dp_stats {
+ 	u32 eapol_rx[DP_REO_DST_RING_MAX][ATH12K_MAX_SOCS];
+ 	u32 rx_wbm_rel_source[HAL_WBM_REL_SRC_MODULE_MAX] [ATH12K_MAX_SOCS];
+ 
++	u32 tx_mcast[MAX_TCL_RING];
++	u32 tx_unicast[MAX_TCL_RING];
+ 	struct ath12k_soc_dp_tx_err_stats tx_err;
+ 	struct ath12k_dp_ring_bp_stats bp_stats;
+ 	u32 reo_cmd_update_rx_queue_error;
+ 	u32 first_and_last_msdu_bit_miss;
+ 	u32 reo_excep_msdu_buf_type;
+ 	u32 free_excess_alloc_skb;
+-	u32 tx_mcast[MAX_TCL_RING];
+-	u32 tx_unicast[MAX_TCL_RING];
+ 	u32 tx_eapol[MAX_TCL_RING];
+ 	u32 tx_null_frame[MAX_TCL_RING];
+ 	u32 rx_pkt_null_frame_dropped;
+@@ -1530,6 +1530,7 @@ struct wsi_info {
+ 
+ /* Master structure to hold the hw data which may be used in core module */
+ struct ath12k_base {
++	bool stats_disable;
+ 	enum ath12k_hw_rev hw_rev;
+ 	enum ath12k_firmware_mode fw_mode;
+ 	struct platform_device *pdev;
+@@ -1651,10 +1652,8 @@ struct ath12k_base {
+ #endif
+ 	struct list_head neighbor_peers;
+ 	int num_nrps;
+-
+-	struct ath12k_soc_dp_stats soc_stats;
+-
+ 	unsigned long dev_flags;
++	struct ath12k_soc_dp_stats soc_stats;
+ 	struct completion driver_recovery;
+ 	struct workqueue_struct *workqueue;
+ 	struct work_struct restart_work;
+@@ -1708,7 +1707,6 @@ struct ath12k_base {
+ 	
+ 	struct device_node *hremote_node;
+ 	u32 host_ddr_fixed_mem_off;
+-	bool stats_disable;
+ 	u32 rx_hash_ix2;
+ 	u32 rx_hash_ix3;
+ 
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -344,7 +344,7 @@ struct ath12k_tx_desc_info {
+ 	   flags  : 1;
+ 	u8 pool_id;
+ 	ktime_t timestamp;
+-};
++}__attribute__ ((aligned(L1_CACHE_BYTES)));
+ 
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ struct ath12k_ppeds_tx_desc_info {

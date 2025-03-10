@@ -1,0 +1,70 @@
+#
+# Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# SPDX-License-Identifier: ISC
+#
+# This script will update the the generated board.json with RDP, Board model,
+# uboot-envtools and wifi_fw name json objects. Thus, the single instance of change
+# that cascades to the entire system will help to enable features with respect
+# to board variants and chipsets.
+
+
+. /usr/share/libubox/jshn.sh
+. /lib/functions/uci-defaults.sh
+
+CFG="/etc/board.json"
+
+get_fw_name() {
+	wifi_ipq="ignored"
+
+	case "$1" in
+		"qcom,ipq9574-ap-al02-c4"|\
+		"qcom,ipq9574-ap-al02-c7"|\
+		"qcom,ipq9574-ap-al02-c8"|\
+		"qcom,ipq9574-ap-al02-c6"|\
+		"qcom,ipq9574-ap-al02-c12"|\
+		"qcom,ipq9574-ap-al03-c1"|\
+		"qcom,ipq9574-ap-al03-c2"|\
+		"qcom,ipq9574-ap-al05"|\
+		"qcom,ipq9574-ap-al05-qca81xx"|\
+		"qcom,ipq9574-ap-al05-qca81xx-i2c"|\
+		"qcom,ipq9574-ap-al06"|\
+		"qcom,ipq9574-ap-al02-c9"|\
+		"qcom,ipq9574-ap-al02-c14"|\
+		"qcom,ipq9574-ap-al02-c17"|\
+		"qcom,ipq9574-ap-al02-c18"|\
+		"qcom,ipq9574-ap-al02-c20"|\
+		"qcom,ipq9574-ap-al02-c11")
+			wifi_ipq="ipq9574_qcn9224_v2_dualmac_squashfs.img"
+			;;
+		"qcom,ipq9574-ap-al02-c13")
+			wifi_ipq="ipq9574_qcn9000_qcn9224_v2_squashfs.img"
+			;;
+		*)
+			wifi_ipq="ipq9574_qcn9000_squashfs.img"
+			;;
+
+	esac
+
+	echo $wifi_ipq
+}
+
+ipq_board_update() {
+	json_init
+	[ -f ${CFG} ] && json_load "$(cat ${CFG})"
+
+	# auto-initialize ipq details if applicable
+	if ! json_is_a board_name object; then
+		name="$(cat /tmp/sysinfo/board_name)"
+		json_add_string board_name "$name"
+	fi
+	if ! json_is_a uboot-envtool object; then
+		[ -f "/usr/sbin/fw_printenv" ] && \
+			json_add_string uboot-envtool "true"
+	fi
+
+	json_add_string sysupgrade "true"
+	json_add_string wififw_name "$(get_fw_name $name)"
+}
+
+ipq_board_update
+board_config_flush

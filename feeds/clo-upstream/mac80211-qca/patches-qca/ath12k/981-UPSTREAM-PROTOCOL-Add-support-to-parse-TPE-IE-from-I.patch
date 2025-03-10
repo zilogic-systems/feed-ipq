@@ -1,0 +1,66 @@
+From 8f553249f2362d93fd8d97907110dcd6150997bc Mon Sep 17 00:00:00 2001
+From: Amith A <quic_amitajit@quicinc.com>
+Date: Tue, 5 Nov 2024 20:36:50 +0530
+Subject: [PATCH 1/2] UPSTREAM:PROTOCOL:Add support to parse TPE IE from Indoor
+ SP AP
+
+An Indoor SP(Composite) AP advertises 2 additional new power
+interpretations in the TPE IE. Add support in the STA to parse
+these new power interpretations.
+
+Tag: 6G_REGULATORY
+
+Signed-off-by: Amith A <quic_amitajit@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 2d4ac06..f3880c9 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -14687,6 +14687,7 @@ static u8 ath12k_mac_get_tpe_count(u8 txpwr_intrprt, u8 txpwr_cnt)
+          */
+         case IEEE80211_TPE_LOCAL_EIRP:
+         case IEEE80211_TPE_REG_CLIENT_EIRP:
++	case IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP:
+                 txpwr_cnt = txpwr_cnt <= 3 ? txpwr_cnt : 3;
+                 txpwr_cnt = txpwr_cnt + 1;
+                 break;
+@@ -14696,6 +14697,7 @@ static u8 ath12k_mac_get_tpe_count(u8 txpwr_intrprt, u8 txpwr_cnt)
+          */
+         case IEEE80211_TPE_LOCAL_EIRP_PSD:
+         case IEEE80211_TPE_REG_CLIENT_EIRP_PSD:
++	case IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP_PSD:
+                 txpwr_cnt = txpwr_cnt <= 4 ? txpwr_cnt : 4;
+                 txpwr_cnt = txpwr_cnt ? (BIT(txpwr_cnt - 1)) : 1;
+                 break;
+@@ -15482,7 +15484,9 @@ void ath12k_mac_parse_tx_pwr_env(struct ath12k *ar,
+                             pwr_interpret == IEEE80211_TPE_LOCAL_EIRP_PSD)
+                                 local_tpe_count++;
+                         else if (pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP ||
+-                                 pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP_PSD)
++				 pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP_PSD ||
++				 pwr_interpret == IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP_PSD ||
++				 pwr_interpret == IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP)
+                                 reg_tpe_count++;
+                 }
+         }
+@@ -15519,10 +15523,12 @@ void ath12k_mac_parse_tx_pwr_env(struct ath12k *ar,
+                         }
+                 /* get regulatory transmit power envelope */
+                 } else {
+-                        if (pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP) {
++			if (pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP ||
++			    pwr_interpret == IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP) {
+                                 non_psd_index = i;
+                                 non_psd_set = true;
+-                        } else if (pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP_PSD) {
++			} else if (pwr_interpret == IEEE80211_TPE_REG_CLIENT_EIRP_PSD ||
++				   pwr_interpret == IEEE80211_TPE_ADDITIONAL_REG_CLIENT_EIRP_PSD) {
+                                 psd_index = i;
+                                 psd_set = true;
+                         }
+-- 
+2.34.1
+

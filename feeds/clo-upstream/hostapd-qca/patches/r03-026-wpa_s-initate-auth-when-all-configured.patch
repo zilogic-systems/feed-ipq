@@ -1,0 +1,56 @@
+From f1b8f4e971b3c5865bba75d9e838c8882c91f114 Mon Sep 17 00:00:00 2001
+From: Rameshkumar Sundaram <quic_ramess@quicinc.com>
+Date: Thu, 2 Nov 2023 16:54:10 +0530
+Subject: [PATCH] wpa_supplicant: initate auth when all configured links of ml bss are found
+
+While establishing ML connection, if BSS entry of partner BSS
+is not found in scan result, supplicant proceeds to authenticate with links
+which are available is current scan result.
+Instead attempt to retry scan and find all configured links in mld so that
+supplicant will be able associate on all configured links.
+Currently the retry limit is set to 5 scans.
+
+Also added a check to verify if partner link BSS'es freq is part for configured
+freq list before considering the link for association.
+
+ToDo: Optimize above retry to scan only given freq/list of freq where partner(s)
+are said to be present in current link's RNR.
+
+Signed-off-by: Rameshkumar Sundaram <quic_ramess@quicinc.com>
+---
+************     TODO: Need to redesign this        *********
+
+ wpa_supplicant/sme.c              | 59 +++++++++++++++++++++++++------
+ wpa_supplicant/wpa_supplicant_i.h |  1 +
+ 2 files changed, 49 insertions(+), 11 deletions(-)
+
+--- a/wpa_supplicant/sme.c
++++ b/wpa_supplicant/sme.c
+@@ -571,6 +571,7 @@ static void sme_send_authentication(stru
+ 	const u8 *mbo_ie;
+ #endif /* CONFIG_MBO */
+ 	int omit_rsnxe = 0;
++	bool ret;
+ 
+ 	if (bss == NULL) {
+ 		wpa_msg(wpa_s, MSG_ERROR, "SME: No scan result available for "
+--- a/wpa_supplicant/events.c
++++ b/wpa_supplicant/events.c
+@@ -4371,6 +4371,7 @@ static void wpa_supplicant_event_assoc(s
+ #endif /* CONFIG_SME */
+ 
+ 	wpa_msg(wpa_s, MSG_INFO, "Associated with " MACSTR, MAC2STR(bssid));
++	wpa_s->ml_neigh_retries = 0;
+ 	if (wpa_s->current_ssid) {
+ 		/* When using scanning (ap_scan=1), SIM PC/SC interface can be
+ 		 * initialized before association, but for other modes,
+--- a/wpa_supplicant/wpa_supplicant_i.h
++++ b/wpa_supplicant/wpa_supplicant_i.h
+@@ -1632,6 +1632,7 @@ struct wpa_supplicant {
+ 
+ 	/* Minimum bandwidth the driver supports RU puncturing */
+ 	u8 ru_punct_supp_bw;
++	unsigned int ml_neigh_retries;
+ };
+ 
+ 

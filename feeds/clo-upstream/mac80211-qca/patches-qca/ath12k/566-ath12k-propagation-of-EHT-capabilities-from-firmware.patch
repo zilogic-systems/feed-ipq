@@ -1,0 +1,213 @@
+From 4ccfa68c5783d5aea97bdfca9f4daa31d3991c55 Mon Sep 17 00:00:00 2001
+From: Aloka Dixit <quic_alokad@quicinc.com>
+Date: Thu, 10 Feb 2022 17:09:20 -0800
+Subject: [PATCH] ath12k: propagation of EHT capabilities from firmware to
+ kernel
+
+This commit adds new WMI definitions and functions required to parse
+the EHT capabilities advertised by the firmware and propagate those
+to the kernel.
+
+Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
+Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |   8 +
+ drivers/net/wireless/ath/ath12k/mac.c  | 283 ++++++++++++++++++-------
+ drivers/net/wireless/ath/ath12k/wmi.c  | 132 +++++++++++-
+ drivers/net/wireless/ath/ath12k/wmi.h  | 105 +++++++++
+ 4 files changed, 450 insertions(+), 78 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -26,6 +26,8 @@ struct ath12k_base;
+ struct ath12k;
+ struct ath12k_fw_stats;
+ 
++#define PSOC_HOST_MAX_NUM_SS (8)
++
+ /* There is no signed version of __le32, so for a temporary solution come
+  * up with our own version. The idea is from fs/ntfs/endian.h.
+  *
+@@ -2283,6 +2285,7 @@ struct ath12k_wmi_ppe_threshold_arg {
+ 	u32 ppet16_ppet8_ru3_ru0[WMI_MAX_NUM_SS];
+ };
+ 
++#define PSOC_HOST_MAX_MAC_SIZE (2)
+ #define PSOC_HOST_MAX_PHY_SIZE (3)
+ #define ATH12K_11B_SUPPORT                 BIT(0)
+ #define ATH12K_11G_SUPPORT                 BIT(1)
+@@ -2304,6 +2307,16 @@ struct ath12k_wmi_hal_reg_capabilities_e
+ 	u32 high_5ghz_chan;
+ };
+ 
++
++/*
++ * 0 – index indicated EHT-MCS map for 20Mhz only sta (4 bytes valid)
++ * 1 – index for <= 80MHz bw  (only 3 bytes are valid and other is reserved)
++ * 2 – index for == 160Mhz bw (only 3 bytes are valid and other is reserved)
++ * 3 – index for == 320Mhz bw (only 3 bytes are valid and other is reserved)
++ */
++#define WMI_MAX_EHT_SUPP_MCS_2G_SIZE  2
++#define WMI_MAX_EHT_SUPP_MCS_5G_SIZE  4
++
+ #define WMI_HOST_MAX_PDEV 3
+ 
+ struct ath12k_wmi_host_mem_chunk_params {
+@@ -2417,6 +2430,21 @@ struct ath12k_wmi_ppe_threshold_params {
+ 	__le32 ppet16_ppet8_ru3_ru0[WMI_MAX_NUM_SS];
+ } __packed;
+ 
++struct ath12k_ppe_threshold {
++	u32 numss_m1;
++	u32 ru_bit_mask;
++	u32 ppet16_ppet8_ru3_ru0[PSOC_HOST_MAX_NUM_SS];
++};
++
++struct wmi_ppe_threshold {
++	u32 numss_m1; /** NSS - 1*/
++	union {
++		u32 ru_count;
++		u32 ru_mask;
++	} __packed;
++	u32 ppet16_ppet8_ru3_ru0[WMI_MAX_NUM_SS];
++} __packed;
++
+ #define HW_BD_INFO_SIZE       5
+ 
+ struct ath12k_wmi_abi_version_params {
+@@ -2702,6 +2730,51 @@ struct ath12k_wmi_caps_ext_params {
+ 	__le32 eht_supp_mcs_ext_5ghz[WMI_MAX_EHT_SUPP_MCS_5G_SIZE];
+ } __packed;
+ 
++enum wmi_spectral_scaling_formula_id {
++	NO_SCALING = 0,
++	AGC_GAIN_RSSI_CORR_BASED = 1,
++};
++
++struct wmi_spectral_bin_scaling {
++	u32 pdev_id;
++	enum wmi_spectral_scaling_formula_id formula_id;
++	u32 low_level_offset;
++	u32 high_level_offset;
++	u32 rssi_thr;
++	u32 default_agc_max_gain;
++} __packed;
++
++enum wmi_eht_mcs_support {
++	WMI_EHT_MCS_SUPPORT_0_9   = 0,
++	WMI_EHT_MCS_SUPPORT_0_11  = 1,
++	WMI_EHT_MCS_SUPPORT_0_13  = 2,
++	WMI_EHT_MCS_NOT_SUPPORTED = 3,
++};
++
++struct wmi_mac_phy_caps_ext {
++	u32 hw_mode_id;
++	union {
++		struct {
++			u32 pdev_id:16,
++			    hw_link_id:16;
++		} wmi_pdev_to_link_map;
++		u32 pdev_id;
++	} u;
++	u32 phy_id;
++	u32 wireless_modes_ext;
++	u32 eht_cap_mac_info_2G[WMI_MAX_EHTCAP_MAC_SIZE];
++	u32 eht_cap_mac_info_5G[WMI_MAX_EHTCAP_MAC_SIZE];
++	u32 rsvd0[2];
++	u32 eht_cap_phy_info_2G[WMI_MAX_EHTCAP_PHY_SIZE];
++	u32 eht_cap_phy_info_5G[WMI_MAX_EHTCAP_PHY_SIZE];
++	struct wmi_ppe_threshold eht_ppet2G;
++	struct wmi_ppe_threshold eht_ppet5G;
++	u32 eht_cap_info_internal;
++	u32 eht_supp_mcs_ext_2G[WMI_MAX_EHT_SUPP_MCS_2G_SIZE];
++	u32 eht_supp_mcs_ext_5G[WMI_MAX_EHT_SUPP_MCS_5G_SIZE];
++} __packed;
++
++
+ /* 2 word representation of MAC addr */
+ struct ath12k_wmi_mac_addr_params {
+ 	u8 addr[ETH_ALEN];
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -5040,7 +5040,8 @@ static void ath12k_mac_set_hemcsmap(stru
+ 	       cpu_to_le16(txmcs_map_160 & 0xffff);
+ }
+ 
+-static void ath12k_mac_copy_he_cap(struct ath12k_band_cap *band_cap,
++static void ath12k_mac_copy_he_cap(struct ath12k *ar,
++				   struct ath12k_band_cap *band_cap,
+ 				   int iftype, u8 num_tx_chains,
+ 				   struct ieee80211_sta_he_cap *he_cap)
+ {
+@@ -5228,7 +5229,7 @@ static int ath12k_mac_copy_sband_iftype_
+ 
+ 		data[idx].types_mask = BIT(i);
+ 
+-		ath12k_mac_copy_he_cap(band_cap, i, ar->num_tx_chains, he_cap);
++		ath12k_mac_copy_he_cap(ar, band_cap, i, ar->num_tx_chains, he_cap);
+ 		if (band == NL80211_BAND_6GHZ) {
+ 			data[idx].he_6ghz_capa.capa =
+ 				ath12k_mac_setup_he_6ghz_cap(cap, band_cap);
+@@ -5295,6 +5296,13 @@ static int __ath12k_set_antenna(struct a
+ 	ar->cfg_tx_chainmask = tx_ant;
+ 	ar->cfg_rx_chainmask = rx_ant;
+ 
++	ar->num_tx_chains = hweight32(tx_ant);
++	ar->num_rx_chains = hweight32(rx_ant);
++
++	/* Reload HT/VHT/HE capability */
++	ath12k_mac_setup_ht_vht_cap(ar, &ar->pdev->cap, NULL);
++	ath12k_mac_setup_sband_iftype_data(ar, &ar->pdev->cap);
++
+ 	if (ar->state != ATH12K_STATE_ON &&
+ 	    ar->state != ATH12K_STATE_RESTARTED)
+ 		return 0;
+@@ -5302,27 +5310,19 @@ static int __ath12k_set_antenna(struct a
+ 	ret = ath12k_wmi_pdev_set_param(ar, WMI_PDEV_PARAM_TX_CHAIN_MASK,
+ 					tx_ant, ar->pdev->pdev_id);
+ 	if (ret) {
+-		ath12k_warn(ar->ab, "failed to set tx-chainmask: %d, req 0x%x\n",
++		ath12k_err(ar->ab, "failed to set tx-chainmask: %d, req 0x%x\n",
+ 			    ret, tx_ant);
+ 		return ret;
+ 	}
+ 
+-	ar->num_tx_chains = hweight32(tx_ant);
+-
+ 	ret = ath12k_wmi_pdev_set_param(ar, WMI_PDEV_PARAM_RX_CHAIN_MASK,
+ 					rx_ant, ar->pdev->pdev_id);
+ 	if (ret) {
+-		ath12k_warn(ar->ab, "failed to set rx-chainmask: %d, req 0x%x\n",
++		ath12k_err(ar->ab, "failed to set rx-chainmask: %d, req 0x%x\n",
+ 			    ret, rx_ant);
+ 		return ret;
+ 	}
+ 
+-	ar->num_rx_chains = hweight32(rx_ant);
+-
+-	/* Reload HT/VHT/HE capability */
+-	ath12k_mac_setup_ht_vht_cap(ar, &ar->pdev->cap, NULL);
+-	ath12k_mac_setup_sband_iftype_data(ar, &ar->pdev->cap);
+-
+ 	return 0;
+ }
+ 
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -4406,6 +4406,7 @@ ath12k_wmi_tlv_mac_phy_caps_ext_parse(st
+ {
+ 	u32 bands;
+ 	int i;
++	struct ath12k_pdev_cap *pdev_cap = &pdev->cap;
+ 
+ 	if (ab->hw_params->single_pdev_only) {
+ 		for (i = 0; i < ab->fw_pdev_count; i++) {
+@@ -4467,7 +4468,7 @@ static int ath12k_wmi_tlv_mac_phy_caps_e
+ 			return 0;
+ 	} else {
+ 		for (i = 0; i < ab->num_radios; i++) {
+-			if (ab->pdevs[i].pdev_id == le32_to_cpu(caps->pdev_id))
++			if (ab->pdevs[i].pdev_id == le32_to_cpu(caps->ath12k_wmi_pdev_to_link_map.pdev_id))
+ 				break;
+ 		}
+ 

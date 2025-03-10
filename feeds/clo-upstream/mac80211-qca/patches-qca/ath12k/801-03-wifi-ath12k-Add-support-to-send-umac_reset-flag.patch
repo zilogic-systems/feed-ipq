@@ -1,0 +1,273 @@
+From 52ffb81a8a5a7b81ab2fc471a61589aea26eae78 Mon Sep 17 00:00:00 2001
+From: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+Date: Sun, 9 Jul 2023 11:42:11 +0530
+Subject: [PATCH 3/4] wifi: ath12k: Add support to send umac_reset flag
+
+This change set adds support to send umac_reset
+flag during mlo teardown message. This will be
+utilized when MODE1 recovery is selected, thus
+for the non-asserted partner chips, only umac
+reset is triggered instead of triggering Q6 assert.
+
+Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 33 +++++++++++++++-
+ drivers/net/wireless/ath/ath12k/core.h |  4 ++
+ drivers/net/wireless/ath/ath12k/mac.c  | 52 ++++++++++++++++++++++++--
+ drivers/net/wireless/ath/ath12k/mac.h  |  1 +
+ drivers/net/wireless/ath/ath12k/wmi.c  | 22 ++++++++++-
+ drivers/net/wireless/ath/ath12k/wmi.h  |  3 +-
+ 6 files changed, 107 insertions(+), 8 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -1489,8 +1489,10 @@ static int ath12k_core_hw_group_start(st
+ 		mutex_unlock(&ab->core_lock);
+ 	}
+ 
+-	if (!is_registered)
++	if (!is_registered) {
+ 		set_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags);
++		init_completion(&ag->umac_reset_complete);
++	}
+ 
+ 	return 0;
+ 
+@@ -2135,6 +2137,35 @@ static int ath12k_rproc_recovery_power_u
+ 	return 0;
+ }
+ 
++/*
++ * Trigger umac_reset with umac_reset flag set. This is a
++ * waiting function which will return only after UMAC reset
++ * is complete on non-asserted chip set. UMAC reset completion
++ * is identified by waiting for MLO Teardown complete for all
++ * chipsets
++ */
++int ath12k_core_trigger_umac_reset(struct ath12k_base *ab)
++{
++	struct ath12k_hw_group *ag = ab->ag;
++	long time_left;
++	unsigned long timeout;
++
++	reinit_completion(&ag->umac_reset_complete);
++
++	ath12k_mac_mlo_teardown_with_umac_reset(ab);
++
++	timeout = jiffies + msecs_to_jiffies(ATH12K_UMAC_RESET_TIMEOUT_IN_MS);
++
++	time_left = wait_for_completion_timeout(&ag->umac_reset_complete,
++						timeout);
++
++	if (!time_left) {
++		ath12k_warn(ab, "UMAC reset didn't get completed within %d ms\n", ATH12K_UMAC_RESET_TIMEOUT_IN_MS);
++		return -ETIMEDOUT;
++	}
++	return 0;
++}
++
+ #ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
+ static void ath12k_core_disable_ppe_rtnl_bond_release(struct ath12k_base *ab)
+ {
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -58,6 +58,7 @@ extern unsigned int ath12k_frame_mode;
+ #define ATH12K_RESET_FAIL_TIMEOUT_HZ		(20 * HZ)
+ #define ATH12K_RECONFIGURE_TIMEOUT_HZ		(10 * HZ)
+ #define ATH12K_RECOVER_START_TIMEOUT_HZ		(20 * HZ)
++#define ATH12K_UMAC_RESET_TIMEOUT_IN_MS		1000
+ 
+ #define INVALID_CIPHER 0xFFFFFFFF
+ 
+@@ -1263,6 +1264,8 @@ struct ath12k_hw_group {
+ 	atomic_t num_dp_tx_pending;
+ 	u64 mlo_tstamp_offset;
+ 	struct ath12k_mlo_dp_umac_reset mlo_umac_reset;
++	struct completion umac_reset_complete;
++	bool trigger_umac_reset;
+ };
+ 
+ /* Master structure to hold the hw data which may be used in core module */
+@@ -1465,6 +1468,7 @@ struct ath12k_base {
+ 	u32 *crash_info_address;
+ 	u32 *recovery_mode_address;
+ 
++	bool mlo_complete_event;
+ 	/* must be last */
+ 	u8 drv_priv[] __aligned(sizeof(void *));
+ };
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -9577,12 +9577,12 @@ static int __ath12k_mac_mlo_setup(struct
+ 	return 0;
+ }
+ 
+-static int __ath12k_mac_mlo_teardown(struct ath12k *ar)
++static int __ath12k_mac_mlo_teardown(struct ath12k *ar, bool umac_reset)
+ {
+ 	struct ath12k_base *ab = ar->ab;
+ 	int ret;
+ 
+-	ret = ath12k_wmi_mlo_teardown(ar);
++	ret = ath12k_wmi_mlo_teardown(ar, umac_reset);
+ 	if (ret) {
+ 		ath12k_err(ab, "failed to teardown MLO for pdev_idx %d: %d\n",
+ 			   ar->pdev_idx, ret);
+@@ -9616,7 +9616,7 @@ int ath12k_mac_mlo_setup(struct ath12k_h
+ err_setup:
+ 	ar = ah->radio;
+ 	for (i = i - 1; i >= 0; i--) {
+-		fbret = __ath12k_mac_mlo_teardown(ar);
++		fbret = __ath12k_mac_mlo_teardown(ar, false);
+ 		if (fbret)
+ 			ath12k_err(ar->ab, "MLO teardown failed %d in setup cleanup\n",
+ 				   fbret);
+@@ -9786,7 +9786,7 @@ int ath12k_mac_mlo_teardown(struct ath12
+ 
+ 	ar = ah->radio;
+ 	for (i = 0; i < ah->num_radio; i++) {
+-		ret = __ath12k_mac_mlo_teardown(ar);
++		ret = __ath12k_mac_mlo_teardown(ar, false);
+ 		if (ret)
+ 			goto out;
+ 
+@@ -9794,6 +9794,50 @@ int ath12k_mac_mlo_teardown(struct ath12
+ 	}
+ 
+ out:
++	return ret;
++}
++
++int ath12k_mac_mlo_teardown_with_umac_reset(struct ath12k_base *ab)
++{
++	struct ath12k_hw_group *ag = ab->ag;
++	struct ath12k_base *partner_ab;
++	struct ath12k *ar;
++	struct ath12k_pdev *pdev;
++	int i, j, ret = 0;
++	bool umac_reset;
++
++	for (i = 0; i < ag->num_chip; i++) {
++		partner_ab = ag->ab[i];
++
++		if (ab == partner_ab) {
++			/* No need to send teardown event for asserted chip, as
++			 * anyway there will be no completion event from FW.
++			 */
++			ab->mlo_complete_event = true;
++			continue;
++		}
++
++		for (j = 0; j < partner_ab->num_radios; j++) {
++			pdev = &partner_ab->pdevs[j];
++			ar = pdev->ar;
++
++			if (!ar)
++				continue;
++
++			/* Need to umac_reset as 1 for only one chip */
++			umac_reset = false;
++			if (!ag->trigger_umac_reset) {
++				umac_reset = true;
++				ag->trigger_umac_reset = true;
++			}
++
++			ret = __ath12k_mac_mlo_teardown(ar, umac_reset);
++			if (ret)
++				goto out;
++		}
++	}
++
++out:
+ 	return ret;
+ }
+ 
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -172,4 +172,5 @@ u16 ath12k_calculate_subchannel_count(en
+ void ath12k_mac_background_dfs_event(struct ath12k *ar,
+ 				     enum ath12k_background_dfs_events ev);
+ bool ath12k_mac_tx_check_max_limit(struct ath12k *ar, struct sk_buff *skb);
++int ath12k_mac_mlo_teardown_with_umac_reset(struct ath12k_base *ab);
+ #endif
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -851,7 +851,9 @@ static void ath12k_wmi_event_teardown_co
+ {
+ 	const void **tb;
+ 	const struct wmi_mlo_teardown_complete_fixed_param *ev;
+-	int ret;
++	struct ath12k_hw_group *ag = ab->ag;
++	int ret, i;
++	bool complete_flag = true;
+ 
+ 	tb = ath12k_wmi_tlv_parse_alloc(ab, skb->data, skb->len, GFP_ATOMIC);
+ 	if (IS_ERR(tb)) {
+@@ -874,6 +876,19 @@ static void ath12k_wmi_event_teardown_co
+ 			    ev->pdev_id, ev->status);
+ 
+ 	kfree(tb);
++
++	ab->mlo_complete_event = true;
++	for (i = 0; i < ag->num_chip; i++) {
++		ab = ag->ab[i];
++
++		if (!ab->mlo_complete_event)
++			complete_flag = false;
++	}
++
++	if (complete_flag) {
++		complete(&ag->umac_reset_complete);
++		ag->trigger_umac_reset = false;
++	}
+ }
+ 
+ static void ath12k_wmi_process_mvr_event(struct ath12k *ab, u32 *vdev_id_bm,
+@@ -1852,6 +1867,7 @@ int ath12k_wmi_send_pdev_pkt_route(struc
+ 		dev_kfree_skb(skb);
+ 	}
+ 
++	ar->ab->mlo_complete_event = false;
+ 	return ret;
+ }
+ 
+@@ -14349,10 +14365,11 @@ int ath12k_wmi_mlo_ready(struct ath12k *
+ 		dev_kfree_skb(skb);
+ 	}
+ 
++	ar->ab->mlo_complete_event = false;
+ 	return ret;
+ }
+ 
+-int ath12k_wmi_mlo_teardown(struct ath12k *ar)
++int ath12k_wmi_mlo_teardown(struct ath12k *ar, bool umac_reset)
+ {
+ 	struct ath12k_pdev_wmi *wmi = ar->wmi;
+ 	struct wmi_mlo_teardown_fixed_param *cmd;
+@@ -14369,6 +14386,7 @@ int ath12k_wmi_mlo_teardown(struct ath12
+ 			  FIELD_PREP(WMI_TLV_LEN, sizeof(*cmd) - TLV_HDR_SIZE);
+ 	cmd->pdev_id = ar->pdev->pdev_id;
+ 	cmd->reason_code = WMI_MLO_TEARDOWN_SSR_REASON;
++	cmd->umac_reset = umac_reset;
+ 
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_MLO_TEARDOWN_CMDID);
+ 	if (ret) {
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -7955,6 +7955,7 @@ struct wmi_mlo_teardown_fixed_param {
+ 	u32 tlv_header;
+ 	u32 pdev_id;
+ 	u32 reason_code;
++	u32 umac_reset;
+ } __packed;
+ 
+ struct wmi_mlo_setup_complete_event_fixed_param {
+@@ -8332,7 +8333,7 @@ int ath12k_wmi_send_wmi_ctrl_stats_cmd(s
+ int ath12k_wmi_mlo_setup(struct ath12k *ar,
+ 			 struct wmi_mlo_setup_params *mlo_params);
+ int ath12k_wmi_mlo_ready(struct ath12k *ar);
+-int ath12k_wmi_mlo_teardown(struct ath12k *ar);
++int ath12k_wmi_mlo_teardown(struct ath12k *ar, bool umac_reset);
+ bool ath12k_wmi_is_mvr_supported(struct ath12k_base *ab);
+ int ath12k_wmi_pdev_multiple_vdev_restart(struct ath12k *ar,
+ 					  struct wmi_pdev_multiple_vdev_restart_req_arg *arg);

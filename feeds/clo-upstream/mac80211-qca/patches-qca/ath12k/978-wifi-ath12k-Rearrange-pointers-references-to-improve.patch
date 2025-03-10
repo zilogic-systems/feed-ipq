@@ -1,0 +1,128 @@
+From d98237f8369fdcb95406f9c44a90d559b617497f Mon Sep 17 00:00:00 2001
+From: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+Date: Mon, 12 Aug 2024 16:34:08 +0530
+Subject: [PATCH] UPSTREAM: DP: wifi: ath12k: Rearrange pointers references to
+improve cache miss
+
+Rearrange pointers reference in tx path to improve cache miss.
+This change helps in CPU optimization which results in better
+usage of recycler.
+
+Patch Dependency: 676-01-ath12k-prepare-vif-and-sta-for-MLO-handling.patch
+
+Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 35 +++++++++++++--------------
+ 1 file changed, 17 insertions(+), 18 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -11111,9 +11111,8 @@ static void ath12k_mac_op_tx(struct ieee
+ 	struct ath12k_vif *ahvif;
+ 	struct ath12k_link_vif *arvif, *tmp_arvif;
+ 	struct ath12k *ar, *tmp_ar;
+-	struct ath12k_hw *ah;
+ 	struct ieee80211_hdr *hdr;
+-	struct ethhdr *eth = (struct ethhdr *)skb->data;
++	struct ethhdr *eth;
+ 	struct ieee80211_key_conf *key;
+ 	struct ath12k_mgmt_frame_stats *mgmt_stats;
+ 	struct ath12k_sta *ahsta = NULL;
+@@ -11133,12 +11132,9 @@ static void ath12k_mac_op_tx(struct ieee
+ 
+ 	info = IEEE80211_SKB_CB(skb);
+ 	vif = info->control.vif;
+-	ahvif = ath12k_vif_to_ahvif(vif);
+-	link = u32_get_bits(info->control.flags, IEEE80211_TX_CTRL_MLO_LINK);
+ 	info_flags = info->flags;
+ 
+-	if (control)
+-		sta = control->sta;
++	ahvif = ath12k_vif_to_ahvif(vif);
+ 
+ 	if (ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR) {
+ 		ieee80211_free_txskb(hw, skb);
+@@ -11150,8 +11146,12 @@ static void ath12k_mac_op_tx(struct ieee
+ 	memset(skb_cb, 0, sizeof(*skb_cb));
+ 	skb_cb->vif = vif;
+ 
++	if (control)
++                sta = control->sta;
++
+ 	/* handle only for MLO case, use deflink for non MLO case */
+ 	if (vif->valid_links) {
++		link = u32_get_bits(info->control.flags, IEEE80211_TX_CTRL_MLO_LINK);
+ 		link = ath12k_mac_get_tx_link(sta, vif, link, skb, info_flags);
+ 
+ 		if (link >= ATH12K_NUM_MAX_LINKS ||
+@@ -11192,11 +11192,9 @@ static void ath12k_mac_op_tx(struct ieee
+ 
+ 	ar = arvif->ar;
+ 
+-	ah = ar->ah;
+-
+ 	if (unlikely(test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags))) {
+ 		rcu_read_unlock();
+-		ieee80211_free_txskb(ah->hw, skb);
++		ieee80211_free_txskb(hw, skb);
+ 		return;
+ 	}
+ 
+@@ -11251,6 +11249,8 @@ static void ath12k_mac_op_tx(struct ieee
+ 
+ 	hdr = (struct ieee80211_hdr *)skb->data;
+ 
++	eth = (struct ethhdr *)skb->data;
++
+ 	if (info_flags & IEEE80211_TX_CTL_HW_80211_ENCAP) {
+ 		skb_cb->flags |= ATH12K_SKB_HW_80211_ENCAP;
+ 		is_mcast = is_multicast_ether_addr(eth->h_dest);
+@@ -11268,7 +11268,7 @@ static void ath12k_mac_op_tx(struct ieee
+ 		}
+ 		mgmt_stats = &ahvif->mgmt_stats;
+ 		if (ath12k_mac_is_bridge_vdev(arvif)) {
+-			ieee80211_free_txskb(ah->hw, skb);
++			ieee80211_free_txskb(hw, skb);
+ 			spin_lock_bh(&ar->data_lock);
+ 			mgmt_stats->tx_fail_cnt[frm_type]++;
+ 			spin_unlock_bh(&ar->data_lock);
+@@ -11280,7 +11280,7 @@ static void ath12k_mac_op_tx(struct ieee
+ 			if (ret != -EBUSY)
+ 				ath12k_warn(ar->ab, "failed to queue mgmt stype 0x%x frame %d\n", frm_type, ret);
+ 
+-			ieee80211_free_txskb(ah->hw, skb);
++			ieee80211_free_txskb(hw, skb);
+ 			spin_lock_bh(&ar->data_lock);
+ 			mgmt_stats->tx_fail_cnt[frm_type]++;
+ 			spin_unlock_bh(&ar->data_lock);
+@@ -11331,7 +11331,7 @@ static void ath12k_mac_op_tx(struct ieee
+ 				ath12k_warn(ar->ab, "failed to transmit frame %d\n", ret);
+ 
+ 			arvif->link_stats.tx_dropped++;
+-			ieee80211_free_txskb(ah->hw, skb);
++			ieee80211_free_txskb(hw, skb);
+ 		}
+ 		if (ath12k_debugfs_is_extd_tx_stats_enabled(ar) && ahsta) {
+ 			atomic_inc(&ahsta->drv_tx_pkts.pkts_in);
+@@ -11392,7 +11392,7 @@ static void ath12k_mac_op_tx(struct ieee
+ 					    tmp_arvif->vdev_id, tmp_arvif->addr,
+ 					    ahvif->links_map);
+ 				tmp_ar->ab->soc_stats.tx_err.peers_not_present++;
+-				ieee80211_free_txskb(ah->hw, msdu_copied);
++				ieee80211_free_txskb(hw, msdu_copied);
+ 				continue;
+ 			}
+ 
+@@ -11420,10 +11420,10 @@ skip_peer_find:
+ 						    ret);
+ 
+ 				tmp_arvif->link_stats.tx_dropped++;
+-				ieee80211_free_txskb(ah->hw, msdu_copied);
++				ieee80211_free_txskb(hw, msdu_copied);
+ 			}
+ 		}
+-		ieee80211_free_txskb(ah->hw, skb);
++		ieee80211_free_txskb(hw, skb);
+ 	}
+ 	rcu_read_unlock();
+ 

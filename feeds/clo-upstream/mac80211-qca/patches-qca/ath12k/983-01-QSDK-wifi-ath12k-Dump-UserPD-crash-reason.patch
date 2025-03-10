@@ -1,0 +1,64 @@
+From 2e5e34fe028c1a93ed7b9c1d9a4a63f8bd92d334 Mon Sep 17 00:00:00 2001
+From: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+Date: Thu, 24 Oct 2024 22:34:21 +0530
+Subject: [PATCH] QSDK: wifi: ath12k: Dump UserPD crash reason
+
+Get userPD crash dump reason from a reserved shared memory region.
+
+Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 15 +++++++++++++++
+ drivers/net/wireless/ath/ath12k/core.h |  2 ++
+ 2 files changed, 17 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -3258,6 +3258,7 @@ static void ath12k_core_mode1_recovery_w
+ 		   "queued recovery work\n");
+ 	ath12k_mode1_recovery_reconfig(ab);
+ }
++
+ /* Asserted target's reboot handling for crash type ATH12K_RPROC_USERPD_CRASH */
+ static void ath12k_core_upd_rproc_boot_recovery(struct ath12k_base *ab)
+ {
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -52,6 +52,8 @@
+ #define ATH12K_CONNECTION_LOSS_HZ	(3 * HZ)
+ #define	ATH12K_RX_RATE_TABLE_NUM	320
+ #define	ATH12K_RX_RATE_TABLE_11AX_NUM	576
++#define ATH12K_SMEM_HOST		1
++#define ATH12K_Q6_CRASH_REASON		421
+ 
+ extern unsigned int ath12k_frame_mode;
+ extern bool ath12k_erp_support;
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -1092,6 +1092,18 @@ static const struct ath12k_hif_ops ath12
+ 	.dp_umac_reset_free_irq = ath12k_ahb_dp_umac_reset_free_irq,
+ };
+ 
++static void ath12k_core_dump_crash_reason(struct ath12k_base *ab)
++{
++	size_t len;
++	char *msg;
++
++	msg = qcom_smem_get(ATH12K_SMEM_HOST, ATH12K_Q6_CRASH_REASON, &len);
++	if (!IS_ERR(msg) && len > 0 && msg[0])
++		ath12k_err(ab, "fatal error received: %s\n", msg);
++	else
++		ath12k_err(ab, "fatal error without message\n");
++}
++
+ static void ath12k_ahb_handle_userpd_crash(struct ath12k_base *ab)
+ {
+ 	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+@@ -1104,7 +1116,7 @@ static void ath12k_ahb_handle_userpd_cra
+ 	complete(&ab_ahb->userpd_spawned);
+ 	complete(&ab_ahb->userpd_ready);
+ 	complete(&ab_ahb->userpd_stopped);
+-
++	ath12k_core_dump_crash_reason(ab);
+ 	if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
+ 		set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
+ 		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);

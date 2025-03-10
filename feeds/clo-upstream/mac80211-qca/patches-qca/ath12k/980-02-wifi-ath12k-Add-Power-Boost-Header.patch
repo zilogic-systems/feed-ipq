@@ -1,0 +1,165 @@
+From cb6f536d9b783815b4764e5a2ab150f8c0c9c001 Mon Sep 17 00:00:00 2001
+From: Thomas Wu <quic_wthomas@quicinc.com>
+Date: Wed, 9 Oct 2024 13:22:43 -0700
+Subject: [PATCH 2/6] wifi: ath12k: Add Power Boost - Header
+
+This commit contains power boost header that
+details the local instance structure, APIs,
+and share memory pool.
+
+Signed-off-by: Thomas Wu <quic_wthomas@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h        |   7 ++
+ drivers/net/wireless/ath/ath12k/power_boost.h | 101 ++++++++++++++++++
+ 2 files changed, 108 insertions(+)
+ create mode 100644 drivers/net/wireless/ath/ath12k/power_boost.h
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 240c6ca..e3d4b0c 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -31,6 +31,7 @@
+ #include "vendor.h"
+ #include "telemetry_agent_if.h"
+ #include "cfr.h"
++#include "power_boost.h"
+ #include "hal_rx.h"
+ #include "ppe.h"
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+@@ -1133,6 +1134,9 @@ struct ath12k {
+ #endif
+ #ifdef CPTCFG_ATH12K_CFR
+ 	struct ath12k_cfr cfr;
++#endif
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++	struct ath12k_power_boost pb;
+ #endif
+ 	bool dfs_block_radar_events;
+ 	struct ath12k_thermal thermal;
+@@ -1492,6 +1496,8 @@ struct ath12k_hw_group {
+ 	u8 dbs_power_reduction;
+ 	u8 eth_power_reduction;
+ #endif
++	struct rchan *pb_rfs_capture;
++	char pb_rfs_path[100];
+ 	u8 id;
+ 	u8 num_chip;
+ 	u8 num_probed;
+@@ -1746,6 +1752,7 @@ struct ath12k_base {
+ 
+ 	bool ce_pipe_init_done;
+ 	bool rxgainlut_support;
++	bool power_boost_support;
+ 
+ 	struct wsi_info wsi_info;
+ 	u32 dp_mon_alloc_cnt;
+diff --git a/drivers/net/wireless/ath/ath12k/power_boost.h b/drivers/net/wireless/ath/ath12k/power_boost.h
+new file mode 100644
+index 0000000..dd5bfd2
+--- /dev/null
++++ b/drivers/net/wireless/ath/ath12k/power_boost.h
+@@ -0,0 +1,101 @@
++/* SPDX-License-Identifier: BSD-3-Clause-Clear */
++/*
++ * Copyright (c) 2020 The Linux Foundation. All rights reserved.
++ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
++ */
++
++#ifndef _ATH12K_POWER_BOOST_H_
++#define _ATH12K_POWER_BOOST_H_
++
++struct ath12k_base;
++
++#ifdef CPTCFG_ATH12K_POWER_BOOST
++#define ATH12K_POWER_BOOST_START_MAGIC 0xDEADBEAF
++#define ATH12K_POWER_BOOST_END_MAGIC 0xBEAFDEAD
++
++#define ATH12K_POWER_BOOST_RELAY_NUM_SUB_BUFS 3
++#define ATH12K_POWER_BOOST_RELAY_SUB_BUFS_SZ 100512
++
++#define ATH12K_POWER_BOOST_SHMEM_SZ	     100000
++#define ATH12K_POWER_BOOST_SHMEM_ALIGN	     8
++
++struct ath12k_power_boost_telemetry_agent_header {
++	u32 start_magic_num;
++	u32 stats_version;
++	u32 stats_type;
++	u32 payload_len;
++};
++
++struct ath12k_power_boost_shmem {
++	u32 size;
++	dma_addr_t paddr_unaligned;
++	dma_addr_t paddr;
++	void *vaddr_unaligned;
++	void *vaddr;
++};
++
++struct ath12k_power_boost_meta_header {
++	u32 pdev_id;
++	u32 status;
++	u32 training_stage;
++	u32 mcs;
++	u32 bandwidth;
++	s32 temperature_degree;
++	u32 primary_chan_mhz;
++	u32 band_center_freq1;
++	u32 band_center_freq2;
++	u32 phy_mode;
++	u32 link_id;
++} __packed;
++
++struct ath12k_power_boost {
++	/* Protects enabled for ath12k_pb */
++	spinlock_t lock;
++	bool pb_enabled;
++	u32 num_subbufs;
++	u32 subbuf_size;
++	struct ath12k_power_boost_telemetry_agent_header tah;
++	struct ath12k_power_boost_meta_header meta;
++	struct ath12k_power_boost_shmem shmem;
++};
++
++extern bool ath12k_power_boost_enabled;
++int ath12k_power_boost_cmd_status(struct ath12k *ar,
++				  enum wmi_pdev_power_boost_status_type status);
++int ath12k_power_boost_cmd_estimated_data(struct ath12k *ar,
++					  u32 training_stage,
++					  u32 mcs, u32 bandwidth,
++					  u32 tx_evm, u32 tx_mask_margin);
++void ath12k_power_boost_send_event_data(struct ath12k *ar,
++					struct ath12k_wmi_pdev_power_boost_event *ev);
++void ath12k_power_boost_init(struct ath12k_base *ab);
++void ath12k_power_boost_deinit(struct ath12k_base *ab);
++#else
++static inline int ath12k_power_boost_cmd_status(struct ath12k *ar,
++						enum wmi_pdev_power_boost_status_type status)
++{
++	return 0;
++}
++
++static inline int ath12k_power_boost_cmd_estimated_data(struct ath12k *ar,
++							u32 training_stage,
++							u32 mcs, u32 bandwidth,
++							u32 tx_evm, u32 tx_mask_margin)
++{
++	return 0;
++}
++
++static inline void ath12k_power_boost_send_event_data(struct ath12k *ar,
++						      struct ath12k_wmi_pdev_power_boost_event *ev)
++{
++}
++
++static inline void ath12k_power_boost_init(struct ath12k_base *ab)
++{
++}
++
++static inline void ath12k_power_boost_deinit(struct ath12k_base *ab)
++{
++}
++#endif /* _CPTCFG_ATH12K_POWER_BOOST_ */
++#endif /* _ATH12K_POWER_BOOST_H_ */
+-- 
+2.25.1
+

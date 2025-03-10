@@ -1,0 +1,83 @@
+From eb9761b9052cfcc1c31ffe96f86619765d33c36d Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Wed, 23 Oct 2024 11:06:06 +0530
+Subject: [PATCH 1/5] QSDK: DP: wifi: ath12k: eliminate srng lock on rx rings
+
+Since Rx interrupts are handled exclusively by a single CPU, the shared
+ring locks are redundant. To optimize performance, remove the locks from
+the reo destination ring, wbm error ring, and rx error ring
+
+Patch-dependency: None
+
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 13 -------------
+ 1 file changed, 13 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index ce33deb..a67e90d 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3701,14 +3701,11 @@ int ath12k_dp_rx_process(struct ath12k_base *ab, int ring_id,
+ 
+ 	srng = &ab->hal.srng_list[dp->reo_dst_ring[ring_id].ring_id];
+ 
+-	spin_lock_bh(&srng->lock);
+-
+ try_again:
+ 	ath12k_hal_srng_access_begin(ab, srng);
+ 	valid_entries = ath12k_hal_srng_dst_num_free(ab, srng, false);
+ 	if (unlikely(!valid_entries)) {
+ 		ath12k_hal_srng_access_end(ab, srng);
+-		spin_unlock_bh(&srng->lock);
+ 		return -EINVAL;
+ 	}
+ 	ath12k_hal_srng_dst_invalidate_entry(ab, srng, valid_entries);
+@@ -3844,8 +3841,6 @@ try_again:
+ 
+ 	ath12k_hal_srng_access_end(ab, srng);
+ 
+-	spin_unlock_bh(&srng->lock);
+-
+ 	if (unlikely(!total_msdu_reaped))
+ 		goto exit;
+ 
+@@ -4723,8 +4718,6 @@ int ath12k_dp_rx_process_err(struct ath12k_base *ab, struct napi_struct *napi,
+ 
+ 	srng = &ab->hal.srng_list[reo_except->ring_id];
+ 
+-	spin_lock_bh(&srng->lock);
+-
+ 	ath12k_hal_srng_access_begin(ab, srng);
+ 
+ 	while (budget &&
+@@ -4833,8 +4826,6 @@ end_loop:
+ exit:
+ 	ath12k_hal_srng_access_end(ab, srng);
+ 
+-	spin_unlock_bh(&srng->lock);
+-
+ 	for (i = 0; i < ab->ag->num_chip; i++) {
+ 		if (!num_buffs_reaped[i])
+ 			continue;
+@@ -5326,8 +5317,6 @@ int ath12k_dp_rx_process_wbm_err(struct ath12k_base *ab,
+ 
+ 	srng = &ab->hal.srng_list[dp->rx_rel_ring.ring_id];
+ 
+-	spin_lock_bh(&srng->lock);
+-
+ 	ath12k_hal_srng_access_begin(ab, srng);
+ 
+ 	while (budget) {
+@@ -5422,8 +5411,6 @@ int ath12k_dp_rx_process_wbm_err(struct ath12k_base *ab,
+ 
+ 	ath12k_hal_srng_access_end(ab, srng);
+ 
+-	spin_unlock_bh(&srng->lock);
+-
+ 	if (!total_num_buffs_reaped)
+ 		goto done;
+ 
+-- 
+2.34.1
+

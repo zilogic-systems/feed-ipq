@@ -1,0 +1,41 @@
+From 5747229077b2e008de84f44c90b912df620ee57d Mon Sep 17 00:00:00 2001
+From: Govindaraj Saminathan <quic_gsaminat@quicinc.com>
+Date: Wed, 27 Nov 2024 09:54:27 +0530
+Subject: [PATCH] hostapd: Add NULL check for mld pointer during MLD link
+ removal
+
+MLD control interface creation failed randomly because the existing
+control interface was not properly cleaned up. During the failure case
+handling, the memory allocated for hapd->mld is freed in
+hostapd_bss_setup_multi_link. Subsequently, when performing MLD link
+removal during the interface down, hostapd_mld_remove_link attempts to
+access the mld pointer without NULL check, causing a segmentation fault.
+
+To prevent this issue, add a validation to check if the mld pointer
+is NULL before accessing it.
+
+upstream link: https://w1.fi/cgit/hostap/commit/?id=e0aac2cd3da33f03dbff807f4f6c15a555aa7ea6
+
+Signed-off-by: Govindaraj Saminathan <quic_gsaminat@quicinc.com>
+---
+ src/ap/hostapd.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index c8751a247..dc50ad1bc 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -633,7 +633,7 @@ static void hostapd_bss_link_deinit(struct hostapd_data *hapd)
+ 	}
+ 
+ 	/* Put all freeing logic above this */
+-	if (!hapd->mld->num_links)
++	if (!hapd->mld || !hapd->mld->num_links)
+ 		return;
+ 
+ 	/* If not started, not yet linked to the MLD. However, the first
+
+base-commit: 475f50d71001e1f74296753e7102ef5d7de7e13d
+-- 
+2.34.1
+

@@ -1,0 +1,91 @@
+From 44ad2ccfc46b98a1bfeff1fd22c51b2239fbd499 Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Sat, 7 Dec 2024 17:10:05 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k:WAR: Fix duplicate tx_desc from wbm2sw
+ ring
+
+Adding the duplicate descriptor to the free list is causing a crash
+in NSS while running traffic. Therefore, this WAR is to skip
+adding duplicate descriptors to the list, preventing the crashes.
+
+Call trace:
+skb_recycler_alloc+0xa0/0x248\cf1\highlight2
+__netdev_alloc_skb_fast+0x24/0x58\cf1\highlight2
+edma_rx_napi_poll+0x3f8/0xd74 [qca_nss_dp]\cf1\highlight2
+__napi_poll+0x30/0x168\cf1\highlight2
+net_rx_action+0x130/0x230\cf1\highlight2
+handle_softirqs+0x1b4/0x1f8\cf1\highlight2
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h    | 1 +
+ drivers/net/wireless/ath/ath12k/debugfs.c | 7 +++++++
+ drivers/net/wireless/ath/ath12k/dp_tx.c   | 8 ++++++--
+ 3 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 7e10a04..7361e1c 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1432,6 +1432,7 @@ struct ath12k_soc_dp_stats {
+ 	u32 non_fast_mcast_rx[DP_REO_DST_RING_MAX][ATH12K_MAX_SOCS];
+ 	u32 eapol_rx[DP_REO_DST_RING_MAX][ATH12K_MAX_SOCS];
+ 	u32 rx_wbm_rel_source[HAL_WBM_REL_SRC_MODULE_MAX] [ATH12K_MAX_SOCS];
++	u32 duplicate_tx_desc[MAX_TCL_RING];
+ 
+ 	u32 tx_mcast[MAX_TCL_RING];
+ 	u32 tx_unicast[MAX_TCL_RING];
+diff --git a/drivers/net/wireless/ath/ath12k/debugfs.c b/drivers/net/wireless/ath/ath12k/debugfs.c
+index 80e18eb..d896a84 100644
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -1956,6 +1956,13 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 			"\nREO_CMD_UPDATE_RX_QUEUE Failure: %u\n",
+ 			soc_stats->reo_cmd_update_rx_queue_error);
+ 
++	len += scnprintf(buf + len, size - len,
++			"\nduplicate tx desc: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->duplicate_tx_desc[0],
++			soc_stats->duplicate_tx_desc[1],
++			soc_stats->duplicate_tx_desc[2],
++			soc_stats->duplicate_tx_desc[3]);
++
+ 	len += scnprintf(buf + len, size - len,
+ 			"\nmcast reinject: %u\n",
+ 			soc_stats->mcast_reinject);
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index 8175f25..1e455da 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -1707,7 +1707,10 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 			continue;
+ 		}
+ 
+-		list_add_tail(&tx_desc->list, &desc_free_list);
++		if (unlikely(!tx_desc->in_use)) {
++			ab->soc_stats.duplicate_tx_desc[data_ring_id]++;
++			continue;
++		}
+ 
+ 		msdu = tx_desc->skb;
+                 mac_id = tx_desc->mac_id;
+@@ -1724,6 +1727,8 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 			continue;
+ 		}
+ 
++		tx_desc->in_use = false;
++		list_add_tail(&tx_desc->list, &desc_free_list);
+ 
+ 		if (last_pf_sw_desc) {
+ 			prefetch((u8 *)(last_pf_sw_desc->skb) + offsetof(struct sk_buff, headers));
+@@ -1804,7 +1809,6 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 		tx_desc = list_entry(cur, struct ath12k_tx_desc_info, list);
+ 		tx_desc->skb = NULL;
+ 		tx_desc->skb_ext_desc = NULL;
+-		tx_desc->in_use = false;
+ 	}
+ 	list_splice_tail(&desc_free_list, &dp->tx_desc_free_list[ring_id]);
+ 	spin_unlock_bh(&dp->tx_desc_lock[ring_id]);
+-- 
+2.34.1
+

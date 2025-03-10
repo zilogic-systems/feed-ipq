@@ -1,0 +1,333 @@
+From bc7ed693f9e66685a80465ba41b9a4bbdee41672 Mon Sep 17 00:00:00 2001
+From: Sathishkumar Muruganandam <quic_murugana@quicinc.com>
+Date: Wed, 13 Dec 2023 18:30:51 +0530
+Subject: [PATCH 2/2] wifi: ath12k: prevent KASAN warning in _find_next_bit
+
+for_each_set_bit() invoking _find_next_bit expects only unsigned long arguments
+which causes KASAN warning for u16 usage of links_map variable.
+
+Fix this by declaring ahsta->links_map, ahvif->links_map as unsigned long
+variables and modify debug prints accordingly.
+
+Patch-dependency: none
+
+Signed-off-by: Sathishkumar Muruganandam <quic_murugana@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c  |  2 +-
+ drivers/net/wireless/ath/ath12k/core.h  |  4 +--
+ drivers/net/wireless/ath/ath12k/dp_rx.c |  4 +--
+ drivers/net/wireless/ath/ath12k/dp_tx.c |  8 ++---
+ drivers/net/wireless/ath/ath12k/mac.c   | 48 ++++++++-----------------
+ drivers/net/wireless/ath/ath12k/peer.h  |  2 +-
+ drivers/net/wireless/ath/ath12k/sawf.c  |  4 +--
+ 7 files changed, 25 insertions(+), 47 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -2752,7 +2752,7 @@ static int ath12k_mlo_core_recovery_reco
+ 	ret = 0;
+ exit:
+ 	ath12k_dbg(ab, ATH12K_DBG_MODE1_RECOVERY,
+-		   "ret:%d No. of vdev created:%d, links_map:%d, flag:%d\n",
++		   "ret:%d No. of vdev created:%d, links_map:%lu, flag:%d\n",
+ 		   ret,
+ 		   ahvif->num_vdev_created,
+ 		   ahvif->links_map,
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -493,7 +493,7 @@ struct ath12k_vif {
+ 	struct ath12k_link_vif deflink;
+ 	struct ath12k_link_vif *link[ATH12K_NUM_MAX_LINKS];
+ 	/* indicates bitmap of link vdev created in FW */
+-	u16 links_map;
++	unsigned long links_map;
+ 	u32 aid;
+ 	struct ath12k_mgmt_frame_stats mgmt_stats;
+ 	u8 num_vdev_created;
+@@ -721,7 +721,7 @@ struct ath12k_sta {
+ 	struct ath12k_link_sta deflink;
+ 	struct ath12k_link_sta *link[IEEE80211_MLD_MAX_NUM_LINKS];
+ 	/* indicates bitmap of link sta created in FW */
+-	u16 links_map;
++	unsigned long links_map;
+ 	u16 ml_peer_id;
+ 	u8 assoc_link_id;
+ 	u8 primary_link_id;
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -1112,13 +1112,11 @@ void ath12k_dp_tid_setup(void *data, str
+ 	struct ath12k_link_sta *arsta;
+ 	struct ath12k_link_vif *arvif;
+ 	u8 link_id;
+-	u16 links_map;
+ 
+ 	if (sta->mlo)
+ 		return;
+ 
+-	links_map = ahsta->links_map;
+-	for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++	for_each_set_bit(link_id, &ahsta->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		arsta = ahsta->link[link_id];
+ 		if (!arsta)
+ 			continue;
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -893,7 +893,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+ 					ahvif->link[skb_cb->link_id]->link_stats.tx_completed++;
+ 			} else {
+ 				ath12k_warn(ab,
+-					    "invalid linkid 0x%X in htt tx complete buf linkmap 0x%X\n",
++					    "invalid linkid 0x%X in htt tx complete buf linkmap %lu\n",
+ 					    skb_cb->link_id,
+ 					    ahvif->links_map);
+ 			}
+@@ -923,7 +923,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+ 			ahvif->link[skb_cb->link_id]->link_stats.tx_completed++;
+ 	} else {
+ 		ath12k_warn(ab,
+-			    "invalid linkid 0x%X in htt tx complete buf linkmap 0x%X\n",
++			    "invalid linkid 0x%X in htt tx complete buf linkmap %lu\n",
+ 			    skb_cb->link_id,
+ 			    ahvif->links_map);
+ 	}
+@@ -1189,7 +1189,7 @@ static void ath12k_dp_tx_complete_msdu(s
+ 			ahvif->link[skb_cb->link_id]->link_stats.tx_completed++;
+ 	} else {
+ 		ath12k_warn(ar->ab,
+-			    "invalid linkid 0x%X in tx complete msdu linkmap 0x%X\n",
++			    "invalid linkid 0x%X in tx complete msdu linkmap %lu\n",
+ 			    skb_cb->link_id,
+ 			    ahvif->links_map);
+ 	}
+@@ -1671,7 +1671,7 @@ int ath12k_dp_tx_completion_handler(stru
+ 						ahvif->link[skb_cb->link_id]->link_stats.tx_completed++;
+ 				} else {
+ 					ath12k_warn(ab,
+-						    "invalid linkid 0x%X in tx completion handler for linkmap 0x%X\n",
++						    "invalid linkid 0x%X in tx completion handler for linkmap %lu\n",
+ 						    skb_cb->link_id,
+ 						    ahvif->links_map);
+ 				}
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -818,16 +818,13 @@ static void ath12k_get_arvif_iter(void *
+ 	struct ath12k_vif_iter *arvif_iter = data;
+ 	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
+ 	struct ath12k_link_vif *arvif;
+-	u16 links_map;
+ 	u8 link_id;
+ 
+ 	/* TODO Revisit lock usage for ahvif->link. Currently this is
+ 	 * used with vif protected by rcu lock and since the ahvif->links_map
+ 	 * or link wont be modified it is safe to access below without its mutex
+ 	 */
+-	links_map = ahvif->links_map;
+-
+-	for_each_set_bit(link_id, &links_map, ATH12K_NUM_MAX_LINKS) {
++	for_each_set_bit(link_id, &ahvif->links_map, ATH12K_NUM_MAX_LINKS) {
+ 		arvif = ahvif->link[link_id];
+ 
+ 		if (WARN_ON(arvif == NULL))
+@@ -4910,7 +4907,6 @@ static void ath12k_mac_op_vif_cfg_change
+ 	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
+ 	struct ath12k_link_vif *arvif;
+ 	struct ath12k *ar;
+-	unsigned long links_map;
+ 	unsigned long link_id;
+ 	struct ieee80211_bss_conf *info;
+ 
+@@ -4922,10 +4918,9 @@ static void ath12k_mac_op_vif_cfg_change
+ 	}
+ 
+ 	link_id = ahvif->deflink.link_id;
+-	links_map = ahvif->links_map;
+ 
+ 	if (changed & BSS_CHANGED_ASSOC) {
+-		for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++		for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 			arvif = ahvif->link[link_id];
+ 			info = vif->link_conf[link_id];
+ 			ar = arvif->ar;
+@@ -6973,15 +6968,12 @@ static void ath12k_sta_set_4addr_wk(stru
+ 	struct ath12k_link_sta *arsta;
+ 	struct ieee80211_sta *sta;
+ 	int ret = 0;
+-	u16 links_map;
+ 	u8 link_id;
+ 
+ 	ahsta = container_of(wk, struct ath12k_sta, set_4addr_wk);
+ 	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
+ 
+-	links_map = ahsta->links_map;
+-
+-	for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++	for_each_set_bit(link_id, &ahsta->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		arsta = ahsta->link[link_id];
+ 		arvif = arsta->arvif;
+ 		ar = arvif->ar;
+@@ -7785,6 +7777,7 @@ static int ath12k_mac_op_change_sta_link
+ 	struct ath12k_link_sta *arsta;
+ 	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
+ 	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
++	unsigned long valid_links;
+ 	u8 link_id;
+ 	int ret = 0;
+ 
+@@ -7827,7 +7820,8 @@ static int ath12k_mac_op_change_sta_link
+ 		}
+ 	}
+ 
+-	for_each_set_bit(link_id, &new_links, IEEE80211_MLD_MAX_NUM_LINKS) {
++	valid_links = new_links;
++	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		if (ahsta->links_map & BIT(link_id))
+ 			continue;
+ 
+@@ -9239,7 +9233,7 @@ static void ath12k_mgmt_over_wmi_tx_work
+ 		ahvif = ath12k_vif_to_ahvif(skb_cb->vif);
+ 		if (!(ahvif->links_map & BIT(skb_cb->link_id))) {
+ 			ath12k_warn(ar->ab,
+-				    "invalid linkid 0x%X in mgmt over wmi tx with linkmap 0x%X\n",
++				    "invalid linkid 0x%X in mgmt over wmi tx with linkmap %lu\n",
+ 				    skb_cb->link_id,
+ 				    ahvif->links_map);
+ 			ath12k_mgmt_over_wmi_tx_drop(ar, skb);
+@@ -9452,11 +9446,11 @@ static u8 ath12k_mac_get_tx_link(struct
+ 
+ 
+ 			ath12k_dbg(NULL, ATH12K_DBG_MAC,
+-				   "unable to determine link sta addr for translation - Frame control %x link %d sta links %x ahsta links %x\n",
++				   "unable to determine link sta addr for translation - Frame control %x link %d sta links %x ahsta links %lu\n",
+ 				   hdr->frame_control, link, sta->valid_links,
+ 				   ahsta->links_map);
+ 		} else {
+-			ath12k_err(NULL, "unable to determine Tx link for frame %x link %d\n vif links %x sta links %x ahvif links %x ahsta links %x",
++			ath12k_err(NULL, "unable to determine Tx link for frame %x link %d\n vif links %x sta links %x ahvif links %lu ahsta links %lu",
+ 				   hdr->frame_control, link, vif->valid_links,
+ 				   sta->valid_links, ahvif->links_map, ahsta->links_map);
+ 			link = IEEE80211_MLD_MAX_NUM_LINKS;
+@@ -9722,7 +9716,7 @@ static void ath12k_mac_op_tx(struct ieee
+ 			if (!peer) {
+ 				spin_unlock_bh(&tmp_ar->ab->base_lock);
+ 				ath12k_warn(tmp_ar->ab,
+-					    "failed to find peer for vdev_id 0x%X addr %pM link_map 0x%X\n",
++					    "failed to find peer for vdev_id 0x%X addr %pM link_map %lu\n",
+ 					    tmp_arvif->vdev_id, tmp_arvif->addr,
+ 					    ahvif->links_map);
+ 				tmp_ar->ab->soc_stats.tx_err.peers_not_present++;
+@@ -11285,15 +11279,12 @@ static void ath12k_mac_op_remove_interfa
+ 	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
+ 	struct ath12k_link_vif *arvif;
+ 	struct ath12k *ar;
+-	u16 links_map;
+ 	u8 link_id;
+ 	int ret;
+ 
+ 	mutex_lock(&ah->conf_mutex);
+ 
+-	links_map = ahvif->links_map;
+-
+-	for_each_set_bit(link_id, &links_map, ATH12K_NUM_MAX_LINKS) {
++	for_each_set_bit(link_id, &ahvif->links_map, ATH12K_NUM_MAX_LINKS) {
+ 		arvif = ahvif->link[link_id];
+ 
+ 		if (!arvif)
+@@ -11618,7 +11609,6 @@ ath12k_mac_mlo_get_vdev_args(struct ath1
+ {
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+ 	struct ath12k_link_vif *arvif_p;
+-	u16 links_map;
+ 	u8 link_id;
+ 	struct wmi_ml_partner_info *partner_info;
+ 	struct ieee80211_bss_conf *link_conf;
+@@ -11641,11 +11631,9 @@ ath12k_mac_mlo_get_vdev_args(struct ath1
+ 
+ 	/* TODO check assoc and mcast vdev for AP mode */
+ 
+-	links_map = ahvif->links_map;
+-
+ 	partner_info = ml_arg->partner_info;
+ 
+-	for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++	for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		arvif_p = ahvif->link[link_id];
+ 
+ 		if (WARN_ON(arvif_p == NULL))
+@@ -12045,16 +12033,13 @@ ath12k_mac_change_chanctx_cnt_iter(void
+ 	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
+ 	struct ath12k_link_vif *arvif;
+ 	struct ath12k_mac_change_chanctx_arg *arg = data;
+-	u16 links_map;
+ 	u8 link_id;
+ 	struct ieee80211_bss_conf *link_conf;
+ 	struct ath12k_hw *ah = ahvif->ah;
+ 
+ 	lockdep_assert_held(&ah->conf_mutex);
+ 
+-	links_map = ahvif->links_map;
+-
+-	for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++	for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		arvif = ahvif->link[link_id];
+ 
+ 		if (WARN_ON(arvif == NULL))
+@@ -12081,16 +12066,13 @@ ath12k_mac_change_chanctx_fill_iter(void
+ 	struct ath12k_link_vif *arvif;
+ 	struct ath12k_mac_change_chanctx_arg *arg = data;
+ 	struct ieee80211_chanctx_conf *ctx;
+-	u16 links_map;
+ 	u8 link_id;
+ 	struct ieee80211_bss_conf *link_conf;
+ 	struct ath12k_hw *ah = ahvif->ah;
+ 
+ 	lockdep_assert_held(&ah->conf_mutex);
+ 
+-	links_map = ahvif->links_map;
+-
+-	for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++	for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		arvif = ahvif->link[link_id];
+ 
+ 		if (WARN_ON(arvif == NULL))
+@@ -13544,7 +13526,7 @@ ath12k_mac_op_unassign_vif_chanctx(struc
+ 	}
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
+-		   "mac unassign vif links map 0x%x vdev id %d addr %pM assoc_link %d\n",
++		   "mac unassign vif links map %lu vdev id %d addr %pM assoc_link %d\n",
+ 		   ahvif->links_map, arvif->vdev_id, arvif->addr, arvif->assoc_link);
+ 
+ 	/* The primary link should be stop vdev and delete peer as last one. */
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -134,7 +134,7 @@ struct ath12k_link_sta *ath12k_peer_get_
+ 	ahsta = ath12k_sta_to_ahsta(peer->sta);
+ 	if (peer->ml_peer_id & ATH12K_ML_PEER_ID_VALID) {
+ 		if (!(ahsta->links_map & BIT(peer->link_id))) {
+-			ath12k_warn(ab, "peer %pM id %d link_id %d can't found in STA link_map 0x%x\n",
++			ath12k_warn(ab, "peer %pM id %d link_id %d can't found in STA link_map %lu\n",
+ 				    peer->addr, peer->peer_id, peer->link_id, ahsta->links_map);
+ 			return NULL;
+ 		}
+--- a/drivers/net/wireless/ath/ath12k/sawf.c
++++ b/drivers/net/wireless/ath/ath12k/sawf.c
+@@ -485,7 +485,6 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 	struct ath12k_peer *peer;
+ 	struct ath12k_vif *ahvif;
+ 	struct ath12k_link_vif *arvif;
+-	u16 links_map;
+ 	u8 link_id;
+ 
+ 	if (!dev)
+@@ -506,10 +505,9 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 	/* ToDo: Instead of mutex_lock, rcu locking will be used
+ 	   to access the ahvif->link
+ 	*/
+-	links_map = ahvif->links_map;
+ 	/* Look into all the links, find the matching peer and
+ 	 * return with ab and peer_id detail */
+-	for_each_set_bit(link_id, &links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
++	for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
+ 		arvif = ahvif->link[link_id];
+ 
+ 		if (WARN_ON(!arvif))

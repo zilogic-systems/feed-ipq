@@ -1,0 +1,255 @@
+From 971859857decde6e2d57f4bb039eacf8043d28b7 Mon Sep 17 00:00:00 2001
+From: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+Date: Tue, 5 Nov 2024 23:51:27 +0530
+Subject: [PATCH] UPSTREAM: DP: wifi: ath12k: Rearrange code flow
+for prefetch desc
+
+Rearrange the code flow and sequence for effective
+usage of prefetched desc.
+
+Group the buffer rel source to avoid mutiple if checks
+
+Move timestamp and ar access to regular path since it was not used
+in fast path.
+
+This change gives 50-70mbps KPI improvement in DL traffic
+
+Patch Dependency : 902-wifi-ath12k-Avoid-repeated-pointer-reference.patch
+
+Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 141 ++++++++++++++++--------
+ drivers/net/wireless/ath/ath12k/hal.c   |   8 +-
+ 2 files changed, 96 insertions(+), 53 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -857,7 +857,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+ 				 struct sk_buff *msdu,
+ 				 int tcl_data_ring_id, int htt_status,
+ 				 u8 mac_id, struct ath12k_tx_desc_info *tx_desc,
+-				 void *desc, ktime_t timestamp)
++				 void *desc)
+ {
+ 	struct ieee80211_tx_info *info;
+ 	struct ath12k_skb_cb *skb_cb;
+@@ -870,6 +870,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+ 	struct htt_tx_wbm_completion *status_desc;
+ 	struct ath12k_link_vif *arvif;
+ 	int ack_rssi;
++	ktime_t timestamp = 0;
+ 	u8 flags = 0;
+ 	u8 link_id;
+ 
+@@ -939,6 +940,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+ 	}
+ 
+ 	if (unlikely(ath12k_debugfs_is_sawf_stats_enabled(ar))) {
++		timestamp = tx_desc->timestamp;
+ 		spin_lock_bh(&ab->base_lock);
+ 		ath12k_dp_tx_status_parse(ab, desc, &ts_status);
+ 		peer = ath12k_peer_find_pri_by_id(ab, ts_status.peer_id);
+@@ -959,17 +961,21 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+ 
+ static void
+ ath12k_dp_tx_process_htt_tx_complete(struct ath12k_base *ab,
++		                     struct sk_buff *msdu,
+ 				     void *desc, u8 mac_id,
+-				     struct sk_buff *msdu,
+ 				     int data_ring_id,
+-				     struct ath12k_tx_desc_info *tx_desc,
+-				     ktime_t timestamp, int htt_status)
++				     struct ath12k_tx_desc_info *tx_desc)
+ {
++	struct htt_tx_wbm_completion *status_desc;
++	int htt_status;
++
++	status_desc = (struct htt_tx_wbm_completion *)(((u8 *)desc) + HTT_TX_WBM_COMP_STATUS_OFFSET);
++	htt_status = FIELD_GET(HTT_TX_WBM_COMP_INFO0_STATUS, status_desc->info0);
+ 
+ 	switch (htt_status) {
+ 	case HAL_WBM_REL_HTT_TX_COMP_STATUS_OK:
+ 		ath12k_dp_tx_htt_tx_complete_buf(ab, msdu, data_ring_id, htt_status,
+-						 mac_id, tx_desc, desc, timestamp);
++						 mac_id, tx_desc, desc);
+ 
+ 		break;
+ 	case HAL_WBM_REL_HTT_TX_COMP_STATUS_DROP:
+@@ -1125,16 +1131,15 @@ err_out:
+ 	rcu_read_unlock();
+ }
+ 
+-static void ath12k_dp_tx_complete_msdu(struct ath12k *ar,
++static void ath12k_dp_tx_complete_msdu(struct ath12k_base *ab,
+ 				       struct sk_buff *msdu,
+ 				       struct hal_wbm_completion_ring_tx *tx_status,
+ 				       enum hal_wbm_rel_src_module buf_rel_source,
+-				       struct ath12k_tx_desc_info *tx_desc,
+-				       ktime_t timestamp, int wbm_status)
++				       struct ath12k_tx_desc_info *tx_desc, u8 mac_id)
+ {
+ 	struct ieee80211_tx_status status = { 0 };
+ 	struct ieee80211_rate_status status_rate = { 0 };
+-	struct ath12k_base *ab = ar->ab;
++	struct ath12k *ar;
+ 	struct ieee80211_tx_info *info;
+ 	struct ath12k_skb_cb *skb_cb;
+ 	struct ath12k_peer *peer;
+@@ -1145,6 +1150,9 @@ static void ath12k_dp_tx_complete_msdu(s
+ 	struct sk_buff *skb_ext_desc;
+ 	struct ieee80211_vif *vif;
+ 	struct ath12k_vif *ahvif;
++	struct htt_tx_wbm_completion *status_desc;
++	int wbm_status;
++	ktime_t timestamp = 0;
+ 	u8 flags = 0;
+ 	u8 link_id;
+ 	bool sawf_stats_update = false;
+@@ -1158,6 +1166,7 @@ static void ath12k_dp_tx_complete_msdu(s
+ 	if (unlikely(skb_ext_desc))
+ 		dev_kfree_skb_any(skb_ext_desc);
+ 
++	ar = ab->pdevs[mac_id].ar;
+ 	if (unlikely(!rcu_access_pointer(ab->pdevs_active[ar->pdev_idx]))) {
+                 ieee80211_free_txskb(ar->ah->hw, msdu);
+                 return;
+@@ -1196,6 +1205,8 @@ static void ath12k_dp_tx_complete_msdu(s
+ 	info = IEEE80211_SKB_CB(msdu);
+ 	memset(&info->status, 0, sizeof(info->status));
+ 
++	timestamp = tx_desc->timestamp;
++
+ 	/* skip tx rate update from ieee80211_status*/
+ 	info->status.rates[0].idx = -1;
+ 
+@@ -1325,6 +1336,8 @@ unlock:
+ 		ieee80211_vif_is_mesh(vif))
+ 		status.skip_per_packet_metric_update = true;
+ 
++	status_desc = (struct htt_tx_wbm_completion *)(((u8 *)tx_status) + HTT_TX_WBM_COMP_STATUS_OFFSET);
++	wbm_status = FIELD_GET(HTT_TX_WBM_COMP_INFO0_STATUS, status_desc->info0);
+ 
+ 	if (unlikely(ath12k_debugfs_is_extd_tx_stats_enabled(ar))) {
+ 		if(arsta->wbm_tx_stats && wbm_status < HAL_WBM_REL_HTT_TX_COMP_STATUS_MAX)
+@@ -1605,7 +1618,6 @@ int ath12k_dp_tx_completion_handler(stru
+ 	int valid_entries;
+ 	int orig_budget = budget;
+ 	struct hal_wbm_completion_ring_tx *tx_status;
+-	ktime_t timestamp = 0;
+ 	enum hal_wbm_rel_src_module buf_rel_source;
+ 	struct sk_buff_head free_list_head;
+ 	int dp_tx_dec_count[MAX_RADIOS] = {0};
+@@ -1637,10 +1649,9 @@ int ath12k_dp_tx_completion_handler(stru
+ 		buf_rel_source = FIELD_GET(HAL_WBM_COMPL_TX_INFO0_REL_SRC_MODULE, tx_status->info0);
+ 		ab->soc_stats.tx_wbm_rel_source[buf_rel_source]++;
+ 
+-		status_desc = (struct htt_tx_wbm_completion *)(((u8 *) tx_status) + HTT_TX_WBM_COMP_STATUS_OFFSET);
+-		htt_status = FIELD_GET(HTT_TX_WBM_COMP_INFO0_STATUS, status_desc->info0);
+-
+ 		if (buf_rel_source == HAL_WBM_REL_SRC_MODULE_FW) {
++			status_desc = (struct htt_tx_wbm_completion *)(((u8 *)tx_status) + HTT_TX_WBM_COMP_STATUS_OFFSET);
++			htt_status = FIELD_GET(HTT_TX_WBM_COMP_INFO0_STATUS, status_desc->info0);
+ 			ab->soc_stats.fw_tx_status[htt_status]++;
+ 			/* Dont consider HTT_TX_COMP_STATUS_MEC_NOTIFY */
+ 			if (htt_status == HAL_WBM_REL_HTT_TX_COMP_STATUS_MEC_NOTIFY)
+@@ -1664,18 +1675,11 @@ int ath12k_dp_tx_completion_handler(stru
+ 			continue;
+ 		}
+ 
+-		msdu = tx_desc->skb;
+-		mac_id = tx_desc->mac_id;
+-
+-#ifdef CPTCFG_ATH12K_SAWF
+-		timestamp = tx_desc->timestamp;
+-#endif
+-
+-		/* Release descriptor as soon as extracting necessary info
+-		 * to reduce contention
+-		 */
+ 		list_add_tail(&tx_desc->list, &desc_free_list);
+ 
++		msdu = tx_desc->skb;
++                mac_id = tx_desc->mac_id;
++
+ 		if (unlikely(!msdu)) {
+ 			ab->soc_stats.null_tx_complete[data_ring_id]++;
+ 
+@@ -1692,26 +1696,19 @@ int ath12k_dp_tx_completion_handler(stru
+ 		prefetch( (u8 *) msdu + 64);
+ 
+ 		if (unlikely(buf_rel_source == HAL_WBM_REL_SRC_MODULE_FW)) {
+-			ath12k_dp_tx_process_htt_tx_complete(ab,
++			ath12k_dp_tx_process_htt_tx_complete(ab, msdu,
+ 							     (void *)tx_status,
+-							     mac_id, msdu,
++							     mac_id,
+ 							     data_ring_id,
+-							     tx_desc,
+-							     timestamp, htt_status);
++							     tx_desc);
+ 			continue;
+-		}
+-
+-		ar = ab->pdevs[mac_id].ar;
+-
+-		dp_tx_dec_count[mac_id]++;
++                }
+ 
+ 		if (unlikely(WARN_ON_ONCE(buf_rel_source != HAL_WBM_REL_SRC_MODULE_TQM))) {
+ 			/* Must not happen */
+ 			continue;
+ 		}
+ 
+-		ab->soc_stats.tx_completed[data_ring_id]++;
+-
+ #ifdef CPTCFG_ATH12K_MEM_PROFILE_512M
+ 		skb_cb = (struct ath12k_skb_cb *)&IEEE80211_SKB_CB(msdu)->driver_data;
+ 		flags = skb_cb->flags;
+@@ -1724,9 +1721,13 @@ int ath12k_dp_tx_completion_handler(stru
+ #endif
+ 		} else {
+ 
+-			ath12k_dp_tx_complete_msdu(ar, msdu, tx_status, buf_rel_source,
+-						   tx_desc, timestamp, htt_status);
++			ath12k_dp_tx_complete_msdu(ab, msdu, tx_status, buf_rel_source,
++						   tx_desc, mac_id);
+ 		}
++
++		dp_tx_dec_count[mac_id]++;
++
++		ab->soc_stats.tx_completed[data_ring_id]++;
+ 	}
+ 	ath12k_hal_srng_access_dst_ring_end_nolock(status_ring);
+ 
+@@ -1737,6 +1738,10 @@ int ath12k_dp_tx_completion_handler(stru
+ 		ath12k_dp_tx_decrement_by_count(ar,ab,dp_tx_dec_count[i]);
+ 	}
+ 
++#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
++       dev_kfree_skb_list_fast(&free_list_head);
++#endif
++
+ 	spin_lock_bh(&dp->tx_desc_lock[ring_id]);
+ 	list_for_each(cur, &desc_free_list) {
+ 		tx_desc = list_entry(cur, struct ath12k_tx_desc_info, list);
+@@ -1746,9 +1751,6 @@ int ath12k_dp_tx_completion_handler(stru
+ 	}
+ 	list_splice_tail(&desc_free_list, &dp->tx_desc_free_list[ring_id]);
+ 	spin_unlock_bh(&dp->tx_desc_lock[ring_id]);
+-#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+-	dev_kfree_skb_list_fast(&free_list_head);
+-#endif
+ 	return (orig_budget - budget);
+ }
+ 
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -1900,7 +1900,7 @@ ath12k_hal_srng_dst_prefetch_reo_desc(st
+ u32 *ath12k_hal_srng_dst_get_next_cache_entry(struct ath12k_base *ab,
+                                               struct hal_srng *srng)
+ {
+-	u32 *desc,*desc_next;
++	u32 *desc, *desc_next;
+ 	lockdep_assert_held(&srng->lock);
+ 
+ 	if (srng->u.dst_ring.tp == srng->u.dst_ring.cached_hp)

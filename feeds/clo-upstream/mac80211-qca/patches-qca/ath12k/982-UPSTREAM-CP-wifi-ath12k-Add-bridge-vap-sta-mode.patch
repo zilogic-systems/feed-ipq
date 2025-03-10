@@ -1,0 +1,267 @@
+From 4d890d89e34f83c6153c161bf24b82935c8527d1 Mon Sep 17 00:00:00 2001
+From: Nagarajan Maran <quic_nmaran@quicinc.com>
+Date: Sun, 10 Nov 2024 14:31:22 +0530
+Subject: [PATCH] UPSTREAM:CP: wifi: ath12k: Add support for bridge VAP in STA mode
+
+In STA mode, similar to AP mode, a bridge vdev is added when links
+are established between diagonally opposite devices in an MLD.
+However, in STA mode, a single bridge vdev suffices for MLO
+communications between these diagonally opposite devices. Therefore,
+only one bridge vdev will be created in the adjacent device of the
+diagonally opposite devices.
+
+Here the adjacent devices where the bridge is created are
+determined using the “device_bitmap” stored in “ahvif”. This bitmap
+represents the device_idx of the vdevs created under that “ahvif”.
+With this information, the devices where a bridge vdev can be
+created are selected based on the adjacent device information of the
+currently created vdevs. If the first choice of the adjacent
+device cannot create a bridge vdev due to max bridge vdevs allocated
+or any other errors, it will move to the next adjacent device for
+bridge vdev creation. And even the second adjacent device cannot
+create bridge vdev, it will exit gracefully as in AP mode.
+
+This patch brings in these Bridge VAP handlings in STA mode.
+
+Patch-dependency:
+	961-02-wifi-ath12k-n-link-mlo-bridge-vdev-create-start.patch
+
+Tag: N_LINK_MLO
+
+Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |   1 +
+ drivers/net/wireless/ath/ath12k/mac.c  | 124 +++++++++++++++++++------
+ 2 files changed, 97 insertions(+), 28 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -577,6 +577,7 @@ struct ath12k_vif {
+ 	struct ath12k_vlan_iface *vlan_iface;
+ #endif
+ 	bool mode0_recover_bridge_vdevs;
++	u8 device_bitmap;
+ };
+ 
+ struct ath12k_vif_iter {
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -5041,6 +5041,22 @@ bool ath12k_mac_is_bridge_required(u8 de
+ 	return bridge_needed;
+ }
+ 
++static bool ath12k_mac_get_link_idx_with_device_idx(struct ath12k_hw *ah,
++						    u32 device_idx,
++						    u8 *link_idx)
++{
++	struct ath12k *ar = ah->radio;
++
++	for (int i = 0; i < ah->num_radio; i++) {
++		if (ar->ab->wsi_info.chip_idx == device_idx) {
++			*link_idx = ar->link_idx;
++			return true;
++		}
++		ar++;
++	}
++	return false;
++}
++
+ static struct
+ ieee80211_link_sta *ath12k_mac_inherit_radio_cap(struct ath12k *ar,
+ 						 struct ath12k_link_sta *arsta)
+@@ -12834,6 +12850,7 @@ static struct ath12k *ath12k_mac_assign_
+ 	if (!is_bridge_vdev)
+ 		ath12k_mac_vif_cache_flush(ar, vif, arvif->link_id);
+ 
++	arvif->ahvif->device_bitmap |= BIT(ar->ab->wsi_info.chip_idx);
+ unlock:
+ 	mutex_unlock(&ar->conf_mutex);
+ out:
+@@ -13163,6 +13180,7 @@ err_vdev_del:
+ 			kfree(key_conf);
+ 		}
+ 	}
++	ahvif->device_bitmap &= ~BIT(ar->ab->wsi_info.chip_idx);
+ 
+ 	/* TODO: recal traffic pause state based on the available vdevs */
+ 
+@@ -15931,6 +15949,9 @@ ath12k_mac_assign_vif_chanctx_handle(str
+ 
+ 	arvif->is_started = true;
+ 
++	if (is_bridge_vdev && ahvif->vdev_type == WMI_VDEV_TYPE_STA)
++		ath12k_info(ab, "STA Bridge VAP created\n");
++
+ 	/* TODO: Setup ps and cts/rts protection */
+ 
+ out:
+@@ -16115,6 +16136,9 @@ stop_primary:
+ 
+ 	peer = ath12k_peer_find_by_vdev_id(ab, arvif->vdev_id);
+ 	if (ahvif->vdev_type == WMI_VDEV_TYPE_STA && peer) {
++		if (ath12k_mac_is_bridge_vdev(arvif))
++			goto peer_delete;
++
+ 		struct ieee80211_sta *sta;
+ 		unsigned int sta_link_id = 0xff;
+ 
+@@ -16130,6 +16154,7 @@ stop_primary:
+ 
+ 		if ((ab->hw_params->vdev_start_delay && !sta && !peer->sta) ||
+ 		     !ab->hw_params->vdev_start_delay) {
++peer_delete:
+ 			ret = ath12k_peer_delete(ar, arvif->vdev_id, arvif->bssid);
+ 			if (ret) {
+ 				ath12k_warn(ar->ab,
+@@ -16187,7 +16212,8 @@ ath12k_mac_stop_and_delete_bridge_vdev(s
+ 	if (!vif->valid_links)
+ 		return;
+ 
+-	if (vif->type != NL80211_IFTYPE_AP)
++	if (vif->type != NL80211_IFTYPE_AP &&
++	    vif->type != NL80211_IFTYPE_STATION)
+ 		return;
+ 
+ 	ahvif = (void *)vif->drv_priv;
+@@ -16414,6 +16440,45 @@ static void ath12k_mac_handle_failures_b
+ 	}
+ }
+ 
++static void ath12k_mac_configure_bridge_vap_sta_mode(struct ieee80211_hw *hw,
++						     struct ieee80211_vif *vif,
++						     int num_devices)
++{
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
++	struct ieee80211_chanctx_conf *bridge_ctx = NULL;
++	int ret;
++	u32 device_idx = 0;
++	u16 bridge_bitmap = 0;
++	u8 bridge_ar_link_idx;
++
++	ret = ath12k_mac_is_bridge_required(ahvif->device_bitmap,
++					    num_devices,
++					    &bridge_bitmap);
++	if (!ret)
++		return;
++
++	for_each_set_bit_from(device_idx, &bridge_bitmap, num_devices) {
++		ret = ath12k_mac_get_link_idx_with_device_idx(ah, device_idx,
++							      &bridge_ar_link_idx);
++		if (ret) {
++			bridge_ctx = ath12k_mac_get_ctx_for_bridge(ah,
++								   bridge_ar_link_idx);
++			ret = ath12k_mac_assign_vif_chanctx_handle(hw, vif, NULL,
++								   bridge_ctx,
++								   ATH12K_BRIDGE_LINK_MIN,
++								   bridge_ar_link_idx);
++			if (ret) {
++				ath12k_dbg(NULL, ATH12K_DBG_MAC,
++					   "Bridge VAP addition for STA mode failed\n");
++				ath12k_mac_handle_failures_bridge_addition(hw, vif);
++				continue;
++			}
++			break;
++		}
++	}
++}
++
+ static int ath12k_mac_create_and_start_bridge(struct ieee80211_hw *hw,
+ 					      struct ieee80211_vif *vif,
+ 					      struct ieee80211_bss_conf *link_conf,
+@@ -16431,8 +16496,9 @@ static int ath12k_mac_create_and_start_b
+ 	u8 link_id, bridge_ar_link_idx, curr_link_id;
+ 	bool bridge_needed = false;
+ 
+-	/* Currently bridge vdev addition is supported only in AP mode */
+-	if (vif->type != NL80211_IFTYPE_AP)
++	/* Currently bridge vdev addition is supported in AP and STA mode */
++	if (vif->type != NL80211_IFTYPE_AP &&
++	    vif->type != NL80211_IFTYPE_STATION)
+ 		goto exit;
+ 
+ 	/* Bridge needed only during MLO */
+@@ -16503,6 +16569,14 @@ static int ath12k_mac_create_and_start_b
+ 		if (!bridge_needed)
+ 			goto exit;
+ 
++		/* STA mode Bridge vdev handling */
++		if (vif->type == NL80211_IFTYPE_STATION) {
++			ath12k_mac_configure_bridge_vap_sta_mode(hw, vif,
++								 num_devices);
++			goto exit;
++		}
++
++		/* AP mode Bridge vdev handling */
+ 		ret = ath12k_mac_get_link_idx_for_bridge(hw, &link_idx_bmp);
+ 		if (ret) {
+ 			ath12k_dbg(NULL, ATH12K_DBG_MAC,
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -2758,6 +2758,7 @@ static int ath12k_mlo_recovery_link_vif_
+ 	struct wmi_wmm_params_arg *p = NULL;
+ 	struct ieee80211_bss_conf *info;
+ 	u64 changed = 0;
++	bool bridge_vdev;
+ 
+ 	switch (vif->type) {
+ 	case NL80211_IFTYPE_AP_VLAN:
+@@ -2820,7 +2821,9 @@ static int ath12k_mlo_recovery_link_vif_
+ 		  BSS_CHANGED_TXPOWER |
+ 		  BSS_CHANGED_MCAST_RATE;
+ 
+-	if (link_conf->mu_mimo_owner)
++	bridge_vdev = ath12k_mac_is_bridge_vdev(arvif);
++
++	if (!bridge_vdev && link_conf->mu_mimo_owner)
+ 		changed |= BSS_CHANGED_MU_GROUPS;
+ 
+ 	switch (vif->type) {
+@@ -2857,13 +2860,15 @@ static int ath12k_mlo_recovery_link_vif_
+ 		arvif->is_up = false;
+ 		ath12k_mac_bss_info_changed(ar, arvif, link_conf, changed);
+ 		if (vif->valid_links) {
+-			info = vif->link_conf[link_id];
+-			if (vif->cfg.assoc) {
+-				if (info)
+-					ath12k_bss_assoc(ar, arvif, info);
+-			} else {
++			if (bridge_vdev)
++				info = NULL;
++			else
++				info = vif->link_conf[link_id];
++
++			if (vif->cfg.assoc)
++				ath12k_bss_assoc(ar, arvif, info);
++			else
+ 				ath12k_bss_disassoc(ar, arvif, false);
+-			}
+ 		}
+ 		mutex_unlock(&ar->conf_mutex);
+ 		break;
+@@ -3262,7 +3267,16 @@ int ath12k_mode1_recovery_reconfig(struc
+ 				continue;
+ 
+ 			if (ath12k_mac_is_bridge_vdev(arvif)) {
+-				ath12k_mac_bridge_vdev_up(arvif);
++				switch (ahvif->vdev_type) {
++				case WMI_VDEV_TYPE_AP:
++					ath12k_mac_bridge_vdev_up(arvif);
++					break;
++				case WMI_VDEV_TYPE_STA:
++					link = NULL;
++					goto skip_link_info;
++				default:
++					break;
++				}
+ 				continue;
+ 			}
+ 
+@@ -3275,6 +3289,7 @@ int ath12k_mode1_recovery_reconfig(struc
+ 			}
+ 			rcu_read_unlock();
+ 
++skip_link_info:
+ 			/* unlock ar mutex here since we will take ah mutex in
+ 			 * the reconfig link API thus maintaining same order
+ 			 * as we use in other places.

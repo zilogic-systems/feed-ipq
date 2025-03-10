@@ -1,0 +1,45 @@
+From 69b53e1c6aedcf4df1956dc76e6ae9f681a8d8ed Mon Sep 17 00:00:00 2001
+From: Vinith Kumar R <quic_vinithku@quicinc.com>
+Date: Wed, 4 Sep 2024 15:47:02 +0530
+Subject: [PATCH] wifi: ath12k: Fix warn_on due to no frequency value in
+ rx_status
+
+If sband is NULL during ath12k_dp_rx_h_ppdu call for 6G band, then
+rx_status->freq is not filled. Due to this, facing panic_on_warn_on
+in ieee80211_rx_monitor function when trying to get hw_idx from the
+same frequency value. Fixing this by properly filling the
+rx_status->freq value in sband NULL case
+
+Patch-dependency: 530-b-ath12k-fix-packet-drops-due-to-incorrect-6-GHz-freq-.patch
+
+Signed-off-by: Vinith Kumar R <quic_vinithku@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index d620470..3378b56 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3170,12 +3170,16 @@ void ath12k_dp_rx_h_ppdu(struct ath12k *ar, struct ath12k_dp_rx_info *rx_info)
+ 			ath12k_err(ar->ab, "unable to determine channel, band for rx packet");
+ 		}
+ 		spin_unlock_bh(&ar->data_lock);
+-	}
+ 
+-	if (rx_status->band != NL80211_BAND_6GHZ)
+ 		rx_status->freq = ieee80211_channel_to_frequency(channel_num,
+ 							 rx_status->band);
++		goto h_rate;
++	}
+ 
++	if (rx_status->band != NL80211_BAND_6GHZ)
++		rx_status->freq = ieee80211_channel_to_frequency(channel_num,
++								 rx_status->band);
++h_rate:
+ 	ath12k_dp_rx_h_rate(ar, rx_info);
+ }
+ 
+-- 
+2.34.1
+

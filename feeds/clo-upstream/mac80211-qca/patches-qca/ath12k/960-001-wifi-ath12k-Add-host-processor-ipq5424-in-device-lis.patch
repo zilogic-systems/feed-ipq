@@ -1,0 +1,42 @@
+From 507bfd07f195e962aca7df5d2e87405a0c777eff Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Thu, 2 May 2024 12:03:51 +0530
+Subject: [PATCH] wifi: ath12k: Add host processor ipq5424 in device list
+
+- Added AHB based ipq5424 host processor in device list
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c  | 3 +++
+ drivers/net/wireless/ath/ath12k/core.h | 1 +
+ 2 files changed, 4 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/ahb.c b/drivers/net/wireless/ath/ath12k/ahb.c
+index d20ac54..6077885 100644
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -25,6 +25,9 @@ static const struct of_device_id ath12k_ahb_of_match[] = {
+ 	{ .compatible = "qcom,qcn6432-wifi",
+ 	  .data = (void *)ATH12K_HW_QCN6432_HW10,
+ 	},
++	{ .compatible = "qcom,ipq5424-wifi",
++	  .data = (void *)ATH12K_HW_IPQ5424_HW10,
++	},
+ 	{ }
+ };
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index cd3b694..dfd945a 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -165,6 +165,7 @@ enum ath12k_hw_rev {
+ 	ATH12K_HW_WCN7850_HW20,
+ 	ATH12K_HW_IPQ5332_HW10,
+ 	ATH12K_HW_QCN6432_HW10,
++	ATH12K_HW_IPQ5424_HW10
+ };
+ 
+ #define ATH12K_DIAG_HW_ID_OFFSET 16
+-- 
+2.34.1
+

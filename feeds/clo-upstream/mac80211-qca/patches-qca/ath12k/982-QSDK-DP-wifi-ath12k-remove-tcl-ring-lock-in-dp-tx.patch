@@ -1,0 +1,134 @@
+From c5c6c94b08bdc0b827e5414232bd0043c61d173d Mon Sep 17 00:00:00 2001
+From: Hari Chandrakanthan <quic_haric@quicinc.com>
+Date: Wed, 13 Nov 2024 16:39:10 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: remove tcl ring lock in dp tx
+
+Each tcl ring is already mapped to a cpu core.
+since dev_queue_xmit() already holds local_bh_disable()
+
+no other tasklet can contend for the tcl ring on the same core.
+mac80211 also holds local_bh_disable while sending QOS NULL
+data frames to ath12k driver.
+
+Thus it is safe to remove tcl_ring spin_lock in the dp tx apis.
+
+This change gives ~100Mbps improvement in throughput and ~2-4% CPU gain.
+
+Patch-depdendency: None
+Patch-work: None
+
+Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/Kconfig |  7 +++++++
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 12 ++++++------
+ drivers/net/wireless/ath/ath12k/dp_tx.h |  8 ++++++++
+ local-symbols                           |  1 +
+ 4 files changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/Kconfig b/drivers/net/wireless/ath/ath12k/Kconfig
+index 58d8c1a..2b5ccec 100644
+--- a/drivers/net/wireless/ath/ath12k/Kconfig
++++ b/drivers/net/wireless/ath/ath12k/Kconfig
+@@ -113,3 +113,10 @@ config ATH12K_POWER_BOOST
+ 	help
+ 	  Enable ath12k Power Boost support
+ 	  Say Y to enable. If unsure, say N.
++
++config ATH12K_TCL_RING_LOCK_ENABLE
++	bool "ath12k enable tcl ring lock in dp tx path"
++	depends on ATH12K
++	help
++	  Enable tcl ring lock in dp tx path
++	  Say Y to enable. If unsure, say N.
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index 2cd4d0c..59f9184 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -366,7 +366,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 
+ 	hal_ring_id = ring_id + HAL_SRNG_RING_ID_SW2TCL1;
+ 	tcl_ring = &ab->hal.srng_list[hal_ring_id];
+-	spin_lock_bh(&tcl_ring->lock);
++	ATH12K_DP_TCL_RING_LOCK(&tcl_ring->lock);
+ 	ath12k_hal_srng_access_src_ring_begin_nolock(tcl_ring);
+ 
+ 	hal_tcl_desc = (void *)ath12k_hal_srng_src_get_next_entry_nolock(ab, tcl_ring);
+@@ -375,7 +375,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 		 * desc because the desc is directly enqueued onto hw queue.
+ 		 */
+ 		ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
+-		spin_unlock_bh(&tcl_ring->lock);
++		ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 		ab->soc_stats.tx_err.desc_na[ring_id]++;
+ 		ret = -ENOMEM;
+ 		goto fail_remove_tx_buf;
+@@ -386,7 +386,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 	memcpy(hal_tcl_desc, &tcl_desc, sizeof(tcl_desc));
+ 	dsb(st);
+ 	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
+-	spin_unlock_bh(&tcl_ring->lock);
++	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+ 	atomic_inc(&ar->dp.num_tx_pending);
+ 	atomic_inc(&ab->ag->num_dp_tx_pending);
+@@ -654,7 +654,7 @@ skip_htt_meta:
+ 
+ 	hal_ring_id = tx_ring->tcl_data_ring.ring_id;
+ 	tcl_ring = &ab->hal.srng_list[hal_ring_id];
+-	spin_lock_bh(&tcl_ring->lock);
++	ATH12K_DP_TCL_RING_LOCK(&tcl_ring->lock);
+ 	ath12k_hal_srng_access_src_ring_begin_nolock(tcl_ring);
+ 	hal_tcl_desc = ath12k_hal_srng_src_get_next_entry(ab, tcl_ring);
+ 	if (unlikely(!hal_tcl_desc)) {
+@@ -662,7 +662,7 @@ skip_htt_meta:
+ 		 * desc because the desc is directly enqueued onto hw queue.
+ 		 */
+ 		ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
+-		spin_unlock_bh(&tcl_ring->lock);
++		ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 		ab->soc_stats.tx_err.desc_na[ti.ring_id]++;
+ 		ret = -ENOMEM;
+ 
+@@ -731,7 +731,7 @@ skip_htt_meta:
+ 
+ 	dsb(st);
+ 	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
+-	spin_unlock_bh(&tcl_ring->lock);
++	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+ 	ath12k_dbg_dump(ab, ATH12K_DBG_DP_TX, NULL, "dp tx msdu: ",
+ 			skb->data, skb->len);
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.h b/drivers/net/wireless/ath/ath12k/dp_tx.h
+index 153f3f7..afcd538 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.h
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.h
+@@ -12,6 +12,14 @@
+ 
+ #define ATH12K_PPEDS_HOTLIST_LEN_MAX ath12k_ppe_ds_hotlist_len
+ extern unsigned int ath12k_ppe_ds_hotlist_len;
++
++#ifdef CPTCFG_ATH12K_TCL_RING_LOCK_ENABLE
++#define ATH12K_DP_TCL_RING_LOCK(tcl_ring_lock) spin_lock_bh(tcl_ring_lock)
++#define ATH12K_DP_TCL_RING_UNLOCK(tcl_ring_lock) spin_unlock_bh(tcl_ring_lock)
++#else
++#define ATH12K_DP_TCL_RING_LOCK(tcl_ring_lock)
++#define ATH12K_DP_TCL_RING_UNLOCK(tcl_ring_lock)
++#endif
+ /* htt_tx_msdu_desc_ext
+  *
+  * valid_pwr
+diff --git a/local-symbols b/local-symbols
+index 5e75c42..0903053 100644
+--- a/local-symbols
++++ b/local-symbols
+@@ -193,6 +193,7 @@ ATH12K_MEM_PROFILE_512M=
+ ATH12K_SAWF=
+ ATH12K_POWER_OPTIMIZATION=
+ ATH12K_POWER_BOOST=
++ATH12K_TCL_RING_LOCK_ENABLE=
+ WLAN_VENDOR_ATMEL=
+ ATMEL=
+ PCI_ATMEL=
+-- 
+2.34.1
+

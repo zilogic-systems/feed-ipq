@@ -1,0 +1,103 @@
+From d82dbca21b370cb02f98edf35565f59be4a2e988 Mon Sep 17 00:00:00 2001
+From: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+Date: Sat, 12 Oct 2024 16:21:42 +0530
+Subject: [PATCH 3/5] wifi: ath12k: Register and handle userpd crash
+
+Register fatal interrupt for all userPD to receive interrupt when userPD
+crashes. Trigger reset work on userPD crash.
+Currently not all events of rootPD notifiers are handler, would be
+handled in furture if required.
+
+Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c | 65 ++++++++++++++++++++++++---
+ drivers/net/wireless/ath/ath12k/ahb.h | 10 ++++-
+ 2 files changed, 69 insertions(+), 6 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -42,7 +42,8 @@ MODULE_DEVICE_TABLE(of, ath12k_ahb_of_ma
+ #define ATH12K_UPD_IRQ_WRD_LEN  18
+ static const char ath12k_userpd_irq[][9] = {"spawn",
+ 				     "ready",
+-				     "stop-ack"};
++				     "stop-ack",
++				     "fatal"};
+ 
+ static const char *irq_name[ATH12K_IRQ_NUM_MAX] = {
+ 	"misc-pulse1",
+@@ -1100,6 +1101,27 @@ static const struct ath12k_hif_ops ath12
+ 	.dp_umac_reset_free_irq = ath12k_ahb_dp_umac_reset_free_irq,
+ };
+ 
++static void ath12k_ahb_handle_userpd_crash(struct ath12k_base *ab)
++{
++	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
++
++	if (!test_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags))
++		return;
++
++	ath12k_info(ab, "UserPD - %d CRASHED\n", ab_ahb->userpd_id);
++
++	complete(&ab_ahb->userpd_spawned);
++	complete(&ab_ahb->userpd_ready);
++	complete(&ab_ahb->userpd_stopped);
++
++	if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
++		set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
++		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
++		ab_ahb->crash_type = ATH12K_RPROC_USERPD_CRASH;
++		queue_work(ab->workqueue_aux, &ab->reset_work);
++	}
++}
++
+ static irqreturn_t ath12k_userpd_irq_handler(int irq, void *data)
+ {
+ 	struct ath12k_base *ab = data;
+@@ -1109,8 +1131,10 @@ static irqreturn_t ath12k_userpd_irq_han
+ 		complete(&ab_ahb->userpd_spawned);
+ 	} else if (irq == ab_ahb->userpd_irq_num[ATH12K_USERPD_READY_IRQ]) {
+ 		complete(&ab_ahb->userpd_ready);
+-	} else if (irq == ab_ahb->userpd_irq_num[ATH12K_USERPD_STOP_ACK_IRQ])	{
++	} else if (irq == ab_ahb->userpd_irq_num[ATH12K_USERPD_STOP_ACK_IRQ]) {
+ 		complete(&ab_ahb->userpd_stopped);
++	} else if (irq == ab_ahb->userpd_irq_num[ATH12K_USERPD_FATAL_IRQ]) {
++		ath12k_ahb_handle_userpd_crash(ab);
+ 	} else {
+ 		ath12k_err(ab, "Invalid userpd interrupt\n");
+ 		return IRQ_NONE;
+@@ -1178,12 +1202,14 @@ static int ath12k_ahb_root_pd_state_noti
+ 	struct ath12k_ahb *ab_ahb = container_of(nb, struct ath12k_ahb, rpd_nb);
+ 	struct ath12k_base *ab = ab_ahb->ab;
+ 
+-	if (event == ATH12K_ROOTPD_AFTER_POWERUP) {
++	switch (event) {
++	case ATH12K_ROOTPD_AFTER_POWERUP:
+ 		ath12k_dbg(ab, ATH12K_DBG_AHB, "Root PD is UP\n");
+ 		complete(&ab_ahb->rootpd_ready);
++		return NOTIFY_OK;
+ 	}
+ 
+-	return 0;
++	return NOTIFY_DONE;
+ }
+ 
+ static int ath12k_ahb_register_rproc_notifier(struct ath12k_base *ab)
+--- a/drivers/net/wireless/ath/ath12k/ahb.h
++++ b/drivers/net/wireless/ath/ath12k/ahb.h
+@@ -22,6 +22,7 @@
+ #define ATH12K_PCI_CE_WAKE_IRQ	2
+ #define ATH12K_ROOTPD_READY_TIMEOUT		(5 * HZ)
+ #define ATH12K_ROOTPD_AFTER_POWERUP		QCOM_SSR_AFTER_POWERUP
++#define ATH12K_ROOTPD_BEFORE_SHUTDOWN		QCOM_SSR_BEFORE_SHUTDOWN
+ #define ATH12K_AHB_FW_PREFIX			"q6_fw"
+ #define ATH12K_AHB_FW_SUFFIX			".mdt"
+ #define ATH12K_AHB_IU_FW			"iu_fw.mdt"
+@@ -49,6 +50,7 @@ enum ath12k_ahb_userpd_irq {
+ 	ATH12K_USERPD_SPAWN_IRQ,
+ 	ATH12K_USERPD_READY_IRQ,
+ 	ATH12K_USERPD_STOP_ACK_IRQ,
++	ATH12K_USERPD_FATAL_IRQ,
+ 	ATH12K_USERPD_MAX_IRQ,
+ };
+ 

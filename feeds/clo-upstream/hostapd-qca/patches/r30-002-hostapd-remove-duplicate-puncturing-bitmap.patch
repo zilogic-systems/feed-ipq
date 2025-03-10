@@ -1,0 +1,97 @@
+From 933cbab3ba056f9be25715f4e1148746611b4fb6 Mon Sep 17 00:00:00 2001
+From: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Date: Mon, 24 Jun 2024 18:55:26 +0530
+Subject: [PATCH] hostapd: remove duplicate puncturing bitmap
+
+Currently, the puncturing bitmap is passed two times,
+one in frequency parameters and other in wpa_driver_ap_params.
+
+The bitmap in frequency paramters is used to update the punctured
+channels. Hence remove the puncturing bitmap in
+wpa_driver_ap_params. Similarly, use the frequency parameters
+for mesh puncturing bitmap.
+
+And, update correct puncturing bitmap during channel switch.
+
+
+Signed-off-by: Mohan Kumar G <quic_mkumarg@quicinc.com>
+---
+ src/drivers/driver_nl80211.c | 7 -------
+ 1 file changed, 7 deletions(-)
+
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -11718,7 +11718,7 @@ static int nl80211_switch_channel(void *
+ 		   settings->freq_params.bandwidth,
+ 		   settings->freq_params.center_freq1,
+ 		   settings->freq_params.center_freq2,
+-		   settings->punct_bitmap,
++		   settings->freq_params.punct_bitmap,
+ 		   settings->link_id,
+ 		   settings->freq_params.ht_enabled ? " ht" : "",
+ 		   settings->freq_params.vht_enabled ? " vht" : "",
+@@ -12619,13 +12619,6 @@ static int nl80211_join_mesh(struct i802
+ 	      nla_put_u32(msg, NL80211_ATTR_BEACON_TX_MODE, params->beacon_tx_mode)))
+ 		goto fail;
+ 
+-	if (params->punct_bitmap) {
+-		wpa_printf(MSG_DEBUG, "nl80211: Puncturing bitmap=0x%04x",
+-			   params->punct_bitmap);
+-		if (nla_put_u32(msg, NL80211_ATTR_PUNCT_BITMAP,
+-				params->punct_bitmap))
+-			goto fail;
+-	}
+ 	wpa_printf(MSG_DEBUG, "  * flags=%08X", params->flags);
+ 
+ 	if (params->handle_dfs && nla_put_flag(msg, NL80211_ATTR_HANDLE_DFS))
+--- a/src/ap/ctrl_iface_ap.c
++++ b/src/ap/ctrl_iface_ap.c
+@@ -1391,6 +1391,7 @@ int hostapd_parse_csa_settings(const cha
+ 	SET_CSA_SETTING_EXT(punct_bitmap);
+ 	SET_CSA_SETTING(bandwidth_device);
+ 	SET_CSA_SETTING(center_freq_device);
++	settings->freq_params.punct_bitmap = settings->punct_bitmap;
+ 	settings->freq_params.ht_enabled = !!os_strstr(pos, " ht");
+ 	settings->freq_params.vht_enabled = !!os_strstr(pos, " vht");
+ 	settings->freq_params.eht_enabled = !!os_strstr(pos, " eht");
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -4948,6 +4948,7 @@ hostapd_switch_channel_fallback(struct h
+ 	iface->conf->bandwidth_device = freq_params->bandwidth_device;
+ 	iface->conf->center_freq_device = freq_params->center_freq_device;
+ 	iface->conf->bandwidth_device = freq_params->bandwidth_device;
++	iface->conf->punct_bitmap = freq_params->punct_bitmap;
+ 
+ 
+ 	/*
+--- a/src/drivers/driver_nl80211_event.c
++++ b/src/drivers/driver_nl80211_event.c
+@@ -4376,7 +4376,7 @@ static void do_process_drv_event(struct
+ 				     tb[NL80211_ATTR_CHANNEL_WIDTH],
+ 				     tb[NL80211_ATTR_CENTER_FREQ1],
+ 				     tb[NL80211_ATTR_CENTER_FREQ2],
+-				     tb[NL80211_ATTR_PUNCT_BITMAP],
++				     tb[NL80211_ATTR_RU_PUNCT_BITMAP],
+ 				     tb[NL80211_ATTR_CH_SWITCH_COUNT],
+ 				     tb[NL80211_ATTR_CHANNEL_WIDTH_DEVICE],
+ 				     tb[NL80211_ATTR_CENTER_FREQ_DEVICE],
+@@ -4391,7 +4391,7 @@ static void do_process_drv_event(struct
+ 				     tb[NL80211_ATTR_CHANNEL_WIDTH],
+ 				     tb[NL80211_ATTR_CENTER_FREQ1],
+ 				     tb[NL80211_ATTR_CENTER_FREQ2],
+-				     tb[NL80211_ATTR_PUNCT_BITMAP],
++				     tb[NL80211_ATTR_RU_PUNCT_BITMAP],
+ 				     NULL,
+ 				     tb[NL80211_ATTR_CHANNEL_WIDTH_DEVICE],
+ 				     tb[NL80211_ATTR_CENTER_FREQ_DEVICE],
+--- a/wpa_supplicant/mesh.c
++++ b/wpa_supplicant/mesh.c
+@@ -283,7 +283,7 @@ static int wpas_mesh_complete(struct wpa
+ 		wpa_s->mgmt_group_cipher = wpa_s->mesh_rsn->mgmt_group_cipher;
+ 	}
+ 
+-	params->punct_bitmap = ifmsh->conf->punct_bitmap;
++	params->freq.punct_bitmap = ifmsh->conf->punct_bitmap;
+ 	params->ies = ifmsh->mconf->rsn_ie;
+ 	params->ie_len = ifmsh->mconf->rsn_ie_len;
+ 	params->basic_rates = ifmsh->basic_rates;

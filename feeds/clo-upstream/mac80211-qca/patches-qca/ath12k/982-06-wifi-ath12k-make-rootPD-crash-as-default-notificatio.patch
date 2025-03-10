@@ -1,0 +1,56 @@
+From e02ef89e8f4438bbeb0d00ac5ac1714310842a48 Mon Sep 17 00:00:00 2001
+From: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+Date: Thu, 14 Nov 2024 11:33:25 +0530
+Subject: [PATCH] wifi: ath12k: make rootPD crash as default notification for
+ mode0
+
+According to earlier design userPD crash was the default crash
+notification for both mode 0 and mode 1. But with mode 0 we see
+MLO memory region cached on the FW side is not flushed properly
+during recovery and hence we see a FW crash. To work around this
+ath12k subscribes for rootPD crash notification incase of mode 0
+and also for mode 1 when total number of userPD is 1.
+
+Mode 0  |  Mode 1  |  Type
+-----------------------------
+RootPD  |  RootPD  | 1 UserPD
+RootPD  |  UserPD  | more than 1 UserPD
+
+Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c    | 3 +++
+ drivers/net/wireless/ath/ath12k/core.h    | 1 +
+ drivers/net/wireless/ath/ath12k/debugfs.c | 5 ++++-
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -2294,6 +2294,9 @@ static void ath12k_debug_multipd_wmi_pde
+ 	struct ath12k_pdev *pdev;
+ 	struct ath12k *ar;
+ 	bool assert_userpd;
++	struct ath12k_hw_group *ag = ab->ag;
++	u8 num_userpd_probed = 0;
++	struct ath12k_base *partner_ab;
+ 	int i;
+ 
+ 	if (ab->hif.bus == ATH12K_BUS_PCI)
+@@ -2311,7 +2314,17 @@ static void ath12k_debug_multipd_wmi_pde
+ 		if (!ab->ag->mlo_capable) {
+ 			assert_userpd = true;
+ 		} else {
+-			if (value == ATH12K_FW_RECOVERY_DISABLE)
++			for (i = 0; i < ag->num_chip; i++) {
++				partner_ab = ag->ab[i];
++
++				if (partner_ab->hif.bus == ATH12K_BUS_AHB ||
++				    partner_ab->hif.bus == ATH12K_BUS_HYBRID)
++					num_userpd_probed++;
++			}
++
++			if (value == ATH12K_FW_RECOVERY_DISABLE ||
++			    value == ATH12K_FW_RECOVERY_ENABLE_AUTO ||
++			    num_userpd_probed == 1)
+ 				assert_userpd = false;
+ 			else
+ 				assert_userpd = true;

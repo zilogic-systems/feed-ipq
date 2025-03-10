@@ -1,0 +1,31 @@
+From cdde2faae0a9badb44945c731092c7470e358ab5 Mon Sep 17 00:00:00 2001
+From: Arunpandi Kannan <quic_arunpand@quicinc.com>
+Date: Wed, 4 Sep 2024 16:38:56 +0530
+Subject: [PATCH] hostapd: Add RSNXE in association response if any of RSNXE
+ subfield element is nonzero.
+
+As per spec IEEE P802.11-REVme/D5.0, section 9.3.3.6, table 9-65
+The RSNXE is present if any subfield of the Extended RSN
+Capabilities field in this element is nonzero, except the Field
+Length subfield for association response.
+
+Patch-work: None
+Patch-dependency: None
+
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/ieee802_11.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -5972,7 +5972,8 @@ static void handle_assoc(struct hostapd_
+ 	resp = check_assoc_ies(hapd, sta, pos, left, reassoc);
+ 	if (resp != WLAN_STATUS_SUCCESS)
+ 		goto fail;
+-	omit_rsnxe = !get_ie(pos, left, WLAN_EID_RSNX);
++	if (reassoc)
++		omit_rsnxe = !get_ie(pos, left, WLAN_EID_RSNX);
+ 
+ 	if (hostapd_get_aid(hapd, sta) < 0) {
+ 		hostapd_logger(hapd, mgmt->sa, HOSTAPD_MODULE_IEEE80211,

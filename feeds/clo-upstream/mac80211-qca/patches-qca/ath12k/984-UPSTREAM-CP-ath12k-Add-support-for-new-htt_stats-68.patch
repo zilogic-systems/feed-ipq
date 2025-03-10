@@ -1,0 +1,169 @@
+From d6e6b02fffef82e2a2a67fbe6a69619bc0a0e782 Mon Sep 17 00:00:00 2001
+From: Harish Rachakonda <quic_rachakon@quicinc.com>
+Date: Thu, 21 Nov 2024 14:15:40 +0530
+Subject: [PATCH] UPSTREAM:CP ath12k: Add support for new htt_stats 68
+
+Add additional htt stats type:
+ATH12K_DBG_HTT_STATS_GTX_STATS
+dump green AP tx stats and to check GTX is enabled or not. 
+
+echo 1 > /sys/kernel/debug/ieee80211/phy00/netdev:wlan0/link0/
+power_save_gtx
+cat /sys/kernel/debug/ath12k/qcn9274\ hw2.0_0000:01:00.0/mac0/htt_stats
+HTT_STATS_GTX_TAG
+Green TX Enabled: 1
+MIN TPC (0.25 dBm) =  0:255 1:255 2:255 3:255 4:255 5:255 6:255 7:255 8:255 9:255 10:255 11:255 12:255 13:255 14:255 15:255
+MAX TPC (0.25 dBm) =  0:0 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+TPC DIFF MCS (0.25 dB) =  0:0 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+
+Patch-dependency: 504-ath12k-add-debugfs-support.patch
+975-QSDK-ath12k-Add-support-to-enable-disable-Green-tx.patch
+Patch-work: None
+
+Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/debugfs.h     |  1 +
+ .../wireless/ath/ath12k/debugfs_htt_stats.c   | 80 +++++++++++++++++++
+ .../wireless/ath/ath12k/debugfs_htt_stats.h   |  9 +++
+ 3 files changed, 90 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/debugfs.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs.h
+@@ -92,6 +92,7 @@ enum ath12k_dbg_htt_ext_stats_type {
+ 	ATH12K_DBG_HTT_PDEV_MLO_IPC_STATS		    =  64,
+ 	ATH12K_DBG_HTT_EXT_PDEV_RTT_RESP_STATS		    =  65,
+ 	ATH12K_DBG_HTT_EXT_PDEV_RTT_INITIATOR_STATS	    =  66,
++	ATH12K_DBG_HTT_STATS_GTX_STATS			    =  68,
+ 	ATH12K_DBG_HTT_EXT_STATS_PDEV_RTT_DELAY		    =  70,
+ 	ATH12K_DBG_HTT_EXT_STATS_PDEV_SPECTRAL		    =  71,
+ 	ATH12K_DBG_HTT_EXT_STATS_PDEV_AOA		    =  72,
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
+@@ -458,6 +458,84 @@ htt_print_tx_pdev_stats_tx_ppdu_stats_tl
+ 	stats_req->buf_len = len;
+ }
+ 
++static void htt_print_htt_stats_gtx_stats_tlv_v(const void *tag_buf, u16 tag_len,
++						struct debug_htt_stats_req *stats_req)
++{
++	const struct htt_stats_gtx_stats *htt_stats_buf = tag_buf;
++	u8 *buf = stats_req->buf;
++	u32 len = stats_req->buf_len;
++	u32 buf_len = ATH12K_HTT_STATS_BUF_SIZE;
++
++	if (tag_len < sizeof(*htt_stats_buf))
++		return;
++
++	len += scnprintf(buf + len, buf_len - len,
++			 "HTT_STATS_GTX_TAG\n");
++	len += scnprintf(buf + len, buf_len - len, "Green TX Enabled: %u\n",
++			 le32_to_cpu(htt_stats_buf->gtx_enabled));
++	len += scnprintf(buf + len, buf_len - len, "MIN TPC (0.25 dBm) = "
++			 " 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u"
++			 " 8:%u 9:%u 10:%u 11:%u 12:%u 13:%u 14:%u 15:%u\n",
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[0]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[1]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[2]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[3]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[4]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[5]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[6]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[7]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[8]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[9]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[10]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[11]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[12]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[13]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[14]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_min[15]));
++
++	len += scnprintf(buf + len, buf_len - len, "MAX TPC (0.25 dBm) = "
++			 " 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u"
++			 " 8:%u 9:%u 10:%u 11:%u 12:%u 13:%u 14:%u 15:%u\n",
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[0]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[1]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[2]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[3]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[4]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[5]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[6]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[7]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[8]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[9]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[10]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[11]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[12]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[13]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[14]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_max[15]));
++
++	len += scnprintf(buf + len, buf_len - len, "TPC DIFF MCS (0.25 dB) = "
++			 " 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u"
++			 " 8:%u 9:%u 10:%u 11:%u 12:%u 13:%u 14:%u 15:%u\n",
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[0]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[1]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[2]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[3]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[4]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[5]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[6]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[7]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[8]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[9]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[10]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[11]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[12]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[13]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[14]),
++			 le32_to_cpu(htt_stats_buf->mcs_tpc_diff[15]));
++
++	stats_req->buf_len = len;
++}
++
+ static inline
+ void htt_print_tx_pdev_mu_ppdu_dist_stats_tlv_v(const void *tag_buf,
+ 						struct debug_htt_stats_req *stats_req)
+@@ -10353,6 +10431,10 @@ static int ath12k_dbg_htt_ext_stats_pars
+ 	case HTT_STATS_MU_PPDU_DIST_TAG:
+ 		htt_print_tx_pdev_mu_ppdu_dist_stats_tlv_v(tag_buf, stats_req);
+ 		break;
++
++	case HTT_STATS_GTX_TAG:
++		htt_print_htt_stats_gtx_stats_tlv_v(tag_buf, len, stats_req);
++		break;
+ 
+ 	case HTT_STATS_TX_PDEV_TRIED_MPDU_CNT_HIST_TAG:
+ 		htt_print_tx_pdev_stats_tried_mpdu_cnt_hist_tlv_v(tag_buf, len,
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
+@@ -222,6 +222,7 @@ enum htt_tlv_tag_t {
+ 	HTT_STATS_PDEV_RTT_HW_STATS_TAG			    = 196,
+ 	HTT_STATS_PDEV_RTT_TBR_SELFGEN_QUEUED_STATS_TAG	    = 197,
+ 	HTT_STATS_PDEV_RTT_TBR_CMD_RESULT_STATS_TAG	    = 198,
++	HTT_STATS_GTX_TAG				    = 199,
+ 	HTT_STATS_PDEV_SPECTRAL_TAG			    = 204,
+ 	HTT_STATS_PDEV_RTT_DELAY_TAG			    = 205,
+ 	HTT_STATS_PDEV_AOA_TAG				    = 206,
+@@ -1246,6 +1247,7 @@ struct htt_tx_pdev_mu_mimo_mpdu_stats_tl
+ 	(HTT_STATS_NUM_NR_BINS * HTT_STATS_MAX_NUM_SCHED_STATUS)
+ #define HTT_STATS_MAX_NUM_MU_PPDU_PER_BURST_WORDS \
+ 	(HTT_STATS_NUM_NR_BINS * HTT_STATS_MAX_NUM_MU_PPDU_PER_BURST)
++#define HTT_NUM_MCS_PER_NSS 16
+ 
+ enum htt_stats_hw_mode {
+ 	HTT_STATS_HWMODE_AC = 0,
+@@ -1253,6 +1255,13 @@ enum htt_stats_hw_mode {
+ 	HTT_STATS_HWMODE_BE = 2,
+ };
+ 
++struct htt_stats_gtx_stats {
++	__le32 gtx_enabled;
++	__le32 mcs_tpc_min[HTT_NUM_MCS_PER_NSS];
++	__le32 mcs_tpc_max[HTT_NUM_MCS_PER_NSS];
++	__le32 mcs_tpc_diff[HTT_NUM_MCS_PER_NSS];
++};
++
+ struct htt_tx_pdev_mu_ppdu_dist_stats_tlv_v {
+ 	u32 hw_mode; /* HTT_STATS_HWMODE_xx */
+ 	u32 mu_mimo_num_seq_term_status[HTT_STATS_MAX_NUM_SCHED_STATUS_WORDS];

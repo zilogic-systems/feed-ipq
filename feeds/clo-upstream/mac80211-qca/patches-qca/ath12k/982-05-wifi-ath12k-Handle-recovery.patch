@@ -1,0 +1,449 @@
+From 9ec29935d8e06ca7b4caf3fba50d28fee3d68dd7 Mon Sep 17 00:00:00 2001
+From: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+Date: Wed, 25 Sep 2024 16:54:04 +0530
+Subject: [PATCH 5/5] wifi: ath12k: Handle recovery
+
+Recover the userPD if there is userPD crash in core reset.
+In case of rootPD crash, recover all userPD on receiving the 
+AFTER_POWERUP notification from rootPD.
+Discard rootPD recovery as it will be taken care by rproc driver
+independently. Similarly rproc_start, rproc_stop are redundant.
+
+Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c  |  25 +++-
+ drivers/net/wireless/ath/ath12k/core.c | 166 +------------------------
+ 2 files changed, 30 insertions(+), 161 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -1215,6 +1215,13 @@ int ath12k_ahb_root_pd_fatal_notifier(st
+ 	if (!test_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags))
+ 		return NOTIFY_DONE;
+ 
++	/* Disable rootPD recovery as FW recovery is disabled
++ 	 * to collect dump in crashed state
++ 	 */
++
++	if (ab->fw_recovery_support == ATH12K_FW_RECOVERY_DISABLE)
++		ab_ahb->tgt_rproc->recovery_disabled = true;
++
+ 	if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ag->dev_flags))) {
+ 		set_bit(ATH12K_FLAG_RECOVERY, &ag->dev_flags);
+ 		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ag->dev_flags);
+@@ -1225,6 +1232,22 @@ int ath12k_ahb_root_pd_fatal_notifier(st
+ 	return NOTIFY_OK;
+ }
+ 
++static void ath12k_ahb_queue_all_userpd_reset(struct ath12k_base *ab)
++{
++	struct ath12k_hw_group *ag = ab->ag;
++	struct ath12k_base *partner_ab;
++	int i;
++
++	for (i = 0; i < ag->num_chip; i++) {
++		partner_ab = ag->ab[i];
++
++		if (partner_ab->hif.bus == ATH12K_BUS_PCI)
++			continue;
++
++		queue_work(partner_ab->workqueue_aux, &partner_ab->reset_work);
++	}
++}
++
+ static int ath12k_ahb_release_all_userpd(struct ath12k_base *ab)
+ {
+ 	struct ath12k_hw_group *ag = ab->ag;
+@@ -1266,6 +1289,11 @@ static int ath12k_ahb_root_pd_state_noti
+ 	case ATH12K_ROOTPD_AFTER_POWERUP:
+ 		ath12k_dbg(ab, ATH12K_DBG_AHB, "Root PD is UP\n");
+ 		complete(&ab_ahb->rootpd_ready);
++
++		if (ab_ahb->crash_type == ATH12K_RPROC_ROOTPD_CRASH &&
++		    ab->fw_recovery_support)
++			ath12k_ahb_queue_all_userpd_reset(ab);
++
+ 		return NOTIFY_OK;
+ 	case ATH12K_ROOTPD_BEFORE_SHUTDOWN:
+ 		ath12k_ahb_release_all_userpd(ab);
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -190,6 +190,55 @@ void ath12k_core_put_hw_group(struct ath
+  * scenarios driver can queue ab->reset_work for all ahb and
+  * hybrid chipset's.
+  */
++
++void ath12k_core_issue_bug_on(struct ath12k_base *ab)
++{
++	struct ath12k_hw_group *ag = ab->ag;
++
++	if (ab->in_panic)
++		goto out;
++
++	/* set in_panic to true to avoid multiple rddm download during
++	 * firmware crash
++	 */
++	ab->in_panic = true;
++
++	if (!ag->mlo_capable)
++		BUG_ON(1);
++
++	if (atomic_read(&ath12k_coredump_ram_info.num_chip) >= ab->ag->num_started)
++		BUG_ON(1);
++	else
++		goto out;
++
++out:
++	ath12k_info(ab,
++		    "%d chip dump collected and waiting for partner chips\n",
++		    atomic_read(&ath12k_coredump_ram_info.num_chip));
++}
++
++static void ath12k_core_trigger_bug_on(struct ath12k_base *ab)
++{
++	struct ath12k_hw_group *ag = ab->ag;
++	int dump_count;
++
++	/* Crash the system once all the stats are dumped */
++	if (ab->in_panic)
++		return;
++
++	if (ag->mlo_capable) {
++		dump_count = atomic_read(&ath12k_coredump_ram_info.num_chip);
++		if (dump_count >= ATH12K_MAX_SOCS) {
++			ath12k_err(ab, "invalid chip number %d\n",
++				   dump_count);
++			return;
++		}
++	}
++
++	atomic_inc(&ath12k_coredump_ram_info.num_chip);
++	ath12k_core_issue_bug_on(ab);
++}
++
+ static void ath12k_core_update_userpd_state(struct work_struct *work)
+ {
+ 	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_work);
+@@ -199,8 +248,29 @@ static void ath12k_core_update_userpd_st
+ 
+ 	for (i = 0; i < ag->num_chip; i++) {
+ 		ab = ag->ab[i];
+-		if (ab->hif.bus == ATH12K_BUS_PCI)
++
++		if (!ab->fw_recovery_support) {
++			if (ab->hif.bus == ATH12K_BUS_PCI &&
++			    !test_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags)) {
++			/* Failsafe. Assert partner chips as crash notification would
++ 			 * not be propagated to all chips in rare case.
++ 			 */
++				ath12k_info(ab, "sending fw_hang cmd to partner chip\n");
++				ath12k_wmi_force_fw_hang_cmd(ab->pdevs[0].ar,
++							     ATH12K_WMI_FW_HANG_ASSERT_TYPE,
++							     ATH12K_WMI_FW_HANG_DELAY,
++							     true);
++
++			} else if (ab->hif.bus == ATH12K_BUS_AHB ||
++				   ab->hif.bus == ATH12K_BUS_HYBRID) {
++				ath12k_hal_dump_srng_stats(ab);
++				ath12k_core_trigger_bug_on(ab);
++			}
+ 			continue;
++		} else {
++			if (ab->hif.bus == ATH12K_BUS_PCI)
++				continue;
++		}
+ 
+ 		ab_ahb = ath12k_ahb_priv(ab);
+ 		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
+@@ -1949,73 +2019,6 @@ err_firmware_stop:
+ 	return ret;
+ }
+ 
+-#define ATH12K_COLLECT_DUMP_TIMEOUT	(120 * HZ)
+-
+-void ath12k_core_wait_dump_collect(struct ath12k_base *ab)
+-{
+-	int timeout;
+-	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+-
+-	if (ab_ahb->collect_dump) {
+-		timeout = wait_event_timeout(ab->ssr_dump_wq,
+-					     (ab_ahb->collect_dump == false),
+-					     ATH12K_COLLECT_DUMP_TIMEOUT);
+-		if (timeout <= 0)
+-			ath12k_warn(ab, "dump collection timed out\n");
+-	}
+-	return;
+-}
+-EXPORT_SYMBOL(ath12k_core_wait_dump_collect);
+-
+-void ath12k_core_issue_bug_on(struct ath12k_base *ab)
+-{
+-	struct ath12k_hw_group *ag = ab->ag;
+-
+-	if (ab->in_panic)
+-		goto out;
+-
+-	/* set in_panic to true to avoid multiple rddm download during
+-	 * firmware crash
+-	 */
+-	ab->in_panic = true;
+-
+-	if (!ag->mlo_capable)
+-		BUG_ON(1);
+-
+-	if (atomic_read(&ath12k_coredump_ram_info.num_chip) >= ab->ag->num_started)
+-		BUG_ON(1);
+-	else
+-		goto out;
+-
+-out:
+-	ath12k_info(ab,
+-		    "%d chip dump collected and waiting for partner chips\n",
+-		    atomic_read(&ath12k_coredump_ram_info.num_chip));
+-
+-}
+-
+-static void ath12k_coredump_download_ahb(struct ath12k_base *ab)
+-{
+-	struct ath12k_hw_group *ag = ab->ag;
+-	int dump_count;
+-
+-	/* Crash the system once all the stats are dumped */
+-	if (ab->fw_recovery_support && !ab->in_panic)
+-		return;
+-
+-	if (ag->mlo_capable ) {
+-		dump_count = atomic_read(&ath12k_coredump_ram_info.num_chip);
+-		if (dump_count >= ATH12K_MAX_SOCS) {
+-			ath12k_err(ab, "invalid chip number %d\n",
+-				   dump_count);
+-			return;
+-		}
+-	}
+-
+-	atomic_inc(&ath12k_coredump_ram_info.num_chip);
+-	ath12k_core_issue_bug_on(ab);
+-}
+-
+ u8 ath12k_core_get_total_num_vdevs(struct ath12k_base *ab)
+ {
+ 	if (ab->ag && ab->ag->num_chip >= ATH12K_MIN_NUM_DEVICES_NLINK)
+@@ -3277,181 +3280,26 @@ static void ath12k_core_mode1_recovery_w
+ 		   "queued recovery work\n");
+ 	ath12k_mode1_recovery_reconfig(ab);
+ }
+-
+-static int ath12k_core_rproc_stop(struct rproc *rproc)
+-{
+-	int ret = 0;
+-
+-	if (!rproc)
+-		return ret;
+-
+-	if (rproc->state != RPROC_OFFLINE) {
+-		ret = rproc_stop(rproc, true);
+-		if (ret < 0) {
+-			ath12k_err(NULL, "rproc:%s stop failed:%d\n",
+-				   rproc->name, ret);
+-		}
+-	}
+-	return ret;
+-}
+-
+-static int ath12k_core_rproc_start(struct rproc *rproc)
+-{
+-	const struct firmware *firmware_p = NULL;
+-	struct device *dev;
+-	int ret = 0;
+-
+-	if (rproc && rproc->state != RPROC_RUNNING) {
+-		dev = &rproc->dev;
+-		ret = request_firmware(&firmware_p, rproc->firmware, dev);
+-		if (ret < 0) {
+-			ath12k_err(NULL, "rproc:%s request_firmware failed: %d\n",
+-				   rproc->name, ret);
+-			return ret;
+-		}
+-		ret = rproc_start(rproc, firmware_p);
+-		if (ret < 0) {
+-			ath12k_err(NULL, "rproc:%s start failed: %d\n",
+-				   rproc->name, ret);
+-		}
+-		release_firmware(firmware_p);
+-	}
+-	return ret;
+-}
+-
+-static void ath12k_core_rproc_coredump(struct ath12k_base *ab,
+-				       struct rproc *rproc)
+-{
+-	if (rproc) {
+-		ath12k_info(ab, "WLAN target is restarting");
+-		rproc->ops->coredump(rproc);
+-	}
+-}
+-
+ /* Asserted target's reboot handling for crash type ATH12K_RPROC_USERPD_CRASH */
+ static void ath12k_core_upd_rproc_boot_recovery(struct ath12k_base *ab)
+ {
+ 	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+-	if (ab_ahb->crash_type != ATH12K_RPROC_USERPD_CRASH)
+-		return;
+-
+ 	/*
+ 	 * Stop user pd
+ 	 * Collect coredump using user pd
+ 	 * Free Target memory chunk
+ 	 * Start root pd
+ 	 */
+-	ath12k_core_rproc_stop(ab_ahb->tgt_rproc);
+-	ath12k_core_rproc_coredump(ab, ab_ahb->tgt_rproc);
+-	ath12k_qmi_free_target_mem_chunk(ab);
+-	ath12k_core_rproc_start(ab_ahb->tgt_rproc);
+-	ab_ahb->crash_type = ATH12K_NO_CRASH;
+-	ath12k_core_wait_dump_collect(ab);
+-}
+-
+-/* Asserted target's reboot handling for crash type ATH12K_RPROC_ROOTPD_CRASH */
+-static void ath12k_core_rpd_rproc_boot_recovery(struct ath12k_base *ab)
+-{
+-	struct ath12k_hw_group *ag = ab->ag;
+-	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+-	struct rproc *rootpd_rproc = ab_ahb->tgt_rrproc;
+-	struct rproc *txtpd_rproc = ab_ahb->tgt_text_rproc;
+-	struct rproc *usrpd_rproc = ab_ahb->tgt_rproc;
+-	struct ath12k_base *tmp_ab;
+-	int user_pd, ret;
+-
+-	if (ab_ahb->crash_type != ATH12K_RPROC_ROOTPD_CRASH)
+-		return;
+-
+-	if (!rootpd_rproc || !usrpd_rproc) {
+-		ath12k_err(ab, "rproc(s) are null\n");
+-		return;
+-	}
+-
+-	if (rootpd_rproc->state == RPROC_OFFLINE) {
+-		ath12k_err(ab, "rootpd rproc:%s is already stopped.\n",
+-			   rootpd_rproc->name);
+-		return;
+-	}
+-
+-	if (usrpd_rproc->state == RPROC_OFFLINE) {
+-		ath12k_err(ab, "userpd rproc:%s is already stopped.\n",
+-			   usrpd_rproc->name);
+-		return;
+-	}
+-	usrpd_rproc->state = RPROC_CRASHED;
+-	ret = ath12k_core_rproc_stop(usrpd_rproc);
+-	if (ret)
+-		ath12k_err(ab, "failed to stop user_pd:%s ret:%d\n",
+-			   usrpd_rproc->name, ret);
+-
+-	ag->num_userpd_started--;
+-
+-	/* Reboot Sequence of all remoteproc pds
+-	 * 1. Stop all user pds
+-	 * 2. In case of text device present, stop text pd
+-	 * 3. Stop the root pd
+-	 * 4. Do the coredump using root pd handle once all user pds and root
+-	 *    pd are stopped:
+-	 *    Root pd handle coredump will take care of all the userpd data
+-	 *    collection as part of the coredump
+-	 * 5. Free Target memory chunk
+-	 * 6. Power up the remote processor again as per below sequence
+-	 *    Start the rootpd device
+-	 *    Start textpd device if present
+-	 *    Start all userpd devices
+-	 */
+-	if (!ag->num_userpd_started) {
+-		if (txtpd_rproc && txtpd_rproc->state != RPROC_OFFLINE) {
+-			txtpd_rproc->state = RPROC_CRASHED;
+-			ret = ath12k_core_rproc_stop(txtpd_rproc);
+-			if (ret)
+-				ath12k_err(ab, "failed to stop text_pd:%s ret:%d\n",
+-					   txtpd_rproc->name, ret);
+-		}
+-		rootpd_rproc->state = RPROC_RUNNING;
+-		ret = ath12k_core_rproc_stop(rootpd_rproc);
+-		if (ret)
+-			ath12k_err(ab, "failed to stop root_pd:%s ret:%d\n",
+-				   rootpd_rproc->name, ret);
+-
+-		ath12k_core_rproc_coredump(ab, rootpd_rproc);
+-	}
++	if (ab_ahb->crash_type == ATH12K_RPROC_USERPD_CRASH)
++		ath12k_hif_power_down(ab);
+ 
+ 	ath12k_qmi_free_target_mem_chunk(ab);
+ 
+-	if (!ag->num_userpd_started) {
+-		ret = ath12k_core_rproc_start(rootpd_rproc);
+-		if (ret)
+-			ath12k_err(ab, "failed to start root_pd:%s ret:%d\n",
+-				   rootpd_rproc->name, ret);
+-
+-		ath12k_core_wait_dump_collect(ab);
+-
+-		if (txtpd_rproc) {
+-			ret = ath12k_core_rproc_start(txtpd_rproc);
+-			if (ret)
+-				ath12k_err(ab, "failed to start text_pd:%s ret:%d\n",
+-					   txtpd_rproc->name, ret);
+-		}
+-
+-		for (user_pd = 0; user_pd < ag->num_chip; user_pd++) {
+-			tmp_ab = ag->ab[user_pd];
+-			if (tmp_ab->hif.bus == ATH12K_BUS_PCI)
+-				continue;
+-
+-			ab_ahb = ath12k_ahb_priv(tmp_ab);
+-			usrpd_rproc = ab_ahb->tgt_rproc;
+-			ret = ath12k_core_rproc_start(usrpd_rproc);
+-			if (ret) {
+-				ath12k_err(tmp_ab, "failed to start user_pd:%s ret:%d\n",
+-					   usrpd_rproc->name, ret);
+-			}
+-			ab_ahb->crash_type = ATH12K_NO_CRASH;
+-		}
+-
+-	}
++	/* Free upd Fw remapped load region */
++	devm_iounmap(ab->dev, ab_ahb->mem_region);
++	ab_ahb->crash_type = ATH12K_NO_CRASH;
++	ath12k_hif_power_up(ab);
+ }
+ 
+ /*
+@@ -3711,8 +3559,9 @@ static void ath12k_core_reset(struct wor
+ 	 */
+ 	if (ab->hif.bus == ATH12K_BUS_PCI) {
+ 		ath12k_coredump_download_rddm(ab);
+-	} else if (ab->hif.bus == ATH12K_BUS_AHB || ab->hif.bus == ATH12K_BUS_HYBRID) {
+-		ath12k_coredump_download_ahb(ab);
++	} else if ((ab->hif.bus == ATH12K_BUS_AHB || ab->hif.bus == ATH12K_BUS_HYBRID) &&
++		   !ab->fw_recovery_support) {
++		ath12k_core_trigger_bug_on(ab);
+ 	}
+ 	if (ab->is_qdss_tracing)
+ 		ab->is_qdss_tracing = false;
+@@ -3725,8 +3574,6 @@ static void ath12k_core_reset(struct wor
+ 		} else if (ab->hif.bus == ATH12K_BUS_AHB ||
+ 			   ab->hif.bus == ATH12K_BUS_HYBRID) {
+ 			ath12k_core_upd_rproc_boot_recovery(ab);
+-			ath12k_core_rpd_rproc_boot_recovery(ab);
+-
+ 		}
+ 		ath12k_dbg(ab, ATH12K_DBG_BOOT, "reset started\n");
+ 	}
+@@ -4371,7 +4218,7 @@ static int ath12k_rddm_notifier(struct n
+ 			ab->in_panic = true;
+ 			if (ab->hif.bus == ATH12K_BUS_AHB ||
+ 			    ab->hif.bus == ATH12K_BUS_HYBRID)
+-				ath12k_coredump_download_ahb(ab);
++				ath12k_core_trigger_bug_on(ab);
+ 			else
+ 				ath12k_coredump_download_rddm(ab);
+ 		}

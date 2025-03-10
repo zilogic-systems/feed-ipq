@@ -1,0 +1,35 @@
+From 5e46f969642bb47246f2d41dde3a59645269e048 Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Fri, 3 May 2024 12:52:59 +0530
+Subject: [PATCH] wifi: ath12k: ce configuration for ipq5424
+
+- ce configurations and ring mask are similar to ipq5332
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/hw.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/hw.c b/drivers/net/wireless/ath/ath12k/hw.c
+index dc44aae..517170b 100644
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -2302,6 +2302,15 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+ 		.ext_irq_grp_num_max = 12,
+ 		.route_wbm_release = 3,
+ 
++		.ring_mask = &ath12k_hw_ring_mask_ipq5332,
++
++		.host_ce_config = ath12k_host_ce_config_ipq5332,
++		.ce_count = 12,
++		.target_ce_config = ath12k_target_ce_config_wlan_ipq5332,
++		.target_ce_count = 12,
++		.svc_to_ce_map = ath12k_target_service_to_ce_map_wlan_ipq5332,
++		.svc_to_ce_map_len = 19,
++
+ 		.hal_params = &ath12k_hw_hal_params_ipq5332,
+ 
+ 		.rxdma1_enable = true,
+-- 
+2.34.1
+

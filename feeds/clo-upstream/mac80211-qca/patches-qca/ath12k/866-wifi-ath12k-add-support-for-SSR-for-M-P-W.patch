@@ -1,0 +1,386 @@
+From 55d344e2e63cde1915ebe988d74349d8955f26e3 Mon Sep 17 00:00:00 2001
+From: Narendhar Reddy <quic_nare@quicinc.com>
+Date: Wed, 3 Jan 2024 15:15:17 +0530
+Subject: [PATCH] wifi: ath12k: add support for SSR for
+ IPQ5332+QCN6432+QCN9274.
+
+Currently when an assert is happened with recovery set,
+rootpd is stopped once all the radios are stopped.
+This has a problem if the number of userpds is not equal
+to the number of radios.
+
+Make changes to stop the rootpd once all the userpds are
+stopped.
+Remove ath12k_core_rproc_boot_recovery api as it handles
+only one userpd and one rootpd scenario. Make
+ath12k_core_rpd_rproc_boot_recovery api as generic to handle
+ 'n' number of userpd scenario.
+
+Signed-off-by: Narendhar Reddy <quic_nare@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 74 +++++++-------------------
+ drivers/net/wireless/ath/ath12k/core.h | 15 ++----
+ 2 files changed, 21 insertions(+), 68 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -144,25 +144,29 @@ void ath12k_core_put_hw_group(struct ath
+ 
+ }
+ 
++/*
++ * This will be queued only in case of recovery is not enabled
++ * or if there is a genuine assert on rootpd. In both of these
++ * scenarios driver can queue ab->reset_work for all ahb and
++ * hybrid chipset's.
++ */
+ static void ath12k_core_hw_group_reset(struct work_struct *work)
+ {
+ 	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_work);
+ 	struct ath12k_base *ab;
++	struct ath12k_ahb *ab_ahb = NULL;
+ 	int i;
+ 
+-	if (ag->recovery_mode != ATH12K_MLO_RECOVERY_MODE0)
+-		return;
+-
+ 	for (i = 0; i < ag->num_chip; i++) {
+ 		ab = ag->ab[i];
+-		if (ab->hif.bus == ATH12K_BUS_PCI) {
+-			ag->crash_type = ATH12K_RPROC_ROOTPD_AHB_CRASH;
++		if (ab->hif.bus == ATH12K_BUS_PCI)
+ 			continue;
+-		}
+ 
++		ab_ahb = ath12k_ahb_priv(ab);
+ 		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
+ 			set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
+ 			set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
++			ab_ahb->crash_type = ATH12K_RPROC_ROOTPD_CRASH;
+ 			queue_work(ab->workqueue_aux, &ab->reset_work);
+ 		}
+ 
+@@ -1416,6 +1420,10 @@ static int ath12k_core_start(struct ath1
+ 		goto err_reo_cleanup;
+ 	}
+ 
++	/* Indicate the userpd count for the group */
++	if (ab->multi_pd_arch)
++		ab->ag->num_userpd_started++;
++
+ 	/* Indicate the core start in the appropriate group */
+ 	ab->ag->num_started++;
+ 
+@@ -1813,10 +1821,11 @@ err_firmware_stop:
+ void ath12k_core_wait_dump_collect(struct ath12k_base *ab)
+ {
+ 	int timeout;
++	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+-	if (ab->collect_dump) {
++	if (ab_ahb->collect_dump) {
+ 		timeout = wait_event_timeout(ab->ssr_dump_wq,
+-					     (ab->collect_dump == false),
++					     (ab_ahb->collect_dump == false),
+ 					     ATH12K_COLLECT_DUMP_TIMEOUT);
+ 		if (timeout <= 0)
+ 			ath12k_warn(ab, "dump collection timed out\n");
+@@ -1880,9 +1889,10 @@ static int ath12k_core_ssr_notifier_cb(s
+ 				       void *data)
+ {
+ 	struct ath12k_base *ab = container_of(nb, struct ath12k_base, ssr_nb);
++	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+-	if (ab->collect_dump && event == ATH12K_SSR_POWERUP) {
+-		ab->collect_dump = false;
++	if (ab_ahb->collect_dump && event == ATH12K_SSR_POWERUP) {
++		ab_ahb->collect_dump = false;
+ 		wake_up(&ab->ssr_dump_wq);
+ 		return NOTIFY_OK;
+ 	}
+@@ -1895,9 +1905,10 @@ static int ath12k_core_rpd_ssr_notifier_
+ 					   void *data)
+ {
+ 	struct ath12k_base *ab = container_of(nb, struct ath12k_base, rpd_ssr_nb);
++	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+-	if (ab->collect_dump && event == ATH12K_SSR_POWERUP) {
+-		ab->collect_dump = false;
++	if (ab_ahb->collect_dump && event == ATH12K_SSR_POWERUP) {
++		ab_ahb->collect_dump = false;
+ 		wake_up(&ab->ssr_dump_wq);
+ 		return NOTIFY_OK;
+ 	}
+@@ -1954,14 +1965,13 @@ static int ath12k_core_atomic_ssr_notifi
+ 	if (!test_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags))
+ 		return NOTIFY_DONE;
+ 
+-	ab->collect_dump = true;
++	ab_ahb->collect_dump = true;
+ 
+ 	ret = ath12k_core_check_ssr_notifier_as_expected(ab, data, "qcom,rproc");
+ 	if (ret)
+ 		return NOTIFY_DONE;
+ 
+ 	if (strcmp(ssr_pdev->name, ab_ahb->tgt_rproc->name) == 0) {
+-		ab->ag->crash_type = ATH12K_RPROC_USERPD_HYBRID_CRASH;
+ 		ab_ahb->tgt_rproc->state = RPROC_CRASHED;
+ 	}
+ 
+@@ -1969,6 +1979,7 @@ static int ath12k_core_atomic_ssr_notifi
+ 		set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
+ 		set_bit(ATH12K_FLAG_RECOVERY, &ab->ag->dev_flags);
+ 		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
++		ab_ahb->crash_type = ATH12K_RPROC_USERPD_CRASH;
+ 		queue_work(ab->workqueue_aux, &ab->reset_work);
+ 	}
+ 
+@@ -1994,8 +2005,7 @@ static int ath12k_core_rpd_atomic_ssr_no
+ 	if (!test_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags))
+ 		return NOTIFY_DONE;
+ 
+-	ab->collect_dump = true;
+-
++	ab_ahb->collect_dump = true;
+ 	ret = ath12k_core_check_ssr_notifier_as_expected(ab, data, "qcom,rproc_rpd");
+ 	if (ret)
+ 		return NOTIFY_DONE;
+@@ -2005,7 +2015,6 @@ static int ath12k_core_rpd_atomic_ssr_no
+ 	 * This module will take care of the rrproc recovery process.
+ 	 */
+ 	if (strcmp(ssr_pdev->name, ab_ahb->tgt_rrproc->name) == 0) {
+-		ag->crash_type = ATH12K_RPROC_ROOTPD_HYBRID_CRASH;
+ 		ab_ahb->tgt_rrproc->state = RPROC_CRASHED;
+ 	}
+ 
+@@ -3197,49 +3206,12 @@ static void ath12k_core_rproc_coredump(s
+ 	}
+ }
+ 
+-/* Asserted target's reboot handling for crash type ATH12K_RPROC_ROOTPD_AHB_CRASH */
+-static void ath12k_core_rproc_boot_recovery(struct ath12k_base *ab)
+-{
+-	struct ath12k_hw_group *ag = ab->ag;
+-	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+-
+-	if (ag->crash_type != ATH12K_RPROC_ROOTPD_AHB_CRASH)
+-		return;
+-
+-	/*
+-	 * Stop user pd
+-	 * Collect coredump using user pd if enabled
+-	 * Stop root pd
+-	 * Collect coredump using root pd
+-	 * Free Target memory chunk
+-	 * Start root pd, then start user pd
+-	 */
+-
+-	ab_ahb->tgt_rproc->state = RPROC_CRASHED;
+-	ath12k_core_rproc_stop(ab_ahb->tgt_rproc);
+-
+-	ab_ahb->tgt_rproc->state = RPROC_SUSPENDED;
+-	ath12k_core_rproc_coredump(ab, ab_ahb->tgt_rproc);
+-
+-	ab_ahb->tgt_rrproc->state = RPROC_RUNNING;
+-	ath12k_core_rproc_stop(ab_ahb->tgt_rrproc);
+-	ath12k_core_rproc_coredump(ab, ab_ahb->tgt_rrproc);
+-
+-	ath12k_qmi_free_target_mem_chunk(ab);
+-
+-	ath12k_core_rproc_start(ab_ahb->tgt_rrproc);
+-	ath12k_core_rproc_start(ab_ahb->tgt_rproc);
+-	ag->crash_type = ATH12K_NO_CRASH;
+-	ath12k_core_wait_dump_collect(ab);
+-}
+-
+-/* Asserted target's reboot handling for crash type ATH12K_RPROC_USERPD_HYBRID_CRASH */
++/* Asserted target's reboot handling for crash type ATH12K_RPROC_USERPD_CRASH */
+ static void ath12k_core_upd_rproc_boot_recovery(struct ath12k_base *ab)
+ {
+-	struct ath12k_hw_group *ag = ab->ag;
+ 	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+-	if (ag->crash_type != ATH12K_RPROC_USERPD_HYBRID_CRASH)
++	if (ab_ahb->crash_type != ATH12K_RPROC_USERPD_CRASH)
+ 		return;
+ 
+ 	/*
+@@ -3252,11 +3224,11 @@ static void ath12k_core_upd_rproc_boot_r
+ 	ath12k_core_rproc_coredump(ab, ab_ahb->tgt_rproc);
+ 	ath12k_qmi_free_target_mem_chunk(ab);
+ 	ath12k_core_rproc_start(ab_ahb->tgt_rproc);
+-	ag->crash_type = ATH12K_NO_CRASH;
++	ab_ahb->crash_type = ATH12K_NO_CRASH;
+ 	ath12k_core_wait_dump_collect(ab);
+ }
+ 
+-/* Asserted target's reboot handling for crash type ATH12K_RPROC_ROOTPD_HYBRID_CRASH */
++/* Asserted target's reboot handling for crash type ATH12K_RPROC_ROOTPD_CRASH */
+ static void ath12k_core_rpd_rproc_boot_recovery(struct ath12k_base *ab)
+ {
+ 	struct ath12k_hw_group *ag = ab->ag;
+@@ -3267,7 +3239,7 @@ static void ath12k_core_rpd_rproc_boot_r
+ 	struct ath12k_base *tmp_ab;
+ 	int user_pd, ret;
+ 
+-	if (ag->crash_type != ATH12K_RPROC_ROOTPD_HYBRID_CRASH)
++	if (ab_ahb->crash_type != ATH12K_RPROC_ROOTPD_CRASH)
+ 		return;
+ 
+ 	if (!rootpd_rproc || !usrpd_rproc) {
+@@ -3286,13 +3258,14 @@ static void ath12k_core_rpd_rproc_boot_r
+ 			   usrpd_rproc->name);
+ 		return;
+ 	}
+-
+ 	usrpd_rproc->state = RPROC_CRASHED;
+ 	ret = ath12k_core_rproc_stop(usrpd_rproc);
+ 	if (ret)
+ 		ath12k_err(ab, "failed to stop user_pd:%s ret:%d\n",
+ 			   usrpd_rproc->name, ret);
+ 
++	ag->num_userpd_started--;
++
+ 	/* Reboot Sequence of all remoteproc pds
+ 	 * 1. Stop all user pds
+ 	 * 2. In case of text device present, stop text pd
+@@ -3307,7 +3280,7 @@ static void ath12k_core_rpd_rproc_boot_r
+ 	 *    Start textpd device if present
+ 	 *    Start all userpd devices
+ 	 */
+-	if (!ag->num_started) {
++	if (!ag->num_userpd_started) {
+ 		if (txtpd_rproc && txtpd_rproc->state != RPROC_OFFLINE) {
+ 			txtpd_rproc->state = RPROC_CRASHED;
+ 			ret = ath12k_core_rproc_stop(txtpd_rproc);
+@@ -3326,7 +3299,7 @@ static void ath12k_core_rpd_rproc_boot_r
+ 
+ 	ath12k_qmi_free_target_mem_chunk(ab);
+ 
+-	if (!ag->num_started) {
++	if (!ag->num_userpd_started) {
+ 		ret = ath12k_core_rproc_start(rootpd_rproc);
+ 		if (ret)
+ 			ath12k_err(ab, "failed to start root_pd:%s ret:%d\n",
+@@ -3353,9 +3326,9 @@ static void ath12k_core_rpd_rproc_boot_r
+ 				ath12k_err(tmp_ab, "failed to start user_pd:%s ret:%d\n",
+ 					   usrpd_rproc->name, ret);
+ 			}
++			ab_ahb->crash_type = ATH12K_NO_CRASH;
+ 		}
+ 
+-		ag->crash_type = ATH12K_NO_CRASH;
+ 	}
+ }
+ 
+@@ -3440,6 +3413,7 @@ static void ath12k_core_reset(struct wor
+ 	struct ath12k_hw_group *ag = ab->ag;
+ 	struct ath12k_hw *ah;
+ 	struct ath12k_base *partner_ab;
++	struct ath12k_ahb *ab_ahb = NULL;
+ 	struct ath12k_pdev *pdev;
+ 	struct ath12k *ar;
+ 	int reset_count, fail_cont_count, i, j;
+@@ -3641,11 +3615,27 @@ static void ath12k_core_reset(struct wor
+ 		}
+ 	}
+ 
++	if (ab->hif.bus != ATH12K_BUS_PCI)
++		ab_ahb = ath12k_ahb_priv(ab);
++
+ 	for (i = 0; i < ag->num_chip; i++) {
+ 		partner_ab = ag->ab[i];
+ 		if (ab == partner_ab)
+ 			continue;
+ 
++		/* If the partner chip is either AHB/Hybrid
++		 * and if it is a rootpd crash then the userpd
++		 * won't be responding to the FW Hang command
++		 * So skip to send it for AHB or Hybrid SOC's
++		 * in case of a rootpd crash as queueing this
++		 * reset_work will be taken care of AHB/Hybrid
++		 * inside ath12k_core_hw_group_reset().
++		 */
++		 if (partner_ab->hif.bus != ATH12K_BUS_PCI && ab_ahb
++		     && ab_ahb->crash_type == ATH12K_RPROC_ROOTPD_CRASH)
++		     	continue;
++
++
+ 		/* issue FW Hang command on partner chips for Mode0. This is a fool proof
+ 		 * method to ensure recovery of all partner chips in MODE0 instead of
+ 		 * relying on firmware to crash partner chips
+@@ -3685,11 +3675,7 @@ static void ath12k_core_reset(struct wor
+ 			ath12k_hif_power_up(ab);
+ 		} else if (ab->hif.bus == ATH12K_BUS_AHB ||
+ 			   ab->hif.bus == ATH12K_BUS_HYBRID) {
+-			/* When crash type ATH12K_RPROC_USERPD_HYBRID_CRASH is set */
+ 			ath12k_core_upd_rproc_boot_recovery(ab);
+-			/* When crash type ATH12K_RPROC_ROOTPD_AHB_CRASH is set */
+-			ath12k_core_rproc_boot_recovery(ab);
+-			/* When crash type ATH12K_RPROC_ROOTPD_HYBRID_CRASH is set */
+ 			ath12k_core_rpd_rproc_boot_recovery(ab);
+ 
+ 		}
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1335,25 +1335,15 @@ enum ath12k_core_crash_type {
+ 	/* Fatal error notification from MHI message */
+ 	ATH12K_MHI_CRASH,
+ 
+-	/* Fatal error notification from remoteproc user pd for ahb based
+-	 * internal radio
+-	 */
+-	ATH12K_RPROC_USERPD_AHB_CRASH,
+-
+ 	/* Fatal error notification from remoteproc user pd for platform with
+ 	 * ahb based internal radio and pcic based external radios
+ 	 */
+-	ATH12K_RPROC_USERPD_HYBRID_CRASH,
+-
+-	/* Fatal error notification from remoteproc root pd for ahb based
+-	 * internal radio
+-	 */
+-	ATH12K_RPROC_ROOTPD_AHB_CRASH,
++	ATH12K_RPROC_USERPD_CRASH,
+ 
+ 	/* Fatal error notification from remoteproc root pd for platform with
+ 	 * ahb based internal radio and pcic based external radios
+ 	 */
+-	ATH12K_RPROC_ROOTPD_HYBRID_CRASH
++	ATH12K_RPROC_ROOTPD_CRASH
+ };
+ 
+ enum ath12k_mlo_recovery_mode {
+@@ -1392,12 +1382,12 @@ struct ath12k_hw_group {
+ 	u8 num_probed;
+ 	u8 num_started;
+ 	u8 num_hw;
++	u8 num_userpd_started;
+ 	bool mlo_capable;
+ 	bool hw_queues_stopped;
+ 	bool mgmt_rx_reorder;
+ 	unsigned long dev_flags;
+ 	enum ath12k_mlo_recovery_mode recovery_mode;
+-	enum ath12k_core_crash_type crash_type;
+ 	struct ath12k_hw *ah[ATH12K_GROUP_MAX_RADIO];
+ 	struct ath12k_base *ab[ATH12K_MAX_SOCS];
+ 	struct ath12k __rcu *hw_links[ATH12K_GROUP_MAX_RADIO];
+@@ -1547,7 +1537,6 @@ struct ath12k_base {
+ 	bool is_reset;
+ 	struct completion reset_complete;
+ 	wait_queue_head_t ssr_dump_wq;
+-	bool collect_dump;
+ 	struct notifier_block ssr_nb;
+ 	struct notifier_block atomic_ssr_nb;
+ 	struct notifier_block rpd_ssr_nb;
+--- a/drivers/net/wireless/ath/ath12k/ahb.h
++++ b/drivers/net/wireless/ath/ath12k/ahb.h
+@@ -31,6 +31,8 @@ struct ath12k_base;
+ 
+ struct ath12k_ahb {
+ 	struct rproc *tgt_rproc, *tgt_text_rproc, *tgt_rrproc;
++	enum ath12k_core_crash_type crash_type;
++	bool collect_dump;
+ 	struct {
+ 		struct device *dev;
+ 		struct iommu_domain *iommu_domain;

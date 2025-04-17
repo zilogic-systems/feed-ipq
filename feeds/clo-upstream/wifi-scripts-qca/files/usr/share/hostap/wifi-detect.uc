@@ -198,8 +198,11 @@ function wiphy_detect() {
 		}
 		if (phy.radios) {
 			let radios = phy.radios;
+			sort(radios, (a, b) => a.freq_ranges[0].start - b.freq_ranges[0].start);
+
 			for (let i=0; i< length(radios) ; i++) {
 				let range = radios[i];
+				let radio_name = "radio" + i;
 				for (let j=0; j < length(range.freq_ranges); j++) {
 					let freq_range = range.freq_ranges[j];
 					let start_freq = (range.freq_ranges[0]["start"] / 1000) + 10;
@@ -207,17 +210,12 @@ function wiphy_detect() {
 					start_freq_list[i] = start_freq;
 					end_freq_list[i] = end_freq;
 				}
-			}
-			let first_freq = sort(start_freq_list);
-			let last_freq = sort(end_freq_list);
-
-			for (let i=0; i < length(phy.radios); i++){
-				let radio_name = "radio" + i;
 				multi_radio[radio_name] = {
-					"idx" : i,
-					"first_freq" : first_freq[i],
-					"last_freq" : last_freq[i]
+					"idx" : range.index,
+					"first_freq" : start_freq_list[i],
+					"last_freq" : end_freq_list[i],
 				};
+
 			}
 		}
 

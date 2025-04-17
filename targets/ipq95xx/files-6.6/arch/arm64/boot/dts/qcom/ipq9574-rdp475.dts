@@ -447,6 +447,7 @@
 };
 
 &blsp1_i2c3 {
+	clock-frequency = <400000>;
 	pinctrl-0 = <&i2c_3_pins>;
 	pinctrl-names = "default";
 	status = "okay";
@@ -541,6 +542,25 @@
 			regulator-always-on;
 		};
 	};
+};
+
+&blsp1_spi1 {
+	pinctrl-0 = <&spi_1_pins>;
+	pinctrl-names = "default";
+	cs-select = <0>;
+	status = "disabled";
+
+	spi@0 {
+		compatible = "qti,spidev";
+		reg = <0>;
+		spi-max-frequency = <9600000>;
+	};
+};
+
+&pcm {
+	pinctrl-0 = <&audio_pins_pri>;
+	pinctrl-names = "primary";
+	status = "disabled";
 };
 
 &tlmm {
@@ -648,6 +668,43 @@
 			bias-disable;
 		};
 	};
+
+	audio_pins_pri: audio_pinmux_pri {
+		mux_1 {
+			pins = "gpio40";
+			function = "audio_pri";
+			drive-strength = <8>;
+			bias-pull-down;
+		};
+
+		mux_2 {
+			pins = "gpio41";
+			function = "audio_pri";
+			drive-strength = <8>;
+			bias-pull-down;
+		};
+
+		mux_3 {
+			pins = "gpio42";
+			function = "audio_pri";
+			drive-strength = <8>;
+			bias-pull-down;
+		};
+
+		mux_4 {
+			pins = "gpio43";
+			function = "audio_pri";
+			drive-strength = <16>;
+			bias-pull-down;
+		};
+	};
+
+	spi_1_pins: spi-1-pins {
+		pins = "gpio61", "gpio62", "gpio63", "gpio64";
+		function = "blsp1_spi";
+		drive-strength = <8>;
+		bias-disable;
+	};
 };
 
 &usb3 {
@@ -706,6 +763,7 @@
 &wifi5 {
 	hremote_node = <&qcn9224_pcie1>;
 	board_id = <0x01>;
+	hw_link_id = <0 0>;
 	node_id = <1>;
 	status = "okay";
 };
@@ -713,6 +771,7 @@
 &wifi6 {
 	hremote_node = <&qcn9224_pcie2>;
 	board_id = <0x04>;
+	hw_link_id = <1 0>;
 	node_id = <2>;
 	status = "okay";
 };
@@ -720,6 +779,7 @@
 &wifi7 {
 	hremote_node = <&qcn9224_pcie3>;
 	board_id = <0x02>;
+	hw_link_id = <2 0>;
 	node_id = <3>;
 	status = "okay";
 };

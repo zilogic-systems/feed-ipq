@@ -399,12 +399,13 @@ static void qmp_recv_data(struct qmp_device *mdev, u32 mbox_of)
 	pkt->size = mdev->ucore.bits.frag_size;
 
 	memcpy32_fromio(pkt->data, addr, mdev->ucore.bits.frag_size);
-	QMP_MCORE_CH_ACK_UPDATE(mdev, tx);
-	dev_dbg(mdev->dev, "%s: Send RX data to TMEL Client\n",__func__);
-	mbox_chan_received_data(&mdev->ctrl.chans[0], pkt);
 
+	QMP_MCORE_CH_ACK_UPDATE(mdev, tx);
 	QMP_MCORE_CH_VAR_TOGGLE(mdev, rx_done);
 	send_irq(mdev);
+
+	dev_dbg(mdev->dev, "%s: Send RX data to TMEL Client\n", __func__);
+	mbox_chan_received_data(&mdev->ctrl.chans[0], pkt);
 }
 
 /**

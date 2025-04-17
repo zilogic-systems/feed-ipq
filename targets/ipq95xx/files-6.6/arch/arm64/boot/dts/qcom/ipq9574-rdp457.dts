@@ -307,6 +307,9 @@
 			boot-args = <0x2 0x4 0x34 0x3 0x0 0x0     /* MX Rail, GPIO52, Drive strength 0x3 */
 					0x4 0x4 0x18 0x3 0x0 0x0  /* RFA1p2 Rail, GPIO24, Drive strength 0x3 */
 					0x0 0x4 0x0 0x0 0x0 0x0>; /* End of arguments */
+			memory-region = <&qcn9224_pcie2>, <&mhi_region2>;
+			qcom,board_id = <0x04>;
+			qcom,wsi = <&wsi>;
 		};
 	};
 };
@@ -329,6 +332,9 @@
 			boot-args = <0x2 0x4 0x34 0x3 0x0 0x0     /* MX Rail, GPIO52, Drive strength 0x3 */
 					0x4 0x4 0x18 0x3 0x0 0x0  /* RFA1p2 Rail, GPIO24, Drive strength 0x3 */
 					0x0 0x4 0x0 0x0 0x0 0x0>; /* End of arguments */
+			memory-region = <&qcn9224_pcie3>, <&mhi_region3>;
+			qcom,board_id = <0x02>;
+			qcom,wsi = <&wsi>;
 		};
 	};
 };
@@ -357,6 +363,7 @@
 };
 
 &blsp1_i2c3 {
+	clock-frequency = <400000>;
 	pinctrl-0 = <&i2c_3_pins>;
 	pinctrl-names = "default";
 	status = "okay";
@@ -576,10 +583,69 @@
        status = "okay";
 };
 
+&q6v5_wcss {
+	status = "okay";
+};
+
+/* Enable IPQ9574 integrated radio's reserved memory */
 &q6_region {
 	status = "okay";
 };
 
-&q6v5_wcss {
+&m3_dump {
+	status = "okay";
+};
+
+&q6_etr_region {
+	status = "okay";
+};
+
+&q6_caldb_region {
+	status = "okay";
+};
+
+/* Enable reserved memory regions of QCN9224 on PCIe2 and PCIe3 */
+&qcn9224_pcie2 {
+	status = "okay";
+};
+
+&qcn9224_pcie3 {
+	status = "okay";
+};
+
+#if defined(__MHI_BUS_RESERVED_DMA_POOL__)
+&mhi_region2 {
+	status = "okay";
+};
+
+&mhi_region3 {
+	status = "okay";
+};
+#endif
+
+/* MLO GLOBAL MEM REGION size is 12MB for RDP with 2 QCN224 radios */
+&mlo_global_mem0 {
+	size = <0x0 0xD00000>;
+	status = "okay";
+};
+
+&wifi0 {
+	/* Enable IPQ9574 integratd 2G Radio */
+	led-gpio = <&tlmm 64 1>;
+	qcom,board_id = <0x20>;
+	status = "okay";
+};
+
+&wifi6 {
+	hremote_node = <&qcn9224_pcie2>;
+	board_id = <0x04>;
+	hw_link_id = <0 0>;
+	status = "okay";
+};
+
+&wifi7 {
+	hremote_node = <&qcn9224_pcie3>;
+	board_id = <0x1008>;
+	hw_link_id = <1 2>;
 	status = "okay";
 };

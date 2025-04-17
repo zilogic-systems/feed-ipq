@@ -3,7 +3,7 @@
  * IPQ5332 RDP483 board device tree source
  *
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /dts-v1/;
@@ -132,6 +132,93 @@
 			reg = <0x0 0x4EF00000 0x0 0x1100000>;
 		};
 	};
+#elif __IPQ_MEM_PROFILE_256_MB__
+	/*        LM256 Layout for IPQ5332 + QCN6432
+	 * +==========+==============+========================+
+	 * |         |              |                         |
+	 * |  Region | Start Offset |          Size           |
+	 * |         |              |                         |
+	 * +---------+--------------+-------------------------+
+	 * |   Q6    |              |                         |
+	 * |  code/  |  0x4A900000  |          20MB           |
+	 * |  data   |              |                         |
+	 * +---------+--------------+-------------------------+
+	 * | IPQ5332 |              |                         |
+	 * |  data   |  0x4BD00000  |          13MB           |
+	 * +---------+--------------+-------------------------+
+	 * | IPQ5332 |              |                         |
+	 * | M3 Dump |  0x4CA00000  |           1MB           |
+	 * +---------+--------------+-------------------------+
+	 * |         |              |                         |
+	 * |  HOLE   |  0x4CB00000  |           3MB           |
+	 * +---------+--------------+-------------------------+
+	 * |QCN6432_1|              |                         |
+	 * |  data   |  0x4CE00000  |          14MB           |
+	 * +---------+--------------+-------------------------+
+	 * |QCN6432_1|              |                         |
+	 * | M3 Dump |  0x4DC00000  |           1MB           |
+	 * +---------+--------------+-------------------------+
+	 * |         |              |                         |
+	 * |  HOLE   |  0x4DD00000  |           3MB           |
+	 * +---------+--------------+-------------------------+
+	 * |         |              |                         |
+	 * |   MLO   |  0x4E000000  |           9MB           |
+	 * +==================================================+
+	 * |                                                  |
+	 * |                                                  |
+	 * |                                                  |
+	 * |             Rest of memory for Linux             |
+	 * |                                                  |
+	 * |                                                  |
+	 * |                                                  |
+	 * +==================================================+
+	 */
+
+	reserved-memory {
+
+		/delete-node/ q6_ipq5332_data@4b500000;
+		/delete-node/ m3_dump@4cc00000;
+		/delete-node/ q6_etr_dump@1;
+		/delete-node/ mlo_global_mem_0@0x4db00000;
+		/delete-node/ wcnss@4a900000;
+		/delete-node/ q6_caldb_region@4ce00000;
+
+		q6_mem_regions: q6_mem_regions@4A900000  {
+			no-map;
+			reg = <0x0 0x4a900000 0x0 0x2100000>;
+		};
+
+		q6_code_data: q6_code_data@4A900000 {
+			no-map;
+			reg = <0x0 0x4a900000 0x0 0x1400000>;
+		};
+
+		q6_ipq5332_data: q6_ipq5332_data@4BD00000 {
+			no-map;
+			reg = <0x0 0x4BD00000 0x0 0xD00000>;
+		};
+
+		m3_dump: m3_dump@4CA00000 {
+			no-map;
+			reg = <0x0 0x4CA00000 0x0 0x100000>;
+		};
+
+		q6_qcn6432_data_1: q6_qcn6432_data_1@4CE00000 {
+			no-map;
+			reg = <0x0 0x4CE00000 0x0 0xE00000>;
+		};
+
+		m3_dump_qcn6432_1: m3_dump_qcn6432_1@4DC00000 {
+			no-map;
+			reg = <0x0 0x4DC00000 0x0 0x100000>;
+		};
+
+		mlo_global_mem0: mlo_global_mem_0@4E000000 {
+			no-map;
+			reg = <0x0 0x4E000000 0x0 0x900000>;
+		};
+	};
+
 
 #else
        /*   1G Memory Layout for IPQ5332 + QCN6432
@@ -302,28 +389,28 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 
 					port@1 {
 						reg = <1>;
 						label = "lan1";
 						phy-handle = <&phy0>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@2 {
 						reg = <2>;
 						label = "lan2";
 						phy-handle = <&phy1>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@3 {
 						reg = <3>;
 						label = "lan3";
 						phy-handle = <&phy2>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 				};
 			};
@@ -565,12 +652,23 @@
 		};
 
 		q6v5_wcss: remoteproc@d100000 {
-			boot-args = <0x1 0x5 0x3 0x1 0x2f 0x2 0x1>;
-			memory-region = <&q6_mem_regions>;
+			boot-args = <0x1 0x5 0x3 0x1 0x2f 0x2 0x0>;
+			memory-region = <&q6_mem_regions>,
+#ifdef __IPQ_MEM_PROFILE_256_MB__
+					<&m3_dump>,
+					<&q6_qcn6432_data_1>,
+					<&m3_dump_qcn6432_1>,
+#endif
+					<&mlo_global_mem0>;
 
 			upd-firmware-names = "IPQ5332/q6_fw1.mdt",
 					     "IPQ5332/q6_fw2.mdt";
 			q6_wcss_pd1: remoteproc_pd1 {
+			memory-region = <&q6_ipq5332_data>, <&m3_dump>,
+#ifndef __IPQ_MEM_PROFILE_256_MB__
+					<&q6_etr_region>, <&q6_ipq5332_caldb>,
+#endif
+					<&mlo_global_mem0>;
 #if defined(__RPROC_DISABLE_MPD_SUPPORT__)
 				status = "disabled";
 #else
@@ -597,6 +695,13 @@
 				qcom,smem-state-names = "shutdown",
 							"stop",
 							"spawn";
+				memory-region = <&q6_qcn6432_data_1>,
+						<&m3_dump_qcn6432_1>,
+#ifndef __IPQ_MEM_PROFILE_256_MB__
+						<&q6_qcn6432_etr_1>,
+						<&q6_qcn6432_caldb_1>,
+#endif
+						<&mlo_global_mem0>;
 #if defined(__RPROC_DISABLE_MPD_SUPPORT__)
 				status = "disabled";
 #else
@@ -767,10 +872,17 @@
     qcom,rproc_rpd = <&q6v5_wcss>;
 #endif
     qcom,userpd-subsys-name = "q6v5_wcss_userpd1";
-    qcom,bdf-addr = <0x4BD00000 0x4BD00000 0x0 0x0 0x0 0x0>;
+    qcom,bdf-addr = <0x4BD00000 0x4BD00000 0x4BD00000 0x0 0x0 0x0>;
     qcom,caldb-addr = <0x4D400000 0x4D000000 0x0 0x0 0x0 0x0>;
-    qcom,caldb-size = <0x300000>;
+#ifdef __IPQ_MEM_PROFILE_256_MB__
+    qcom,tgt-mem-mode = <2>;
+#elif __IPQ_MEM_PROFILE_512_MB__
     qcom,tgt-mem-mode = <1>;
+    qcom,caldb-size = <0x300000>;
+#else
+    qcom,tgt-mem-mode = <0>;
+    qcom,caldb-size = <0x300000>;
+#endif
     qcom,board_id = <0x43>;
     memory-region = <&q6_ipq5332_data>, <&q6_mem_regions>;
     qcom,wsi = <&wsi>;
@@ -792,13 +904,21 @@
     qcom,rproc_rpd = <&q6v5_wcss>;
 #endif
     qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
-    qcom,bdf-addr = <0x4D900000 0x4D300000 0x0 0x0 0x0 0x0>;
+    qcom,bdf-addr = <0x4D900000 0x4D300000 0x4CE00000 0x0 0x0 0x0>;
     qcom,caldb-addr = <0x4F000000 0x4E500000 0x0 0x0 0x0 0x0>;
-    qcom,caldb-size = <0x500000>;
+#ifdef __IPQ_MEM_PROFILE_256_MB__
+    qcom,tgt-mem-mode = <2>;
+#elif __IPQ_MEM_PROFILE_512_MB__
     qcom,tgt-mem-mode = <1>;
+    qcom,caldb-size = <0x500000>;
+#else
+    qcom,tgt-mem-mode = <0>;
+    qcom,caldb-size = <0x500000>;
+#endif
     qcom,umac-irq-reset-addr = <0x18000884>;
     qcom,board_id = <0x54>;
     memory-region = <&q6_qcn6432_data_1>, <&q6_mem_regions>;
+    qcom,pci_slot_id = <1>;
     qcom,wsi = <&wsi>;
     qcom,wsi_index = <1>;
     status = "okay";

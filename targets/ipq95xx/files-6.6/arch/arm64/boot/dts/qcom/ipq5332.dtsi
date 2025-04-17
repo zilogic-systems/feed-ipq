@@ -197,6 +197,7 @@
 
 	ctx_save: ctx-save {
 		compatible = "qti,ctxt-save-ipq5332";
+		memory-region = <&minidump_mem>;
 	};
 
 	pmu {
@@ -246,8 +247,8 @@
 			no-map;
 		};
 #else
-		bootloader@4a000000 {
-			reg = <0x0 0x4a000000 0x0 0x500000>;
+		bootloader@4a100000 {
+			reg = <0x0 0x4a100000 0x0 0x400000>;
 			no-map;
 		};
 #endif
@@ -268,6 +269,10 @@
 			no-map;
 
 			hwlocks = <&tcsr_mutex 3>;
+		};
+
+		minidump_mem: minidump_mem@0 {
+			no-map;
 		};
 	};
 

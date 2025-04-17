@@ -392,6 +392,7 @@
 };
 
 &blsp1_i2c3 {
+	clock-frequency = <400000>;
 	pinctrl-0 = <&i2c_3_pins>;
 	pinctrl-names = "default";
 	status = "okay";
@@ -628,12 +629,16 @@
 	status = "okay";
 };
 
+&m3_dump {
+	status = "okay";
+};
+
 &q6_etr_region {
-status = "ok";
+	status = "okay";
 };
 
 &q6_caldb_region {
-status = "ok";
+	status = "okay";
 };
 
 /* Enable the reserved memory regions of QCN9224 on PCIe1, PCIe2, PCIe3 */

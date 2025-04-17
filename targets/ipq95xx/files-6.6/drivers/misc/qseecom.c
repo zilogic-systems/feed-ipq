@@ -40,7 +40,7 @@ const struct qseecom_props qseecom_props_ipq9574 = {
 
 const struct qseecom_props qseecom_props_ipq5424 = {
 	.function = (MUL | CRYPTO | AES_SEC_KEY | RSA_SEC_KEY | LOG_BITMASK |
-		     FUSE | MISC),
+		     FUSE | MISC | AES_TZAPP | RSA_TZAPP | FUSE_WRITE),
 	.libraries_inbuilt = false,
 	.logging_support_enabled = true,
 	.aes_v2 = true,
@@ -258,14 +258,14 @@ static ssize_t tmecomm_show_aes_derive_key(struct device *dev,
 	struct tme_kdf_spec *kdf_spec;
 	int ret = 0;
 	u32 key_id;
+	u32 len;
 	size_t dma_buf_size = 0;
 	dma_addr_t dma_kdf_spec;
 	size_t req_size = 0;
 	uint32_t kdf_len;
-	char message[32] = {0};
 
 	dev = qdev;
-
+	memset(message, 0, MESSAGE_LEN);
 	key_id = TME_KID_ALLOC;
 
 	req_size = sizeof(struct tme_kdf_spec);
@@ -298,7 +298,7 @@ static ssize_t tmecomm_show_aes_derive_key(struct device *dev,
 	}
 	memcpy(kdf_spec->sw_context, sw_context, tmel_aes_sw_context_len);
 	kdf_spec->sw_context_len = tmel_aes_sw_context_len;
-	kdf_spec->security_context = TME_KSC_SWContext;
+	kdf_spec->security_context = tmel_aes_sec_ctx;
 	memcpy(kdf_spec->salt_label, salt_label, tmel_aes_salt_label_len);
 	kdf_spec->salt_label_len = tmel_aes_salt_label_len;
 	kdf_spec->prf_digest_algo = TME_KAL_SHA512_HMAC;
@@ -309,14 +309,15 @@ static ssize_t tmecomm_show_aes_derive_key(struct device *dev,
 	if (ret) {
 		pr_info("Error: Failed to derive key\n");
 	} else {
-		snprintf(message, 32, "%lu\n", (unsigned long)*tmel_key_handle);
+		snprintf(message, MESSAGE_LEN, "%lu\n", (unsigned long)*tmel_key_handle);
 		pr_info("aes key handle: %lu\n", (unsigned long)*tmel_key_handle);
 	}
 
-	memcpy(buf, message, strlen(message) + 1);
+	len = strlen(message) + 1;
+	memcpy(buf, message, len);
 
 	dma_free_coherent(dev, dma_buf_size, kdf_spec, dma_kdf_spec);
-	return ret;
+	return len;
 }
 
 static ssize_t tmecomm_store_aes_clear_key(struct device *dev,
@@ -361,75 +362,6 @@ static ssize_t tmecomm_store_aes_decrypted_data(struct device *dev,
 
 	tmel_aes_decrypted_len = count;
 	memcpy(plain_txt, buf, tmel_aes_decrypted_len);
-
-	return count;
-}
-
-static ssize_t tmecomm_store_aes_aad_data(struct device *dev,
-					  struct device_attribute *attr,
-					  const char *buf, size_t count)
-{
-	if (!aad) {
-		pr_info("could not allocate aad data\n");
-		return -EINVAL;
-	}
-
-	aad = memset(aad, 0, TME_MAX_AAD_LEN);
-
-	if (count > TME_MAX_AAD_LEN) {
-		pr_info("AAD data length is more than %zu bytes\n", count);
-		return -EINVAL;
-	}
-
-	tmel_aes_aad_len = count;
-	memcpy(aad, buf, tmel_aes_aad_len);
-
-	return count;
-}
-
-static ssize_t tmecomm_store_aes_iv_data(struct device *dev,
-					 struct device_attribute *attr,
-					 const char *buf, size_t count)
-{
-	if (!iv) {
-		pr_info("could not allocate iv data\n");
-		return -EINVAL;
-	}
-
-	iv = memset(iv, 0, AES_BLOCK_SIZE);
-
-	if (count != AES_BLOCK_SIZE) {
-		pr_info("Invalid input\n");
-		pr_info("IV data length is %lu bytes\n", (unsigned long)count);
-		pr_info("IV data length must be equal to AES block size \
-			 (16) bytes\n");
-		return -EINVAL;
-	}
-
-	tmel_aes_iv_len = count;
-	memcpy(iv, buf, tmel_aes_iv_len);
-
-	return count;
-}
-
-static ssize_t tmecomm_store_aes_tag_data(struct device *dev,
-					  struct device_attribute *attr,
-					  const char *buf, size_t count)
-{
-	if (!tag) {
-		pr_info("could not allocate tag data\n");
-		return -EINVAL;
-	}
-
-	tag = memset(tag, 0, TME_MAX_TAG_LEN);
-
-	if (count > TME_MAX_TAG_LEN) {
-		pr_info("Tag data length is more than %zu bytes\n", count);
-		return -EINVAL;
-	}
-
-	tmel_aes_tag_len = count;
-	memcpy(tag, buf, tmel_aes_tag_len);
 
 	return count;
 }
@@ -674,6 +606,20 @@ static ssize_t tmecomm_aes_store_salt_label_data(struct device *dev,
 	return count;
 }
 
+static ssize_t tmecomm_aes_store_security_context(struct device *dev,
+						  struct device_attribute *attr,
+						  const char *buf, size_t count)
+{
+	u32 val;
+
+	if (kstrtouint(buf, 0, &val))
+		return -EINVAL;
+
+	tmel_aes_sec_ctx = val;
+
+	return count;
+}
+
 /*
  * store_aes_derive_key()
  * Function to store aes derive key
@@ -828,17 +774,19 @@ static ssize_t show_aes_derive_128_byte_key(struct device *dev,
 static ssize_t store_aes_clear_key(struct device *dev, struct device_attribute *attr, const char* buf, size_t count)
 {
 	int rc = 0;
-	uint32_t key_handle;
+	u32 val;
 
-	if (kstrtouint(buf, 10, &key_handle))
+	if (kstrtouint(buf, 10, &val))
 		return -EINVAL;
 
-	rc = qti_scm_aes_clear_key_handle(key_handle, QTI_CMD_AES_CLEAR_KEY);
+	rc = qti_scm_aes_clear_key_handle(val, QTI_CMD_AES_CLEAR_KEY);
 
-	if (!rc)
-		pr_info("AES key = %u cleared successfully\n",key_handle);
-	else
+	if (!rc) {
+		pr_info("AES key = %u cleared successfully\n", val);
+		*key_handle = 0;
+	} else {
 		pr_info("AES key clear failed\n");
+	}
 
 	return count;
 }
@@ -1507,7 +1455,7 @@ show_encrypted_data(struct device *dev, struct device_attribute *attr,
 	uint64_t output_len = 0;
 	dma_addr_t dma_req_addr = 0;
 
-	if (props->aes_v2 && !props->ipc_support) {
+	if (props->aes_v2) {
 		rc = show_aes_v2_encrypted_data(dev, attr, buf);
 		return rc;
 	}
@@ -1677,7 +1625,7 @@ show_decrypted_data(struct device *dev, struct device_attribute *attr, char *buf
 	uint64_t output_len = 0;
 	dma_addr_t dma_req_addr = 0;
 
-	if (props->aes_v2 && !props->ipc_support) {
+	if (props->aes_v2) {
 		rc = show_aes_v2_decrypted_data(dev, attr, buf);
 		return rc;
 	}
@@ -1951,6 +1899,23 @@ end:
 	return unseal_len;
 }
 
+static ssize_t store_rsa_keysize(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	uint32_t val;
+
+	if (kstrtouint(buf, 10, &val))
+		return -EINVAL;
+
+	if (val == 0)
+		rsa_keysize = RSA_2K_MODULUS_LEN;
+	else if (val == 1)
+		rsa_keysize = RSA_4K_MODULUS_LEN;
+	else
+		return -EINVAL;
+
+	return count;
+}
 static ssize_t
 generate_rsa_key_blob(struct device *dev, struct device_attribute *attr,
 		     char *buf)
@@ -1987,7 +1952,7 @@ generate_rsa_key_blob(struct device *dev, struct device_attribute *attr,
 
 	req_ptr->key_blob.key_material = (u64)dma_rsa_key_blob;
 	req_ptr->cmd_id = QTI_STOR_SVC_RSA_GENERATE_KEY;
-	req_ptr->rsa_params.modulus_size = RSA_MODULUS_LEN;
+	req_ptr->rsa_params.modulus_size = rsa_keysize;
 	req_ptr->rsa_params.public_exponent = RSA_PUBLIC_EXPONENT;
 	pr_info("rsa pad scheme used = %u\n",cur_rsa_pad_scheme);
 	req_ptr->rsa_params.pad_algo = cur_rsa_pad_scheme;
@@ -2720,10 +2685,10 @@ static int tmel_aes_init(struct device *dev)
 	int err;
 	size_t dma_buf_size = 0;
 
-	err = sysfs_create_group(sec_kobj, &sec_key_tmel_attr_grp);
+	err = sysfs_create_group(tmel_sec_kobj, &sec_key_tmel_attr_grp);
 	if (err) {
-		kobject_put(sec_kobj);
-		sec_kobj = NULL;
+		kobject_put(tmel_sec_kobj);
+		tmel_sec_kobj = NULL;
 		return err;
 	}
 
@@ -2812,9 +2777,9 @@ static int tmel_aes_init(struct device *dev)
 					  buf_pt_key, dma_pt_key);
 		}
 
-		sysfs_remove_group(sec_kobj, &sec_key_tmel_attr_grp);
-		kobject_put(sec_kobj);
-		sec_kobj = NULL;
+		sysfs_remove_group(tmel_sec_kobj, &sec_key_tmel_attr_grp);
+		kobject_put(tmel_sec_kobj);
+		tmel_sec_kobj = NULL;
 
 		return -ENOMEM;
 	}
@@ -2838,6 +2803,17 @@ static int __init sec_key_init(struct device *dev)
 
 	dev = qdev;
 
+	if (props->ipc_support) {
+		tmel_sec_kobj = kobject_create_and_add("tmel_sec_key", NULL);
+		if (!tmel_sec_kobj) {
+			pr_info("Failed to register tmel_sec_key sysfs\n");
+			return -ENOMEM;
+		}
+
+		err = tmel_aes_init(dev);
+		if (err)
+			return err;
+	}
 
 	sec_kobj = kobject_create_and_add("sec_key", NULL);
 	if (!sec_kobj) {
@@ -2845,22 +2821,24 @@ static int __init sec_key_init(struct device *dev)
 		return -ENOMEM;
 	}
 
-	if (props->aes_v2 && props->ipc_support) {
-		err = tmel_aes_init(dev);
-		return err;
+	if (!props->ipc_support) {
+		err = sysfs_create_group(sec_kobj, &sec_key_attr_grp);
+		if (err) {
+			pr_err("TZ AESv1 sysfs creation failed with error %d\n", err);
+			kobject_put(sec_kobj);
+			sec_kobj = NULL;
+			return err;
+		}
 	}
 
-	err = sysfs_create_group(sec_kobj, &sec_key_attr_grp);
-	if (err) {
-		kobject_put(sec_kobj);
-		sec_kobj = NULL;
-		return err;
-	}
-
-	if (props->aes_v2 && !props->ipc_support) {
+	if (props->aes_v2) {
 		err = sysfs_create_group(sec_kobj, &sec_key_aesv2_attr_grp);
-		if (err)
-			pr_debug("TZ AES v2 sysfs creation failed with error %d\n",err);
+		if (err) {
+			pr_err("TZ AESv2 sysfs creation failed with error %d\n", err);
+			kobject_put(sec_kobj);
+			sec_kobj = NULL;
+			return err;
+		}
 	}
 
 	dma_buf_size = PAGE_SIZE * (1 << get_order(KEY_SIZE));
@@ -2886,12 +2864,9 @@ static int __init sec_key_init(struct device *dev)
 	dma_buf_size = PAGE_SIZE * (1 << get_order(MAX_KEY_HANDLE_SIZE));
 	key_handle = dma_alloc_coherent(dev, dma_buf_size,
 					&dma_key_handle, GFP_KERNEL);
-	dma_buf_size = PAGE_SIZE * (1 << get_order(MAX_KEY_HANDLE_SIZE));
-	aes_key_handle = dma_alloc_coherent(dev, dma_buf_size,
-					&dma_aes_key_handle, GFP_KERNEL);
 
 	if (!buf_key || !buf_key_blob || !buf_sealed_buf ||
-	    !buf_unsealed_buf || !buf_iv || !key_handle || !aes_key_handle) {
+	    !buf_unsealed_buf || !buf_iv || !key_handle) {
 		pr_err("Cannot allocate memory for secure-key ops\n");
 
 		if (buf_key) {
@@ -2939,15 +2914,15 @@ static int __init sec_key_init(struct device *dev)
 					key_handle, dma_key_handle);
 		}
 
-		if (aes_key_handle) {
-			dma_buf_size = PAGE_SIZE *
-					(1 << get_order(MAX_KEY_HANDLE_SIZE));
-			dma_free_coherent(dev, dma_buf_size, aes_key_handle,
-					 dma_aes_key_handle);
+		if (props->ipc_support) {
+			sysfs_remove_group(tmel_sec_kobj, &sec_key_tmel_attr_grp);
+			kobject_put(tmel_sec_kobj);
+			tmel_sec_kobj = NULL;
 		}
 
-		sysfs_remove_group(sec_kobj, &sec_key_attr_grp);
-		if (props->aes_v2 && !props->ipc_support)
+		if (!props->ipc_support)
+			sysfs_remove_group(sec_kobj, &sec_key_attr_grp);
+		if (props->aes_v2)
 			sysfs_remove_group(sec_kobj, &sec_key_aesv2_attr_grp);
 		kobject_put(sec_kobj);
 		sec_kobj = NULL;
@@ -3414,17 +3389,19 @@ static ssize_t store_aes_clear_key_qtiapp(struct device *dev, struct device_attr
 					const char *buf, size_t count)
 {
 	uint32_t rc = 0;
-	uint32_t key_handle;
+	u32 val;
 
-	if (kstrtouint(buf, 10, &key_handle))
+	if (kstrtouint(buf, 10, &val))
 		return -EINVAL;
 
-	rc = qtiapp_test(dev, &key_handle, NULL, 0, QTI_APP_CLEAR_KEY);
+	rc = qtiapp_test(dev, &val, NULL, 0, QTI_APP_CLEAR_KEY);
 
-	if (!rc)
-		pr_info("AES key =  %u cleared successfully\n",key_handle);
-	else
+	if (!rc) {
+		pr_info("AES key =  %u cleared successfully\n", val);
+		*aes_key_handle = 0;
+	} else {
 		pr_info("AES key clear failed\n");
+	}
 
 	return rc ? rc : count;
 }
@@ -3511,7 +3488,7 @@ show_aes_decrypted_data_qtiapp(struct device *dev, struct device_attribute *attr
 	uint64_t output_len = 0;
 	dma_addr_t dma_req_addr = 0;
 
-	if (props->aes_v2 && !props->ipc_support) {
+	if (props->aes_v2) {
 		rc = show_aes_v2_decrypted_data_qtiapp(dev, attr, buf);
 		return rc;
 	}
@@ -3664,7 +3641,7 @@ show_aes_encrypted_data_qtiapp(struct device *dev, struct device_attribute *attr
 	uint64_t output_len = 0;
 	dma_addr_t dma_req_addr = 0;
 
-	if (props->aes_v2 && !props->ipc_support) {
+	if (props->aes_v2) {
 		rc = show_aes_v2_encrypted_data_qtiapp(dev, attr, buf);
 		return rc;
 	}
@@ -4688,6 +4665,9 @@ static int __init qtiapp_init(struct device *dev)
 	}
 
 	if (props->function & AES_TZAPP) {
+		dma_buf_size = PAGE_SIZE * (1 << get_order(MAX_KEY_HANDLE_SIZE));
+		aes_key_handle = dma_alloc_coherent(dev, dma_buf_size,
+				&dma_aes_key_handle, GFP_KERNEL);
 
 		dma_buf_size = PAGE_SIZE *
 				(1 << get_order(MAX_PLAIN_DATA_SIZE));
@@ -4704,8 +4684,16 @@ static int __init qtiapp_init(struct device *dev)
 		buf_aes_iv = dma_alloc_coherent(dev, dma_buf_size,
 					&dma_aes_ivdata, GFP_KERNEL);
 
-		if (!buf_aes_sealed_buf || !buf_aes_unsealed_buf || !buf_aes_iv) {
+		if (!buf_aes_sealed_buf || !buf_aes_unsealed_buf ||
+		    !buf_aes_iv || !aes_key_handle) {
 			pr_err("Cannot allocate memory for aes crypt ops\n");
+
+			if (aes_key_handle) {
+				dma_buf_size = PAGE_SIZE *
+					       (1 << get_order(MAX_KEY_HANDLE_SIZE));
+				dma_free_coherent(dev, dma_buf_size, aes_key_handle,
+						  dma_aes_key_handle);
+			}
 
 			if (buf_aes_sealed_buf) {
 				dma_buf_size = PAGE_SIZE *
@@ -4745,7 +4733,7 @@ static int __init qtiapp_init(struct device *dev)
 				kobject_put(qtiapp_aes_kobj);
 			}
 
-			if (props->aes_v2 && !props->ipc_support) {
+			if (props->aes_v2) {
 				err = sysfs_create_group(qtiapp_aes_kobj, &qtiapp_aesv2_attr_grp);
 				if (err)
 					pr_debug("TZapp AES v2 sysfs creation failed with error %d\n",err);
@@ -5031,18 +5019,13 @@ static int __exit qseecom_remove(struct platform_device *pdev)
 					  key_handle, dma_key_handle);
 		}
 
-		if (aes_key_handle) {
-			dma_buf_size = PAGE_SIZE *
-					(1 << get_order(MAX_KEY_HANDLE_SIZE));
-			dma_free_coherent(dev, dma_buf_size, aes_key_handle,
-					  dma_aes_key_handle);
-		}
-
-		sysfs_remove_group(sec_kobj, &sec_key_attr_grp);
-		if (props->aes_v2 && !props->ipc_support)
+		if (!props->ipc_support)
+			sysfs_remove_group(sec_kobj, &sec_key_attr_grp);
+		if (props->aes_v2)
 			sysfs_remove_group(sec_kobj, &sec_key_aesv2_attr_grp);
+		kobject_put(sec_kobj);
 
-		if (props->aes_v2 && props->ipc_support) {
+		if (props->ipc_support) {
 			if (tmel_key_handle) {
 				dma_buf_size = PAGE_SIZE *
 						(1 << get_order(MAX_KEY_HANDLE_SIZE));
@@ -5106,10 +5089,9 @@ static int __exit qseecom_remove(struct platform_device *pdev)
 						  buf_pt_key, dma_pt_key);
 			}
 
-			sysfs_remove_group(sec_kobj, &sec_key_tmel_attr_grp);
+			sysfs_remove_group(tmel_sec_kobj, &sec_key_tmel_attr_grp);
+			kobject_put(tmel_sec_kobj);
 		}
-
-		kobject_put(sec_kobj);
 	}
 
 	if (props->function & RSA_SEC_KEY) {
@@ -5166,6 +5148,12 @@ static int __exit qseecom_remove(struct platform_device *pdev)
 	}
 
 	if (props->function & AES_TZAPP) {
+		if (aes_key_handle) {
+			dma_buf_size = PAGE_SIZE *
+				       (1 << get_order(MAX_KEY_HANDLE_SIZE));
+			dma_free_coherent(dev, dma_buf_size, aes_key_handle,
+					  dma_aes_key_handle);
+		}
 
 		if (buf_aes_sealed_buf) {
 			dma_buf_size = PAGE_SIZE *
@@ -5192,7 +5180,7 @@ static int __exit qseecom_remove(struct platform_device *pdev)
 		}
 
 		sysfs_remove_group(qtiapp_aes_kobj, &qtiapp_aes_attr_grp);
-		if (props->aes_v2 && !props->ipc_support)
+		if (props->aes_v2)
 			sysfs_remove_group(qtiapp_aes_kobj, &qtiapp_aesv2_attr_grp);
 		kobject_put(qtiapp_aes_kobj);
 

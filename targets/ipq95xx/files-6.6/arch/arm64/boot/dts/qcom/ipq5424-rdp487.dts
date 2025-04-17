@@ -134,7 +134,7 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 				};
 			};

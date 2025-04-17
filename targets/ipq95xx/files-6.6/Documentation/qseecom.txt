@@ -12,17 +12,52 @@ used for secure crypto and other functionalities. This custom application will
 be loaded into the tzapp reserved memory region captured in the device tree source.
 Note: All the requests to Tzapp will be routed via TZ.
 
+Summary of all the supported operations via qseecom for various targets is
+listed in the below table.
+
+        ______________________________________________________
+        |                      |         |         |         |
+        |      Operations      | IPQ95xx | IPQ53xx | IPQ54xx |
+________|______________________|_________|_________|_________|
+|       |                      |         |         |         |
+|       |   RSA(sign/verify)   |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|  TZ   |        AESv1         |    Y    |    Y    |    N    |
+|       |                      |         |         |         |
+|       |        AESv2         |    Y    |    Y    |    Y    |
+|_______|______________________|_________|_________|_________|
+|       |                      |         |         |         |
+| TME-L |         AES          |    N    |    N    |    Y    |
+|_______|______________________|_________|_________|_________|
+|       |                      |         |         |         |
+|       | Basic Multiplication |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|       |    Sample Crypto     |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|       |     RSA(enc/dec)     |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|       |        AESv2         |    Y    |    Y    |    Y    |
+| TZAPP |                      |         |         |         |
+|       |      Fuse read       |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|       |     Fuse write       |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|       |     Logbitmask       |    Y    |    Y    |    Y    |
+|       |                      |         |         |         |
+|       |        Misc          |    Y    |    Y    |    Y    |
+|_______|______________________|_________|_________|_________|
+
 --------------------------------------------------------------------------------
 
 TZ operations
 
 TZ supports both AES and RSA crypto operations.
 The AES operations can be performed in two ways:
-AESv1 -> Supported via a crypto library in TZ (Supported chipsets:IPQ50xx/IPQ60xx/IPQ807x/IPQ95xx/IPQ53xx)
+AESv1 -> Supported via a crypto library in TZ (Supported chipsets:IPQ95xx/IPQ53xx)
          A key blob will be generated, containing the actual AES key, but encrypted
          with a device-unique key not visible to non-secure code, and returned
          to user, which can be used for encrypt/decrypt operations.
-AESv2 -> Key derivation is supported via a hardware sequencer in TME-L (Supported chipsets: IPQ95xx/IPQ53xx)
+AESv2 -> Key derivation is supported via a hardware sequencer in TME-L (Supported chipsets: IPQ95xx/IPQ53xx/IPQ54xx)
          A key will be derived by TME-L and stored in TZ. Only the key handle
          will be returned to the user. User can decide which key handle needs
          to be used for encrypt/decrypt operations.
@@ -34,7 +69,7 @@ Note: IPQ53xx platform uses the same qseecom_props structure of IPQ95xx platform
 --------------------------------------------------------
 |Steps for triggering secure RSA crypto operation in TZ|
 --------------------------------------------------------
-Supported targets: IPQ50xx/IPQ60xx/IPQ807x/IPQ95xx/IPQ53xx/IPQ54xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 RSA API: (qseecom_props function = RSA_SEC_KEY)
 It is used for signing and verifying data based on RSA algorithm with public
@@ -49,7 +84,10 @@ View the selected RSA pad scheme as shown below
 Generate or Import the key blob to be used for encrypt/decrypt
 
 RSA Generate Key blob:
-(1) cat /sys/rsa_sec_key/rsa_generate > key_blob.txt
+Choose the key size for RSA generate operation (0->2k, 1->4k)
+(1) eg: echo 0 > /sys/rsa_sec_key/rsa_keysize
+Note: Default size is 2k
+(2) cat /sys/rsa_sec_key/rsa_generate > key_blob.txt
 
 RSA Import Key blob:
 (1) cat hex.dat > /sys/rsa_sec_key/rsa_import
@@ -77,22 +115,17 @@ RSA Sign data:
     or
     cat import_key_blob.txt > /sys/rsa_sec_key/rsa_key_blob
 (2) echo -n "data.txt" > /sys/rsa_sec_key/rsa_sign
-    (Note: data.txt is the input file that can contains plain data.
-     8k plain data size is supported only in IPQ807x platform.
-     For other platforms the plain data max size is 2k bytes.)
+    (Note: data.txt is the input file that contains plain data.
+     The plain data max size is 2k bytes.)
 (3) cat /sys/rsa_sec_key/rsa_sign > signed_data.txt
 
 RSA Verification of Signature:
 (1) cat key_blob.txt > /sys/rsa_sec_key/rsa_key_blob
     or
     cat import_key_blob.txt > /sys/rsa_sec_key/rsa_key_blob
-(2) echo -n "data.txt" > /sys/rsa_sec_key/rsa_sign
-    (Note: data.txt is the input file that can contains plain data.
-     8k plain data size is supported only in IPQ807x platform.
-     For other platforms the plain data max size is 2k bytes.)
-(3) cat signed_data.txt > /sys/rsa_sec_key/rsa_verify
-(4) cat /sys/rsa_sec_key/rsa_verify > verification_result.txt
-(5) cat verification_result.txt
+(2) cat signed_data.txt > /sys/rsa_sec_key/rsa_verify
+(3) cat /sys/rsa_sec_key/rsa_verify > verification_result.txt
+(4) cat verification_result.txt
 
 RSA Update key blob:
 Use these steps to update the padding scheme present in a key blob
@@ -101,7 +134,9 @@ Use these steps to update the padding scheme present in a key blob
     cat import_key_blob.txt > /sys/rsa_sec_key/rsa_key_blob
     Note: Users can also input an externally saved key blob which was not created
           using Generate/Import commands
-(2) cat /sys/rsa_sec_key/rsa_update_keyblob > updated_key_blob.txt
+Select the padding type (1 -> PKCS, 2 -> PSS)
+(2) eg: echo 2 > /sys/rsa_sec_key/rsa_pad_scheme
+(3) cat /sys/rsa_sec_key/rsa_update_keyblob > updated_key_blob.txt
 
 Note:
 RSA generate functionality can take random amount of time to execute. This is
@@ -117,7 +152,7 @@ Note: For IPQ95xx/IPQ53xx targets, this will be taken care by TME-L.
 ----------------------------------------------------------
 |Steps for triggering secure AESv1 crypto operation in TZ|
 ----------------------------------------------------------
-Supported targets: IPQ50xx/IPQ60xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx
 
 AES TZ API: (qseecom_props function = AES_SEC_KEY)
 This is used for performing AES encrypt/decrypt operations in TZ.
@@ -148,10 +183,10 @@ AES Decrypt data:
 ----------------------------------------------------------
 |Steps for triggering secure AESv2 crypto operation in TZ|
 ----------------------------------------------------------
-Supported targets: IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 AES 256 V2 TZ API's supported in TME-L based platform can be used as below:
-(qseecom_props function = AES_SEC_KEY aes_v2 = true ipc_support = false)
+(qseecom_props function = AES_SEC_KEY aes_v2 = true)
 
 Below are sample inputs:
 
@@ -174,8 +209,8 @@ To derive the key with given inputs:
 To derive the key for 128 byte context:
 (4) cat /sys/sec_key/derive_aes_max_ctxt_key > key_handle.txt
 (5) cat key_handle.txt
-clear key API:
 
+clear key API:
 Note:
 The user cannot derive more than 3 keys. Trying to derive a 4th key would result
 in an error saying "key handle out of slot". If the user wants to derive a new key
@@ -184,21 +219,25 @@ by passing it's key handle to the clear_key sysfs entry. Once a derived key hand
 is cleared, the key cannot be used for further encryption/decryption of data.
 
 To clear a derived key:
-eg: echo 31 > /sys/sec_key/clear_key
+eg: cat key_handle.txt > /sys/sec_key/clear_key
 
 Giving the required aes256 parameters:
-aes_type determines the seed that was used for key derivation.
-It can be either 1 (OEM product seed) or 2 (CRBK)
+In encrypt/decrypt SCM call, TZ will send distribute IPC to TMEL to distribute
+the derived Key to destination slots in (CE5 for IPQ95xx / TCSR Regs for
+IPQ53xx and IPQ54xx). There are 2 destination slots available & depending on the
+destination index passed via aes_type entry, the keys will be distributed to
+the respective slots and will be used for encrypt/decrypt operations.
+Either of these slots can be specified before encrypt/decrypt calls.
+1 -> destination slot 1
+2 -> destination slot 2
+Example:
 (6) echo 1 > /sys/sec_key/aes_type
-
 aes_mode can be either 0 (ECB) or 1 (CBC)
 (7) echo 1 > /sys/sec_key/aes_mode
 (8) echo -n -e \\x69\\x01\\x50\\x05\\x26\\x35\\x27\\x2c\\xf4\\xe0\\x19\\x1c\\xa9\\x74\\x36\\x45 > /sys/sec_key/aes_ivdata
 
 Specify the key handle to be used for encrypt/decrypt:
-(9) echo key_handle_value > /sys/sec_key/derive_aes_key
-Note: Here key_handle_value is the value obtained in key_handle.txt as part of
-the derive key step.
+(9) cat key_handle.txt > /sys/sec_key/derive_aes_key
 
 To encrypt:
 (10) echo "Aes Encryption!" > /sys/sec_key/aes_encrypt
@@ -215,7 +254,7 @@ To decrypt:
 
 TME-L IPC operations
 
-In IPC supported targets, the AES operations are implemented via IPC calls
+In IPC supported targets, the AES operations can also be performed via IPC calls
 direcly to TME-L instead of routing via TZ.
 
 ------------------------------------------------------
@@ -224,55 +263,70 @@ direcly to TME-L instead of routing via TZ.
 Supported targets: IPQ54xx
 
 AES 256 API's supported in TME-L based platform can be used as below:
-(qseecom_props function = AES_SEC_KEY aes_v2 = true ipc_support = true)
+(qseecom_props function = AES_SEC_KEY ipc_support = true)
 
 key handle for AES encrypt/decrypt can be obtained in three ways: (Generate/Import/Derive)
 
 Generate:
+Key will be generated using PRNG
 Provide AES256 mode (0->ECB 1->CBC)
-(1) echo 0 > /sys/sec_key/tmel_aes_mode
+(1) echo 0 > /sys/tmel_sec_key/tmel_aes_mode
 Generate key handle
-(2) cat /sys/sec_key/tmel_aes_generate_key > key_handle.txt
+(2) cat /sys/tmel_sec_key/tmel_aes_generate_key > key_handle.txt
 
 Import:
+Key will be generated using the plain text key provided by user
 Provide AES256 mode (0->ECB 1->CBC)
-(1) echo 0 > /sys/sec_key/tmel_aes_mode
+(1) echo 0 > /sys/tmel_sec_key/tmel_aes_mode
 Provide plain text key
 Example:
 (2) echo -n "01234567890123456789012345678901" > pt_key.txt
-(3) cat pt_key.txt > /sys/sec_key/tmel_aes_pt_key
+(3) cat pt_key.txt > /sys/tmel_sec_key/tmel_aes_pt_key
 Import key handle
-(4) cat /sys/sec_key/tmel_aes_import_key > key_handle.txt
+(4) cat /sys/tmel_sec_key/tmel_aes_import_key > key_handle.txt
 
 Derive:
+CRBK or OEM product seed stored in the chip will be used to derive a key
 Provide AES256 mode (0->ECB 1->CBC)
-(1) echo 0 > /sys/sec_key/tmel_aes_mode
+(1) echo 0 > /sys/tmel_sec_key/tmel_aes_mode
 Provide base key (0->CRBK 1->OEM Product seed)
-(2) echo 0 > /sys/sec_key/tmel_aes_input_key (CRBK)
-Provide context data
+(2) echo 0 > /sys/tmel_sec_key/tmel_aes_input_key
+Context data is 64 or 128 bytes which can be fed as below:
 Example:
-(3) echo -n "34613132613738396434316363323738656166343132363635613831643530313461313261373839643431636332373865616634313236363561383164353032" > /sys/sec_key/tmel_aes_context_data
+(3) echo -n "34613132613738396434316363323738656166343132363635613831643530313461313261373839643431636332373865616634313236363561383164353032" > /sys/tmel_sec_key/tmel_aes_context_data
+Provide the security bindings for KDF context. Please refer the Crypto user
+guide for the list of supported values. By default software context is applied.
+The security bindings can be provided as below,
+Example:
+echo 32 > /sys/tmel_sec_key/tmel_aes_sec_ctx
+Note: If software context is used as security bindings, salt/label will be included
+in KDF context. The salt/label can be 64 bytes at max and can be fed as below:
+Example:
+(4) echo -n "0123456789012345678901234567890123456789012345678901234567890123" > /sys/tmel_sec_key/tmel_aes_salt_label_data
 Derive key handle
-(4) cat /sys/sec_key/tmel_aes_derive_key > key_handle.txt
+(5) cat /sys/tmel_sec_key/tmel_aes_derive_key > key_handle.txt
 
 Once a key handle is obtained via any of the three operations mentioned above,
 it can be used for encrypt/decrypt operations.
 
+Note: TME-L will generate IV internally for AES encryption and does not accept IV
+from user.
+
 To encrypt:
 Provide the key handle to used for enc/dec
-(1) cat key_handle.txt > /sys/sec_key/tmel_aes_key
+(1) cat key_handle.txt > /sys/tmel_sec_key/tmel_aes_key
 Provide the plain text to encrypt. Note: Plain text must be multiple of AES block size (i.e 16 bytes) and less than 2k bytes
 Example:
-(2) echo "Aes Encryption!" > /sys/sec_key/tmel_aes_encrypt
-(3) cat /sys/sec_key/tmel_aes_encrypt > enc.txt
+(2) echo "Aes Encryption!" > /sys/tmel_sec_key/tmel_aes_encrypt
+(3) cat /sys/tmel_sec_key/tmel_aes_encrypt > enc.txt
 
 To decrypt:
-(1) cat enc.txt > /sys/sec_key/tmel_aes_decrypt
-(2) cat /sys/sec_key/tmel_aes_decrypt > dec.txt
+(1) cat enc.txt > /sys/tmel_sec_key/tmel_aes_decrypt
+(2) cat /sys/tmel_sec_key/tmel_aes_decrypt > dec.txt
 (3) cat dec.txt
 
 Clear:
-(1) cat key_handle.txt > /sys/sec_key/tmel_aes_clear_key
+(1) cat key_handle.txt > /sys/tmel_sec_key/tmel_aes_clear_key
 Note: User cannot get more than 4 key handles from TME-L. Trying to get a 5th key
 would result in an error. If the user wants to get a new key handle after 4 successful
 attempts, then the user has to clear an already existing key by passing it's key
@@ -380,19 +434,18 @@ The sampleapp supports below operations:
 (1) Basic multiplication test
 (2) Sample crypto test
 (3) RSA crypto
-(4) AESv1 crypto
-(5) AESv2 crypto
-(6) Fuse read
-(7) Fuse write
-(8) Logbitmask
-(9) Misc
+(4) AESv2 crypto
+(5) Fuse read
+(6) Fuse write
+(7) Logbitmask
+(8) Misc
 
 Description and steps for each of these operations are mentioned below.
 
 -------------------------------------------------------------------
 |Steps for triggerring basic multiplication operation in sampleapp|
 -------------------------------------------------------------------
-Supported targets: IPQ50xx/IPQ60xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 The following multiplication operation can be tested in all the platforms: (qseecom_props function = MUL)
 It multiplies the provided input by 10.
@@ -406,7 +459,7 @@ cat /sys/firmware/tzapp/basic_data
 ----------------------------------------------------
 |Steps for triggering crypto operation in sampleapp|
 ----------------------------------------------------
-Supported targets: IPQ50xx/IPQ60xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 The "crypto" sysfs entry triggers the sample test encryption and decryption routines
 inside secure app and displays the result if the test has passed or failed.
@@ -419,28 +472,34 @@ Results can be viewed in /sys/kernel/debug/tzapp_log
 --------------------------------------------------------
 |Steps for triggering RSA crypto operation in sampleapp|
 --------------------------------------------------------
-Supported targets: IPQ50xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 RSA TZAPP API: (qseecom_props function = RSA_TZAPP)
 It is used for encrypting/decrypting data based on RSA algorithm in TZapp.
 
 The input plain-text size must match the RSA key size.
 Example for RSA 2048:
-(1)  dd if=input.txt of=256.txt bs=256 count=1
+(1) dd if=input.txt of=256.txt bs=256 count=1
 
 Input the keys
-(2)  echo "056b04216fe5f354ac77250a4b6b0c8525a85c59b0bd80c56450a22d5f438e596a333aa875e291dd43f48cb88b9d5fc0d499f9fcd1c397f9afc070cd9e398c8d19e61db7c7410a6b2675dfbf5d345b804d201add502d5ce2dfcb091ce9997bbebe57306f383e4d588103f036f7e85d1934d152a323e4a8db451d6f4a5b1b0f102cc150e02feee2b88dea4ad4c1baccb24d84072d14e1d24a6771f7408ee30564fb86d4393a34bcf0b788501d193303f13a2284b001f0f649eaf79328d4ac5c430ab4414920a9460ed1b7bc40ec653e876d09abc509ae45b525190116a0c26101848298509c1c3bf3a483e7274054e15e97075036e989f60932807b5257751e79" > /sys/firmware/tzapp/rsa/private_exponent_key
-(3)  echo "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010001" > /sys/firmware/tzapp/rsa/public_exponent_key
-(4)  echo "ae45ed5601cec6b8cc05f803935c674ddbe0d75c4c09fd7951fc6b0caec313a8df39970c518bffba5ed68f3f0d7f22a4029d413f1ae07e4ebe9e4177ce23e7f5404b569e4ee1bdcf3c1fb03ef113802d4f855eb9b5134b5a7c8085adcae6fa2fa1417ec3763be171b0c62b760ede23c12ad92b980884c641f5a8fac26bdad4a03381a22fe1b754885094c82506d4019a535a286afeb271bb9ba592de18dcf600c2aeeae56e02f7cf79fc14cf3bdc7cd84febbbf950ca90304b2219a7aa063aefa2c3c1980e560cd64afe779585b6107657b957857efde6010988ab7de417fc88d8f384c4e6e72c3f943e0c31c0c4a5cc36f879d8a3ac9d7d59860eaada6b83bb" > /sys/firmware/tzapp/rsa/modulus_key
+Note: Max size of each key is 528 bytes
+(2) echo "056b04216fe5f354ac77250a4b6b0c8525a85c59b0bd80c56450a22d5f438e596a333aa875e291dd43f48cb88b9d5fc0d499f9fcd1c397f9afc070cd9e398c8d19e61db7c7410a6b2675dfbf5d345b804d201add502d5ce2dfcb091ce9997bbebe57306f383e4d588103f036f7e85d1934d152a323e4a8db451d6f4a5b1b0f102cc150e02feee2b88dea4ad4c1baccb24d84072d14e1d24a6771f7408ee30564fb86d4393a34bcf0b788501d193303f13a2284b001f0f649eaf79328d4ac5c430ab4414920a9460ed1b7bc40ec653e876d09abc509ae45b525190116a0c26101848298509c1c3bf3a483e7274054e15e97075036e989f60932807b5257751e79" > /sys/firmware/tzapp/rsa/private_exponent_key
+(3) echo "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010001" > /sys/firmware/tzapp/rsa/public_exponent_key
+(4) echo "ae45ed5601cec6b8cc05f803935c674ddbe0d75c4c09fd7951fc6b0caec313a8df39970c518bffba5ed68f3f0d7f22a4029d413f1ae07e4ebe9e4177ce23e7f5404b569e4ee1bdcf3c1fb03ef113802d4f855eb9b5134b5a7c8085adcae6fa2fa1417ec3763be171b0c62b760ede23c12ad92b980884c641f5a8fac26bdad4a03381a22fe1b754885094c82506d4019a535a286afeb271bb9ba592de18dcf600c2aeeae56e02f7cf79fc14cf3bdc7cd84febbbf950ca90304b2219a7aa063aefa2c3c1980e560cd64afe779585b6107657b957857efde6010988ab7de417fc88d8f384c4e6e72c3f943e0c31c0c4a5cc36f879d8a3ac9d7d59860eaada6b83bb" > /sys/firmware/tzapp/rsa/modulus_key
 
 Provide required RSA parameters
-(5)  echo 2048 > /sys/firmware/tzapp/rsa/nbits_key
-(6)  echo 2 > /sys/firmware/tzapp/rsa/hashidx
-(7)  echo 2 > /sys/firmware/tzapp/rsa/padding_type
+Specify the key bit length (Number of bits in modulus)
+(5) Eg: echo 2048 > /sys/firmware/tzapp/rsa/nbits_key
+Specify the hashid to be used
+(Refer qti_storage_service_qsee_hash_id data type in qseecom.h for supported values)
+(6) Eg: echo 2 > /sys/firmware/tzapp/rsa/hashidx
+Specify RSA padding type (2-> No padding)
+Note: Currently only no padding is supported
+(7) Eg: echo 2 > /sys/firmware/tzapp/rsa/padding_type
 
 Encrypt RSA:
-(8)  cat 256.txt > /sys/firmware/tzapp/rsa/encrypt_rsa
-(9)  cat /sys/firmware/tzapp/rsa/encrypt_rsa > sam.txt
+(8) cat 256.txt > /sys/firmware/tzapp/rsa/encrypt_rsa
+(9) cat /sys/firmware/tzapp/rsa/encrypt_rsa > sam.txt
 (10) cat /sys/kernel/debug/tzapp_log
 
 Decrypt RSA:
@@ -449,49 +508,18 @@ Decrypt RSA:
 (13) cat sam1.txt
 
 ----------------------------------------------------------
-|Steps for triggering AESv1 crypto operation in sampleapp|
-----------------------------------------------------------
-Supported targets: IPQ807x
-
-AES TZAPP API: (qseecom_props function = AES_TZAPP)
-This is used for performing AES encrypt/decrypt operations in TZapp.
-
-Note:
-By default AES TZapp encrypt/decrypt is disabled in IPQ807x platform, update "OEM_crypto_service_enable" flag to 1 in
-"trustzone_images/core/secureMSM/trustzone/qsee/mink/oem/config/ipq8074/oem_config.xml" and flash updated devcfg.mbn
-for enabling AES encrypt/decrypt.
-
-Giving the required aes256 parameters:
-(1) echo 1 > /sys/firmware/tzapp/aes/type_aes
-(2) echo 1 > /sys/firmware/tzapp/aes/mode_aes
-(3) echo -n -e \\x69\\x01\\x50\\x05\\x26\\x35\\x27\\x2c\\xf4\\xe0\\x19\\x1c\\xa9\\x74\\x36\\x45 > /sys/firmware/tzapp/aes/ivdata_aes
-
-To encrypt:
-(4) echo "Aes Encryption!" > /sys/firmware/tzapp/aes/encrypt_aes
-Note: Input plain text must be less than 2K bytes and a multiple of AES
-block size which is 16 bytes.
-(5) cat /sys/firmware/tzapp/aes/encrypt_aes > /tmp/enc.txt
-
-To decrypt:
-(6) cat /tmp/enc.txt > /sys/firmware/tzapp/aes/decrypt_aes
-(7) cat /sys/firmware/tzapp/aes/decrypt_aes > /tmp/pt.txt
-(8) cat /tmp/pt.txt
-
-To check the tzlog buff after above operations if required:
-(8) cat /sys/kernel/debug/tzapp_log
-
-----------------------------------------------------------
 |Steps for triggering AESv2 crypto operation in sampleapp|
 ----------------------------------------------------------
-Supported targets: IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 AES 256 v2 TZAPP API's supported in TME-L based platform can be used as below:
-(qseecom_props function = AES_TZAPP aes_v2 = true ipc_support = false)
+(qseecom_props function = AES_TZAPP aes_v2 = true)
 
 Context data is 64 bytes which can be fed as below:
 (1) echo -n "34613132613738396434316363323738656166343132363635613831643530313461313261373839643431636332373865616634313236363561383164353031" > /sys/firmware/tzapp/aes/context_data_aes
 
 source_data determines which base key to be used for derivation.
+It can be either 1 (OEM product seed) or 2 (CRBK)
 (2) echo 1 > /sys/firmware/tzapp/aes/source_data_aes
 
 bindings data has device and software state bindings for key:
@@ -509,17 +537,25 @@ by passing it's key handle to the clear_key sysfs entry. Once a derived key hand
 is cleared, the key cannot be used for further encryption/decryption of data.
 
 To clear a derived key from qtiapp:
-eg: echo 31 > /sys/firmware/tzapp/aes/clear_key_qtiapp
+eg: cat key_handle.txt > /sys/firmware/tzapp/aes/clear_key_qtiapp
 
 Giving the required aes parameters:
+In encrypt/decrypt SCM call, TZ will send distribute IPC to TMEL to distribute
+the derived Key to destination slots in (CE5 for IPQ95xx / TCSR Regs for
+IPQ53xx and IPQ54xx). There are 2 destination slots available & depending on the
+destination index passed via type_aes entry, the keys will be distributed to
+the respective slots and will be used for encrypt/decrypt operations.
+Either of these slots can be specified before encrypt/decrypt calls.
+1 -> destination slot 1
+2 -> destination slot 2
+Example:
 (6) echo 1 > /sys/firmware/tzapp/aes/type_aes
+mode_aes can be either 0 (ECB) or 1 (CBC)
 (7) echo 1 > /sys/firmware/tzapp/aes/mode_aes
 (8) echo -n -e \\x69\\x01\\x50\\x05\\x26\\x35\\x27\\x2c\\xf4\\xe0\\x19\\x1c\\xa9\\x74\\x36\\x45 > /sys/firmware/tzapp/aes/ivdata_aes
 
 Specify the key handle to be used for encrypt/decrypt:
-(9) echo key_handle_value > /sys/firmware/tzapp/aes/derive_key_aes
-Note: Here key_handle_value is the value obtained in key_handle.txt as part of
-the derive key step.
+(9) cat key_handle.txt > /sys/firmware/tzapp/aes/derive_key_aes
 
 Encrypt AES:
 (10) echo "Aes Encryption!" > /sys/firmware/tzapp/aes/encrypt_aes
@@ -535,7 +571,7 @@ Decrypt AES:
 --------------------------------------------------
 |Steps for triggering fuse operation in sampleapp|
 --------------------------------------------------
-Supported targets: IPQ50xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 It tests if it can read fuses for the allowed regions from TA (Trusted APPS).
 For example the allowed regions for IPQ53xx platform are shown below.
@@ -551,7 +587,7 @@ QFPROM_RAW_FEC_ENABLES_REGION:
 -------------------------------------------------------
 |Steps for triggering fusewrite operation in sampleapp|
 -------------------------------------------------------
-Supported targets: IPQ50xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 Fusewrite: (qseecom_props function = FUSE_WRITE)
 
@@ -568,7 +604,7 @@ Input the fuse address according to target
 --------------------------------------------------------
 |Steps for triggering Logbitmask operation in sampleapp|
 --------------------------------------------------------
-Supported targets: IPQ50xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 TZapp supports different logging levels. This API will set mask for different log levels and checks if only expected logs are present.
 If expected logs are present then success is returned.
@@ -583,7 +619,7 @@ If the below print is seen in tzapp_log, then it means the logbitmask test has e
 --------------------------------------------------
 |Steps for triggering misc operation in sampleapp|
 --------------------------------------------------
-Supported targets: IPQ50xx/IPQ807x/IPQ95xx/IPQ53xx
+Supported targets: IPQ95xx/IPQ53xx/IPQ54xx
 
 Misc API: (qseecom_props function = MISC)
 

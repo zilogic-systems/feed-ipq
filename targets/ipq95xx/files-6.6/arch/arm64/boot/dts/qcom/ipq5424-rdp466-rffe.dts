@@ -77,7 +77,7 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 				};
 			};
@@ -273,6 +273,11 @@
 	};
 };
 
+&pwm {
+	pinctrl-0 = <&pwm_default_state>;
+	pinctrl-names = "default";
+};
+
 &qpic_bam {
 	status = "okay";
 };
@@ -444,6 +449,12 @@
 			bias-pull-up;
 			output-low;
 		};
+	};
+
+	pwm_default_state: pwm-default-state {
+		pins = "gpio10";
+		function = "pwm0";
+		drive-strength = <8>;
 	};
 
 	qspi_default_state: qspi-default-state {

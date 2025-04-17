@@ -76,7 +76,7 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 				};
 			};
@@ -182,12 +182,11 @@
 			qcom,rx-page-mode = <0>;		/* Rx fill ring page mode */
 			qcom,tx-map-priority-level = <1>;	/* Tx priority level per port */
 			qcom,rx-map-priority-level = <1>;	/* Rx priority level per core */
-			qcom,ppeds-num = <4>;			/* Number of PPEDS nodes */
+			qcom,ppeds-num = <3>;			/* Number of PPEDS nodes */
 			/* PPE-DS node format: <Rx-fill Tx-cmpl Rx Tx Queue-base Queue-count> */
 			qcom,ppeds-map = <1 1 1 1 32 8>,	/* PPEDS Node #0 ring and queue map */
 					<2 2 2 2 40 8>,		/* PPEDS Node #1 ring and queue map */
-					<3 3 3 3 48 8>,		/* PPEDS Node #2 ring and queue map */
-					<0 0 0 0 56 8>;		/* PPEDS Node #3 ring and queue map */
+					<3 3 3 3 48 8>;		/* PPEDS Node #2 ring and queue map */
 			qcom,txdesc-map = <4 5 6 7>,		/* Port1 per-core Tx ring map */
 					<8 9 10 11>,		/* Port2 per-core Tx ring map */
 					<12 13 14 15>,		/* MHT-Port1 per-core Tx ring map */
@@ -199,6 +198,14 @@
 			qcom,rxfill-map = <4 5 6 7>;		/* Per-core Rx fill ring map */
 			qcom,rxdesc-map = <20 21 22 23>;	/* Per-core Rx desc ring map */
 			qcom,rx-queue-start = <0>;		/* Rx queue start */
+			qcom,edma_loopback_ring;                /* Enable Loopback ring */
+			qcom,num_loopback_rings = <1>;          /* Number of loopback rings */
+			qcom,txdesc_loopback_ring_id = <0>;     /* Loopback TX desc ring ID */
+			qcom,txcmpl_loopback_ring_id = <0>;     /* Loopback TX cmpl ring ID */
+			qcom,rxfill_loopback_ring_id = <0>;     /* Loopback RX fill ring ID */
+			qcom,rxdesc_loopback_ring_id = <0>;     /* Loopback RX desc ring ID */
+			qcom,loopback_queue_base = <56>;        /* Loopback queue base */
+			qcom,loopback_num_queues = <8>;         /* Number of Loopback queues */
 			qcom,rx-ring-queue-map = <0 8 16 24>,	/* Priority 0 queues per-core Rx ring map */
 						<1 9 17 25>,	/* Priority 1 queues per-core Rx ring map */
 						<2 10 18 26>,	/* Priority 2 queues per-core Rx ring map */
@@ -241,9 +248,6 @@
 					<0 285 4>,		/* PPEDS Node #2(TxComp ring id #3) TxComplete IRQ info */
 					<0 253 4>,		/* PPEDS Node #2(Rx Desc ring id #3) Rx Desc IRQ info */
 					<0 277 4>,		/* PPEDS Node #2(RxFill Desc ring id #3) Rx Fill IRQ info */
-					<0 282 4>,		/* PPEDS Node #3(TxComp ring id #0) TxComplete IRQ info */
-					<0 250 4>,		/* PPEDS Node #3(Rx Desc ring id #0) Rx Desc IRQ info */
-					<0 274 4>,		/* PPEDS Node #3(RxFill Desc ring id #0) Rx Fill IRQ info */
 					<0 302 4>,		/* MHT port Tx complete ring id #20 IRQ info */
 					<0 303 4>,		/* MHT port Tx complete ring id #21 IRQ info */
 					<0 304 4>,		/* MHT port Tx complete ring id #22 IRQ info */
@@ -267,6 +271,11 @@
 			status = "okay";
 		};
 	};
+};
+
+&pwm {
+	pinctrl-0 = <&pwm_default_state>;
+	pinctrl-names = "default";
 };
 
 &qpic_bam {
@@ -422,6 +431,12 @@
 			bias-pull-up;
 			output-low;
 		};
+	};
+
+	pwm_default_state: pwm-default-state {
+		pins = "gpio10";
+		function = "pwm0";
+		drive-strength = <8>;
 	};
 
 	qspi_default_state: qspi-default-state {

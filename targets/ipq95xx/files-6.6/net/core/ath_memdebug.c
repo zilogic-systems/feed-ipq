@@ -28,7 +28,7 @@ static struct rb_root athmem_obj_tree_root = RB_ROOT;
 spinlock_t athmem_spinlock;
 
 struct athmem_func_obj {
-	void *func;
+	const char *func;
 	int line;
 	int count;
 	unsigned long long size;
@@ -39,7 +39,7 @@ struct athmem_debug_object {
 	unsigned long long pointer;
 	size_t size;
 	int line;
-	void *func;
+	const char *func;
 };
 
 struct athmem_func_obj athmem_func_obj_arr[FUNC_OBJ_ARR_SIZE];
@@ -347,7 +347,7 @@ static int athmem_debug_debugfs_add(void)
 }
 
 static void athmem_create_object(unsigned long long ptr, size_t size,
-				 gfp_t gfp, int line, void *func)
+				 gfp_t gfp, int line, const char *func)
 {
 	unsigned long flags;
 	struct athmem_debug_object *object, *parent;
@@ -423,7 +423,7 @@ void ath_update_free_skb_list(struct sk_buff_head *skb_list)
 }
 EXPORT_SYMBOL(ath_update_free_skb_list);
 
-void ath_update_alloc(void *ptr, int len, int line, void *func, int is_txskb)
+void ath_update_alloc(void *ptr, int len, int line, const char *func, int is_txskb)
 {
 	if (!ptr || athmem_flag_stop_tracking || (athmem_flag_track_only_txskb && !is_txskb))
 		return;
@@ -432,7 +432,7 @@ void ath_update_alloc(void *ptr, int len, int line, void *func, int is_txskb)
 }
 EXPORT_SYMBOL(ath_update_alloc);
 
-void *ath_kmalloc(size_t len, gfp_t flags, int line, void *func)
+void *ath_kmalloc(size_t len, gfp_t flags, int line, const char *func)
 {
 	void *addr = kmalloc(len, flags);
 
@@ -442,7 +442,7 @@ void *ath_kmalloc(size_t len, gfp_t flags, int line, void *func)
 EXPORT_SYMBOL(ath_kmalloc);
 
 void *ath_kmemdup(const void *src, size_t len, gfp_t flags, int line,
-		  void *func)
+		  const char *func)
 {
 	void *addr = (void *)kmemdup(src, len, flags);
 
@@ -451,7 +451,7 @@ void *ath_kmemdup(const void *src, size_t len, gfp_t flags, int line,
 }
 EXPORT_SYMBOL(ath_kmemdup);
 
-void *ath_kzalloc(size_t len, gfp_t flags, int line, void *func)
+void *ath_kzalloc(size_t len, gfp_t flags, int line, const char *func)
 {
 	void *addr = kzalloc(len, flags);
 
@@ -461,7 +461,7 @@ void *ath_kzalloc(size_t len, gfp_t flags, int line, void *func)
 EXPORT_SYMBOL(ath_kzalloc);
 
 void *ath_netdev_alloc_skb(struct net_device *dev, unsigned int len,
-			   int line, void *func)
+			   int line, const char *func)
 {
 	void *addr = netdev_alloc_skb(dev, len);
 
@@ -471,7 +471,7 @@ void *ath_netdev_alloc_skb(struct net_device *dev, unsigned int len,
 EXPORT_SYMBOL(ath_netdev_alloc_skb);
 
 void *ath_netdev_alloc_skb_fast(struct net_device *dev, unsigned int len,
-				int line, void *func)
+				int line, const char *func)
 {
 	void *addr = netdev_alloc_skb_fast(dev, len);
 
@@ -481,7 +481,7 @@ void *ath_netdev_alloc_skb_fast(struct net_device *dev, unsigned int len,
 EXPORT_SYMBOL(ath_netdev_alloc_skb_fast);
 
 void *ath_netdev_alloc_skb_no_skb_reset(struct net_device *dev, unsigned int len,
-					gfp_t flags, int line, void *func)
+					gfp_t flags, int line, const char *func)
 {
 	void *addr = __netdev_alloc_skb_no_skb_reset(dev, len, flags);
 
@@ -490,7 +490,7 @@ void *ath_netdev_alloc_skb_no_skb_reset(struct net_device *dev, unsigned int len
 }
 EXPORT_SYMBOL(ath_netdev_alloc_skb_no_skb_reset);
 
-void *ath_dev_alloc_skb(unsigned int len, int line, void *func)
+void *ath_dev_alloc_skb(unsigned int len, int line, const char *func)
 {
 	void *addr = dev_alloc_skb(len);
 
@@ -500,7 +500,7 @@ void *ath_dev_alloc_skb(unsigned int len, int line, void *func)
 EXPORT_SYMBOL(ath_dev_alloc_skb);
 
 void *ath_skb_copy(const struct sk_buff *skb, gfp_t flags, int line,
-		   void *func)
+		   const char *func)
 {
 	void *addr = skb_copy(skb, flags);
 
@@ -510,7 +510,7 @@ void *ath_skb_copy(const struct sk_buff *skb, gfp_t flags, int line,
 EXPORT_SYMBOL(ath_skb_copy);
 
 void *ath_skb_clone(struct sk_buff *skb, gfp_t flags, int line,
-		    void *func)
+		    const char *func)
 {
 	void *addr = skb_clone(skb, flags);
 
@@ -519,7 +519,7 @@ void *ath_skb_clone(struct sk_buff *skb, gfp_t flags, int line,
 }
 EXPORT_SYMBOL(ath_skb_clone);
 
-void *ath_skb_clone_sk(struct sk_buff *skb, int line, void *func)
+void *ath_skb_clone_sk(struct sk_buff *skb, int line, const char *func)
 {
 	void *addr = skb_clone_sk(skb);
 
@@ -529,7 +529,7 @@ void *ath_skb_clone_sk(struct sk_buff *skb, int line, void *func)
 EXPORT_SYMBOL(ath_skb_clone_sk);
 
 void *ath_skb_share_check(struct sk_buff *skb, gfp_t flags, int line,
-			  void *func)
+			  const char *func)
 {
 	void *addr = skb_share_check(skb, flags);
 
@@ -538,7 +538,7 @@ void *ath_skb_share_check(struct sk_buff *skb, gfp_t flags, int line,
 }
 EXPORT_SYMBOL(ath_skb_share_check);
 
-void *ath_nlmsg_new(size_t len, gfp_t flags, int line, void *func)
+void *ath_nlmsg_new(size_t len, gfp_t flags, int line, const char *func)
 {
 	void *addr = nlmsg_new(len, flags);
 
@@ -547,7 +547,7 @@ void *ath_nlmsg_new(size_t len, gfp_t flags, int line, void *func)
 }
 EXPORT_SYMBOL(ath_nlmsg_new);
 
-void *ath_vmalloc(unsigned long len, int line, void *func)
+void *ath_vmalloc(unsigned long len, int line, const char *func)
 {
 	void *addr = vmalloc(len);
 
@@ -556,7 +556,7 @@ void *ath_vmalloc(unsigned long len, int line, void *func)
 }
 EXPORT_SYMBOL(ath_vmalloc);
 
-void *ath_vzalloc(unsigned long len, int line, void *func)
+void *ath_vzalloc(unsigned long len, int line, const char *func)
 {
 	void *addr = vzalloc(len);
 
@@ -567,7 +567,7 @@ EXPORT_SYMBOL(ath_vzalloc);
 
 void *ath_dma_alloc_coherent(struct device *dev, size_t len,
 			     dma_addr_t *handle, gfp_t flags,
-			     int line, void *func)
+			     int line, const char *func)
 {
 	void *addr = dma_alloc_coherent(dev, len, handle, flags);
 
@@ -577,7 +577,7 @@ void *ath_dma_alloc_coherent(struct device *dev, size_t len,
 EXPORT_SYMBOL(ath_dma_alloc_coherent);
 
 void *ath_kcalloc(size_t n, size_t len, gfp_t flags, int line,
-		  void *func)
+		  const char *func)
 {
 	void *addr = kcalloc(n, len, flags);
 
@@ -586,7 +586,7 @@ void *ath_kcalloc(size_t n, size_t len, gfp_t flags, int line,
 }
 EXPORT_SYMBOL(ath_kcalloc);
 
-void ath_kfree(void *ptr)
+void ath_kfree(const void *ptr)
 {
 	ath_update_free(ptr);
 	kfree(ptr);

@@ -3,7 +3,7 @@
  * IPQ5424 RDP board common device tree source
  *
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /dts-v1/;
@@ -24,7 +24,6 @@
 
 	chosen {
 		stdout-path = "serial0";
-		bootargs-append = " clk_ignore_unused";
 	};
 
 	soc@0 {
@@ -103,28 +102,28 @@
 						reg = <1>;
 						label = "lan1";
 						phy-handle = <&phy0>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@2 {
 						reg = <2>;
 						label = "lan2";
 						phy-handle = <&phy1>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@3 {
 						reg = <3>;
 						label = "lan3";
 						phy-handle = <&phy2>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@4 {
 						reg = <4>;
 						label = "lan4";
 						phy-handle = <&phy3>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 				};
 			};

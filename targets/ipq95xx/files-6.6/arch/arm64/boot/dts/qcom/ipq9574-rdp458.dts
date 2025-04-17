@@ -309,6 +309,9 @@
 			boot-args = <0x2 0x4 0x34 0x3 0x0 0x0     /* MX Rail, GPIO52, Drive strength 0x3 */
 					0x4 0x4 0x18 0x3 0x0 0x0  /* RFA1p2 Rail, GPIO24, Drive strength 0x3 */
 					0x0 0x4 0x0 0x0 0x0 0x0>; /* End of arguments */
+			memory-region = <&qcn9224_pcie0>, <&mhi_region0>;
+			qcom,board_id = <0x1016>;
+			qcom,wsi = <&wsi>;
 		};
 	};
 };
@@ -331,6 +334,9 @@
 			boot-args = <0x2 0x4 0x34 0x3 0x0 0x0     /* MX Rail, GPIO52, Drive strength 0x3 */
 					0x4 0x4 0x18 0x3 0x0 0x0  /* RFA1p2 Rail, GPIO24, Drive strength 0x3 */
 					0x0 0x4 0x0 0x0 0x0 0x0>; /* End of arguments */
+			memory-region = <&qcn9224_pcie2>, <&mhi_region2>;
+			qcom,board_id = <0x1015>;
+			qcom,wsi = <&wsi>;
 		};
 	};
 };
@@ -359,6 +365,7 @@
 };
 
 &blsp1_i2c3 {
+	clock-frequency = <400000>;
 	pinctrl-0 = <&i2c_3_pins>;
 	pinctrl-names = "default";
 	status = "okay";
@@ -622,4 +629,42 @@
 		blink_en = "enable";
 		active = "high";
 	};
+};
+
+/* Enable the reserved memory regions of QCN9224 on PCIe0 and PCIe2*/
+&qcn9224_pcie0 {
+	status = "ok";
+};
+
+&qcn9224_pcie2 {
+	status = "ok";
+};
+
+#if defined(__MHI_BUS_RESERVED_DMA_POOL__)
+&mhi_region0 {
+	status = "ok";
+};
+
+&mhi_region2 {
+	status = "ok";
+};
+#endif
+
+&mlo_global_mem0 {
+	size = <0x0 0xE00000>;
+	status = "ok";
+};
+
+&wifi4 {
+	hremote_node = <&qcn9224_pcie0>;
+	board_id = <0x1016>;
+	hw_link_id = <0 1>;
+	status = "ok";
+};
+
+&wifi6 {
+	hremote_node = <&qcn9224_pcie2>;
+	board_id = <0x1015>;
+	hw_link_id = <2 3>;
+	status = "ok";
 };

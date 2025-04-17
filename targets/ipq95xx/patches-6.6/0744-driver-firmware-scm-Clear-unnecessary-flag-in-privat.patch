@@ -1,4 +1,4 @@
-From d3950f5060e70f01fc7fb4ab99afaf03543e4204 Mon Sep 17 00:00:00 2001
+From d3d2a46c309cb509a596b3bcd058ccb2af54087a Mon Sep 17 00:00:00 2001
 From: Gurumoorthy Santhakumar <quic_gsanthak@quicinc.com>
 Date: Mon, 2 Dec 2024 11:20:18 +0530
 Subject: [PATCH] driver: firmware: scm: Clear unnecessary flag in private data
@@ -10,7 +10,6 @@ to prevent this issue.
 
 Change-Id: Ic23b325e5c3f35b58790c313ed5d2f68b5740b8b
 Signed-off-by: Gurumoorthy Santhakumar <quic_gsanthak@quicinc.com>
-(cherry picked from commit d3d2a46c309cb509a596b3bcd058ccb2af54087a)
 ---
  drivers/firmware/qcom_scm.c | 1 -
  1 file changed, 1 deletion(-)

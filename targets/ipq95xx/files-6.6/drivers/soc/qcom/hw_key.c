@@ -6,7 +6,7 @@
 #include <linux/err.h>
 #include <linux/key.h>
 #include <linux/moduleparam.h>
-#include <linux/qcom_scm.h>
+#include <linux/firmware/qcom/qcom_scm.h>
 
 #define CONTEXT_SIZE_CMDLINE	257
 #define CONTEXT_SIZE		128

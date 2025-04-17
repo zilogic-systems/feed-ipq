@@ -1,0 +1,93 @@
+From 4a17e73e6fee033973876622889f62a8d5254075 Mon Sep 17 00:00:00 2001
+From: Sai Pratyusha Magam <quic_smagam@quicinc.com>
+Date: Tue, 3 Dec 2024 12:23:58 +0530
+Subject: [PATCH] QSDK:PROTOCOL:HOSTAPD: Generate IGTK if any of the RSN
+ variant has PMF enabled.
+
+Generate IGTK key if PMF enabled in any of legacy RSN or in override
+RSN.
+Signed-off-by: Sai Pratyusha Magam <quic_smagam@quicinc.com>
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/hostapd.c     | 2 +-
+ src/ap/wpa_auth.c    | 6 +++---
+ src/ap/wpa_auth_ie.c | 2 +-
+ src/common/defs.h    | 5 ++++-
+ 4 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index a561d41..b8732a4 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -473,7 +473,7 @@ static void hostapd_broadcast_key_clear_iface(struct hostapd_data *hapd,
+ 				   ifname, i);
+ 		}
+ 	}
+-	if (hapd->conf->ieee80211w) {
++	if (AP_PMF_ENABLED(hapd->conf)) {
+ 		for (i = NUM_WEP_KEYS; i < NUM_WEP_KEYS + 2; i++) {
+ 			if (hostapd_drv_set_key(ifname, hapd, WPA_ALG_NONE,
+ 						NULL, i, 0, 0, NULL,
+diff --git a/src/ap/wpa_auth.c b/src/ap/wpa_auth.c
+index c4c769f..061c360 100644
+--- a/src/ap/wpa_auth.c
++++ b/src/ap/wpa_auth.c
+@@ -5609,7 +5609,7 @@ static int wpa_gtk_update(struct wpa_authenticator *wpa_auth,
+ 	wpa_hexdump_key(MSG_DEBUG, "GTK",
+ 			group->GTK[group->GN - 1], group->GTK_len);
+ 
+-	if (conf->ieee80211w != NO_MGMT_FRAME_PROTECTION) {
++	if (AP_PMF_ENABLED(conf)) {
+ 		len = wpa_cipher_key_len(conf->group_mgmt_cipher);
+ 		os_memcpy(group->GNonce, group->Counter, WPA_NONCE_LEN);
+ 		inc_byte_array(group->Counter, WPA_NONCE_LEN);
+@@ -5622,7 +5622,7 @@ static int wpa_gtk_update(struct wpa_authenticator *wpa_auth,
+ 	}
+ 
+ 	if (!wpa_auth->non_tx_beacon_prot &&
+-	    conf->ieee80211w == NO_MGMT_FRAME_PROTECTION)
++	    !AP_PMF_ENABLED(conf))
+ 		return ret;
+ 	if (!conf->beacon_prot)
+ 		return ret;
+@@ -5943,7 +5943,7 @@ static int wpa_group_config_group_keys(struct wpa_authenticator *wpa_auth,
+ 			     KEY_FLAG_GROUP_TX_DEFAULT) < 0)
+ 		ret = -1;
+ 
+-	if (conf->ieee80211w != NO_MGMT_FRAME_PROTECTION) {
++	if (AP_PMF_ENABLED(conf)) {
+ 		enum wpa_alg alg;
+ 		size_t len;
+ 
+diff --git a/src/ap/wpa_auth_ie.c b/src/ap/wpa_auth_ie.c
+index df58670..f3ca1b3 100644
+--- a/src/ap/wpa_auth_ie.c
++++ b/src/ap/wpa_auth_ie.c
+@@ -1174,7 +1174,7 @@ wpa_validate_wpa_ie(struct wpa_authenticator *wpa_auth,
+ 	}
+ #endif /* CONFIG_OCV */
+ 
+-	if (wpa_auth->conf.ieee80211w == NO_MGMT_FRAME_PROTECTION ||
++	if (!AP_PMF_ENABLED(conf) ||
+ 	    !(data.capabilities & WPA_CAPABILITY_MFPC))
+ 		sm->mgmt_frame_prot = 0;
+ 	else
+diff --git a/src/common/defs.h b/src/common/defs.h
+index 118a757..d573dec 100644
+--- a/src/common/defs.h
++++ b/src/common/defs.h
+@@ -374,7 +374,10 @@ enum mfp_options {
+ 	MGMT_FRAME_PROTECTION_REQUIRED = 2,
+ };
+ #define MGMT_FRAME_PROTECTION_DEFAULT 3
+-
++#define AP_PMF_ENABLED(conf) \
++	((conf->ieee80211w != NO_MGMT_FRAME_PROTECTION || \
++	conf->rsn_override_mfp != NO_MGMT_FRAME_PROTECTION || \
++	conf->rsn_override_mfp_2 != NO_MGMT_FRAME_PROTECTION))
+ /**
+  * enum hostapd_hw_mode - Hardware mode
+  */
+-- 
+2.34.1
+

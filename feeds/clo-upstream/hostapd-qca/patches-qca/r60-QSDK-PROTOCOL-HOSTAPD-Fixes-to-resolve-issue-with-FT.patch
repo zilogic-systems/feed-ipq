@@ -1,0 +1,78 @@
+From bafe654f9b08b51e308c7fff3e578b2d11d611eb Mon Sep 17 00:00:00 2001
+From: Arunpandi Kannan <quic_arunpand@quicinc.com>
+Date: Tue, 11 Feb 2025 12:31:27 +0530
+Subject: [PATCH] QSDK:PROTOCOL:HOSTAPD:WAR: Fix to resolve issue with FT
+ roaming  re-assoc with source AP.
+
+If driver issues low ack command to disassoc roaming client during re-add,
+prevent disassociating the client by checking whether auth algorithm
+is FT auth and whether hostapd issued STA re-add to driver.
+
+Tag: FT over Air
+Patch-depdendency: 994-09-wifi-ath12k-add-support-to-migrate-peers-to-other-link-when-prim.patch
+Patch-work: none
+
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/drv_callbacks.c | 4 +++-
+ src/ap/ieee802_11.c    | 3 +++
+ src/ap/sta_info.h      | 1 +
+ src/ap/wpa_auth_glue.c | 1 +
+ 4 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/ap/drv_callbacks.c b/src/ap/drv_callbacks.c
+index b9ff9ff..625594a 100644
+--- a/src/ap/drv_callbacks.c
++++ b/src/ap/drv_callbacks.c
+@@ -1121,7 +1121,9 @@ void hostapd_event_sta_low_ack(struct hostapd_data *hapd, const u8 *addr,
+ #endif /* CONFIG_IEEE80211BE */
+ 
+ 	if (!sta || (!hapd->conf->disassoc_low_ack && num_packets != 0xFFFF) ||
+-	    sta->agreed_to_steer)
++	    sta->agreed_to_steer ||
++	    (sta->auth_alg == WLAN_AUTH_FT && sta->ft_re_add == true &&
++	     num_packets == 0xFFFF))
+ 		return;
+ 
+ 	if (num_packets == 0xFFFF)
+diff --git a/src/ap/ieee802_11.c b/src/ap/ieee802_11.c
+index 19bccd0..25ac036 100644
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -7146,6 +7146,9 @@ static void handle_assoc_cb(struct hostapd_data *hapd,
+ 		ap_sta_set_authorized(hapd, sta, 1);
+ 	}
+ 
++	if (sta->auth_alg == WLAN_AUTH_FT)
++		sta->ft_re_add = false;
++
+ 	if (reassoc)
+ 		mlme_reassociate_indication(hapd, sta);
+ 	else
+diff --git a/src/ap/sta_info.h b/src/ap/sta_info.h
+index 803447c..b350f1f 100644
+--- a/src/ap/sta_info.h
++++ b/src/ap/sta_info.h
+@@ -343,6 +343,7 @@ struct sta_info {
+ 	struct hostapd_scs_resp *scs_resp;
+ 	u8 session_cnt;
+ #endif
++	bool ft_re_add;
+ };
+ 
+ 
+diff --git a/src/ap/wpa_auth_glue.c b/src/ap/wpa_auth_glue.c
+index b3f7f60..9c5bd53 100644
+--- a/src/ap/wpa_auth_glue.c
++++ b/src/ap/wpa_auth_glue.c
+@@ -1378,6 +1378,7 @@ static int hostapd_wpa_auth_add_sta_ft(void *ctx, const u8 *sta_addr)
+ 		 * previous association. */
+ 		wpa_printf(MSG_DEBUG,
+ 			   "FT: Remove and re-add driver STA entry after successful FT authentication");
++		sta->ft_re_add = true;
+ 		return ap_sta_re_add(hapd, sta, 0);
+ 	}
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,37 @@
+From 41cdbab0d31f35b8ec037e8295e6e79b8bd93f77 Mon Sep 17 00:00:00 2001
+From: Govindaraj Saminathan <quic_gsaminat@quicinc.com>
+Date: Fri, 6 Dec 2024 15:51:19 +0530
+Subject: [PATCH] nl80211: Update channels unavailability for 320 MHz
+
+Parse NL80211_FREQUENCY_ATTR_NO_320MHZ channel attributes to ensure
+correct checking of channel availability in a 320 MHz bandwidth.
+
+Patch-dependency: None
+patch-link: https://w1.fi/cgit/hostap/commit/?id=888c5b21240a50de545b98692f29fb595b6b586d
+Feature:320 Mhz
+
+Signed-off-by: Govindaraj Saminathan <quic_gsaminat@quicinc.com>
+---
+ src/drivers/driver_nl80211_capa.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/src/drivers/driver_nl80211_capa.c
++++ b/src/drivers/driver_nl80211_capa.c
+@@ -1773,6 +1773,8 @@ static void phy_info_freq(struct hostapd
+ 		chan->allowed_bw &= ~HOSTAPD_CHAN_WIDTH_80;
+ 	if (tb_freq[NL80211_FREQUENCY_ATTR_NO_160MHZ])
+ 		chan->allowed_bw &= ~HOSTAPD_CHAN_WIDTH_160;
++	if (tb_freq[NL80211_FREQUENCY_ATTR_NO_320MHZ])
++		chan->allowed_bw &= ~HOSTAPD_CHAN_WIDTH_320;
+ 
+ 	if (tb_freq[NL80211_FREQUENCY_ATTR_DFS_STATE]) {
+ 		enum nl80211_dfs_state state =
+@@ -1874,6 +1876,8 @@ static int phy_info_freqs(struct phy_inf
+ 		[NL80211_FREQUENCY_ATTR_NO_HT40_MINUS] = { .type = NLA_FLAG },
+ 		[NL80211_FREQUENCY_ATTR_NO_80MHZ] = { .type = NLA_FLAG },
+ 		[NL80211_FREQUENCY_ATTR_NO_160MHZ] = { .type = NLA_FLAG },
++		[NL80211_FREQUENCY_ATTR_NO_320MHZ] = { .type = NLA_FLAG },
++
+ 	};
+ 	int new_channels = 0;
+ 	struct hostapd_channel_data *channel;

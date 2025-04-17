@@ -8,25 +8,75 @@ wpas.data.config = {};
 wpas.data.iface_phy = {};
 wpas.data.macaddr_list = {};
 
-function iface_stop(iface)
+function phy_name(phy, radio)
+{
+	if (!phy)
+		return null;
+
+	if (radio != null && radio >= 0)
+		phy += "." + radio;
+
+	return phy;
+}
+
+function is_ml_config(if_name, radio_id) {
+
+	if (radio_id == -1)
+		return false;
+
+	for (let phy, config in wpas.data.config) {
+		if (config == null || config.radio == radio_id)
+			continue;
+
+		for (let ifname in config.data) {
+			let data = config.data[ifname];
+			if (ifname == if_name) {
+				if (data.config.mld == null)
+					return false;
+
+				if (data.running == null || data.running == false)
+					return false;
+				wpas.printf(`[debug] ml configuration is true for ${if_name}`);
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+function iface_stop(iface, radio)
 {
 	let ifname = iface.config.iface;
 
 	if (!iface.running)
 		return;
 
+	if (radio == null)
+		radio = -1;
+
+	let iface_data = wpas.interfaces[ifname];
+
 	delete wpas.data.iface_phy[ifname];
-	wpas.remove_iface(ifname);
-	wdev_remove(ifname);
+	if (!is_ml_config(ifname, radio)) {
+		wpas.printf(`[debug] Removing interface ${ifname} ${radio}`);
+		wpas.remove_iface(ifname, radio);
+		wdev_remove(ifname);
+	}
+
 	iface.running = false;
 }
 
 function iface_start(phydev, iface, macaddr_list)
 {
 	let phy = phydev.name;
+	let radio = phydev.radio;
 
 	if (iface.running)
 		return;
+
+	if (radio == null)
+		radio = -1;
 
 	let ifname = iface.config.iface;
 	let wdev_config = {};
@@ -36,12 +86,16 @@ function iface_start(phydev, iface, macaddr_list)
 		wdev_config.macaddr = phydev.macaddr_next();
 
 	wpas.data.iface_phy[ifname] = phy;
-	wdev_remove(ifname);
-	let ret = phydev.wdev_add(ifname, wdev_config);
-	if (ret)
-		wpas.printf(`Failed to create device ${ifname}: ${ret}`);
+
+	if (!is_ml_config(ifname, radio)) {
+		wdev_remove(ifname);
+		wpas.printf(`[debug] Create device started ${ifname} ${radio}  ${wdev_config.macaddr}`);
+		let ret = phydev.wdev_add(ifname, wdev_config);
+		if (ret)
+			wpas.printf(`Failed to create device ${ifname}: ${ret}`);
+	}
 	wdev_set_up(ifname, true);
-	wpas.add_iface(iface.config);
+	wpas.add_iface(iface.config, radio);
 	iface.running = true;
 }
 
@@ -55,10 +109,10 @@ function iface_cb(new_if, old_if)
 	if (new_if && old_if)
 		wpas.printf(`Update configuration for interface ${old_if.config.iface}`);
 	else if (old_if)
-		wpas.printf(`Remove interface ${old_if.config.iface}`);
+		wpas.printf(`Remove interface ${old_if.config.radio}`);
 
 	if (old_if)
-		iface_stop(old_if);
+		iface_stop(old_if, old_if.config.radio);
 }
 
 function prepare_config(config, radio)
@@ -112,17 +166,6 @@ function start_pending(phy_name)
 		iface_start(phydev, phy.data[ifname]);
 }
 
-function phy_name(phy, radio)
-{
-	if (!phy)
-		return null;
-
-	if (radio != null && radio >= 0)
-		phy += "." + radio;
-
-	return phy;
-}
-
 let main_obj = {
 	phy_set_state: {
 		args: {
@@ -142,7 +185,7 @@ let main_obj = {
 			try {
 				if (req.args.stop) {
 					for (let ifname in phy.data)
-						iface_stop(phy.data[ifname]);
+						iface_stop(phy.data[ifname], req.args.radio);
 				} else {
 					start_pending(name);
 				}
@@ -188,7 +231,7 @@ let main_obj = {
 					if (!iface)
 						continue;
 
-					let status = iface.status();
+					let status = iface.status(req.args.radio);
 					if (!status)
 						continue;
 
@@ -210,6 +253,7 @@ let main_obj = {
 			phy: "",
 			radio: 0,
 			num_global_macaddr: 0,
+			is_ml: false,
 			config: [],
 			defer: true,
 		},
@@ -218,13 +262,14 @@ let main_obj = {
 			if (!phy)
 				return libubus.STATUS_INVALID_ARGUMENT;
 
-			wpas.printf(`Set new config for phy ${phy}`);
+			wpas.printf(`Set new config for phy ${phy} ${req.args.defer} ${req.args.config}`);
 			try {
 				if (req.args.config)
 					set_config(phy, req.args.phy, req.args.radio, req.args.num_global_macaddr, req.args.config);
 
-				if (!req.args.defer)
+				if (!req.args.defer) {
 					start_pending(phy);
+				}
 			} catch (e) {
 				wpas.printf(`Error loading config: ${e}\n${e.stacktrace[0].context}`);
 				return libubus.STATUS_INVALID_ARGUMENT;
@@ -310,11 +355,11 @@ function iface_event(type, name, data) {
 	ubus.call("service", "event", { type: `wpa_supplicant.${name}.${type}`, data: {} });
 }
 
-function iface_hostapd_notify(phy, ifname, iface, state)
+function iface_hostapd_notify(phy, radio, ifname, iface, state)
 {
 	let ubus = wpas.data.ubus;
-	let status = iface.status();
-	let msg = { phy: phy };
+	let status = iface.status(radio);
+	let msg = { phy: phy, radio: radio };
 
 	switch (state) {
 	case "DISCONNECTED":
@@ -328,11 +373,18 @@ function iface_hostapd_notify(phy, ifname, iface, state)
 		break;
 	case "COMPLETED":
 		msg.up = true;
-		msg.frequency = status.frequency;
-		msg.chan_width = status.chan_width;
-		msg.sec_chan_offset = status.sec_chan_offset;
-		msg.center_freq1 = status.center_freq1;
-		msg.center_freq2 = status.center_freq2;
+		if (status.frequency != null)
+			msg.frequency = status.frequency;
+		if (status.chan_width != null)
+			msg.chan_width = status.chan_width;
+		if (status.sec_chan_offset != null)
+			msg.sec_chan_offset = status.sec_chan_offset;
+		if (status.center_freq1 != null)
+			msg.center_freq1 = status.center_freq1;
+		if (status.center_freq2 != null)
+			msg.center_freq2 = status.center_freq2;
+		if (status.punct_bitmap != null)
+			msg.punct_bitmap = status.punct_bitmap;
 		break;
 	default:
 		return;
@@ -341,10 +393,11 @@ function iface_hostapd_notify(phy, ifname, iface, state)
 	ubus.call("hostapd", "apsta_state", msg);
 }
 
-function iface_channel_switch(phy, ifname, iface, info)
+function iface_channel_switch(phy, radio, ifname, iface, info)
 {
 	let msg = {
 		phy: phy,
+		radio: radio,
 		up: true,
 		frequency: info.frequency,
 		chan_width: info.chan_width,
@@ -353,6 +406,7 @@ function iface_channel_switch(phy, ifname, iface, info)
 		center_freq2: info.center_freq2,
 		csa: true,
 		csa_count: info.csa_count ? info.csa_count - 1 : 0,
+		punct_bitmap: info.punct_bitmap,
 	};
 	ubus.call("hostapd", "apsta_state", msg);
 }
@@ -369,20 +423,30 @@ return {
 	iface_remove: function(name, obj) {
 		iface_event("remove", name);
 	},
-	state: function(ifname, iface, state) {
+	state: function(ifname, radio, iface, state) {
 		let phy = wpas.data.iface_phy[ifname];
 		if (!phy) {
 			wpas.printf(`no PHY for ifname ${ifname}`);
 			return;
 		}
 
-		iface_hostapd_notify(phy, ifname, iface, state);
+                let phy_data = wpas.data.config[phy];
+                if (!phy_data)
+                        return;
+
+		if (!radio)
+			iface_hostapd_notify(phy_data.name, -1, ifname, iface, state);
+
+		let radio_id = 0;
+		while (radio) {
+			if (radio & 1) {
+				iface_hostapd_notify(phy_data.name, radio_id, ifname, iface, state);
+			}
+			radio >>= 1;
+			radio_id++;
+		}
 
 		if (state != "COMPLETED")
-			return;
-
-		let phy_data = wpas.data.config[phy];
-		if (!phy_data)
 			return;
 
 		let iface_data = phy_data.data[ifname];
@@ -395,14 +459,17 @@ return {
 
 		wdev_set_mesh_params(ifname, wdev_config);
 	},
-	event: function(ifname, iface, ev, info) {
+	event: function(ifname, radio, iface, ev, info) {
 		let phy = wpas.data.iface_phy[ifname];
 		if (!phy) {
 			wpas.printf(`no PHY for ifname ${ifname}`);
 			return;
 		}
+		let phy_data = wpas.data.config[phy];
+		if (!phy_data)
+			return;
 
 		if (ev == "CH_SWITCH_STARTED")
-			iface_channel_switch(phy, ifname, iface, info);
+			iface_channel_switch(phy_data.name, radio, ifname, iface, info);
 	}
 };

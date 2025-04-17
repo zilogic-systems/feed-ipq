@@ -1,0 +1,55 @@
+From d17a85ea1ed12f916e7a0cd9028c66465272a4cc Mon Sep 17 00:00:00 2001
+From: Petr Štetiar <petr.stetiar@prplfoundation.org>
+Date: Wed, 18 Dec 2024 07:50:18 +0000
+Subject: hostapd: hostapd_cleanup_iface_partial: Fix hw_features use after
+ free
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Currently when the iface is being cleaned up, the
+hostapd_free_hw_features() is called which frees the underlying
+hw_features and the struct is being NULLed, but the num_hw_features
+counter is not being reset, thus following commonly used access
+constructs:
+
+   for (i = 0; i < iface->num_hw_features; i++)
+            acs_cleanup_mode(&iface->hw_features[i]);
+
+This might then lead to use after free and hostapd for example might
+crash during configuration reload on disabled interfaces:
+
+  $ hostapd -ddt /tmp/wlan2_hapd.conf &
+  $ hostapd_cli -i wlan2 raw DISABLE
+
+  Fri Oct  4 20:44:04 2024 1728074644.706408: wlan2: AP-DISABLED
+
+  $ kill -SIGHUP $(pidof hostapd)
+  Segmentation fault (core dumped) hostapd -ddt /tmp/wlan2_hapd.conf
+
+So lets fix it by resetting the num_hw_features counter to 0, so the
+code will not try to access the freed memory in hw_features struct.
+
+Reported-by: Mohammed SI ALI <mohammed.siali@softathome.com>
+Tested-by: Houssem Dafdouf <houssem.dafdouf_ext@softathome.com>
+Signed-off-by: Petr Štetiar <ynezz@true.cz>
+Signed-off-by: Petr Štetiar <petr.stetiar@prplfoundation.org>
+---
+ src/ap/hostapd.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index db2d467d7..a850eaf2b 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -710,6 +710,7 @@ void hostapd_cleanup_iface_partial(struct hostapd_iface *iface)
+ 		acs_cleanup(iface);
+ 	hostapd_free_hw_features(iface->hw_features, iface->num_hw_features);
+ 	iface->hw_features = NULL;
++	iface->num_hw_features = 0;
+ 	iface->current_mode = NULL;
+ 	os_free(iface->current_rates);
+ 	iface->current_rates = NULL;
+-- 
+cgit v1.2.3-70-g09d2
+

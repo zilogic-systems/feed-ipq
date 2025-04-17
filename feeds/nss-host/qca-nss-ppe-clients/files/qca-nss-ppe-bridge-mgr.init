@@ -36,15 +36,25 @@ enable_fdb() {
 	echo 0 > /proc/sys/ppe/bridge_mgr/fdb_disabled
 }
 
+BOARD_NAME=$(cat /tmp/sysinfo/board_name)
+
 start() {
 	qca_nss_ppe_bridge_mgr_dependency
-	local board_type=`cat /tmp/sysinfo/board_name  | cut -d '-' -f 3`
+	#Board and chip type for Alder and Miami
+	local board_type=`echo "$BOARD_NAME"  | cut -d '-' -f 3`
+	local chip_type=`echo "$BOARD_NAME"  | cut -d '-' -f 4`
+	#Board and chip type for Marina
+	if [[ "$BOARD_NAME" == *"5424"* ]]; then
+		board_type=`echo "$BOARD_NAME"  | cut -d '-' -f 2`
+		chip_type=`echo "$BOARD_NAME"  | cut -d '-' -f 3`
+	fi
 	#echo "board_type: $board_type"
-	local chip_type=`cat /tmp/sysinfo/board_name  | cut -d '-' -f 4`
 	#echo "chip_type: $chip_type"
 	if [ "$board_type" == "al06" ] || [ $board_type == "al05" ]; then
 		enable_fdb
 	elif [ "$board_type" == "mi01.2" ] && [ $chip_type == "c2" ]; then
+		enable_fdb
+	elif [ "$board_type" == "rdp485" ] && ([ -z "$chip_type" ] || [ $chip_type == "c2" ]); then
 		enable_fdb
 	fi
 }

@@ -6,9 +6,9 @@ PKG_RELEASE:=1
 
 PKG_SOURCE_URL:=https://git.codelinaro.org/clo/qsdk/oss/lklm/qca-nss-phy
 PKG_SOURCE_PROTO:=git
-PKG_BRANCH:=win.nss.1.0.r24
+PKG_BRANCH:=win.nss.1.0.r26
 PKG_MIRROR_HASH:=skip
-PKG_VERSION:=a2ab925707e71555858398ac47fc9c4e0303d7e0
+PKG_VERSION:=5a70c334200fe4728be20a0f0aebf9c09519377c
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
@@ -68,7 +68,7 @@ define KernelPackage/qca8xxx-phc
   TITLE:=QCA8xxx PHC driver
   DEPENDS:=+kmod-qca81xx
   FILES:=$(PKG_BUILD_DIR)/linux_std/ptp/qca8xxx-phc.ko
-  AUTOLOAD:=$(call AutoLoad, 08, qca8xxx-phc)
+  AUTOLOAD:=$(call AutoLoad, 31, qca8xxx-phc)
 endef
 
 define KernelPackage/qca8xxx-phc/Description
@@ -90,6 +90,14 @@ ifneq ($(CONFIG_LOWMEM_FLASH),y)
 QCA_NSS_PHY_CONFIG_OPTS+= nss-phy-ptp=y
 endif
 endif
+
+SUPPORTED_PHYS = CONFIG_NSSPHY_QCA808X CONFIG_NSSPHY_QCA81XX CONFIG_NSSPHY_QCA803X
+
+ifneq (, $(findstring $(CONFIG_TARGET_BOARD), "ipq95xx"))
+    SUPPORTED_PHYS+=CONFIG_NSSPHY_QCA807X
+endif
+
+QCA_NSS_PHY_CONFIG_OPTS+= supported_phys="$(SUPPORTED_PHYS)"
 
 define Build/Compile
 	$(KERNEL_MAKE) M="$(PKG_BUILD_DIR)" \

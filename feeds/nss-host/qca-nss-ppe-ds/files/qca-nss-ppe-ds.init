@@ -15,6 +15,58 @@
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #
 
+configure_al_mr_irq_affinity() {
+
+        [ -f /tmp/sysinfo/board_name ] && {
+                board=ap$(cat /tmp/sysinfo/board_name | awk -F 'ap' '{print$2}')
+        }
+
+        ppeds_nodes=$(cat /proc/interrupts | grep edma_ppeds_rxfill_ | wc -l)
+        if [ $ppeds_nodes == 0 ]; then
+                echo " No PPEDS interrupts present"
+                echo "  Board Name: $board"
+                return
+        fi
+
+        radio_0=$(cat /proc/interrupts | grep "ppe.*_0" | grep -v "reo" | grep -v "tcl" | grep -v "rxdesc" | cut -d ':' -f 1 | tr -d ' ')
+        radio_1=$(cat /proc/interrupts | grep "ppe.*_1" | grep -v "reo" | grep -v "tcl" | grep -v "rxdesc" | cut -d ':' -f 1 | tr -d ' ')
+        radio_2=$(cat /proc/interrupts | grep "ppe.*_2" | grep -v "reo" | grep -v "tcl" | grep -v "rxdesc" | cut -d ':' -f 1 | tr -d ' ')
+        radio_3=$(cat /proc/interrupts | grep "ppe.*_3" | grep -v "reo" | grep -v "tcl" | grep -v "rxdesc" | cut -d ':' -f 1 | tr -d ' ')
+      	radio_reo_idx=$(cat /proc/interrupts | grep "ppe.*" | grep "reo" | cut -d ':' -f 1 | tr -d ' ')
+        radio_tcl_idx=$(cat /proc/interrupts | grep "ppe.*" | grep "tcl" | cut -d ':' -f 1 | tr -d ' ')
+        radio_rxdesc_idx=$(cat /proc/interrupts | grep "ppe.*" | grep "rxdesc" | cut -d ':' -f 1 | tr -d ' ')
+
+        for i in $radio_0; do
+                echo $1 > /proc/irq/$i/smp_affinity
+        done
+
+        for i in $radio_1; do
+                echo $1 > /proc/irq/$i/smp_affinity
+        done
+
+        for i in $radio_2; do
+                echo $1 > /proc/irq/$i/smp_affinity
+        done
+
+        for i in $radio_3; do
+                echo $1 > /proc/irq/$i/smp_affinity
+        done
+
+        for i in $radio_reo_idx; do
+                echo $2 > /proc/irq/$i/smp_affinity
+        done
+
+        for i in $radio_tcl_idx; do
+            	echo $2 > /proc/irq/$i/smp_affinity
+        done
+
+        for i in $radio_rxdesc_idx; do
+             	echo $2 > /proc/irq/$i/smp_affinity
+        done
+
+        echo "Configured the IRQ affinity for Alder DS mode in $board"
+}
+
 configure_irq_affinity() {
 
 	[ -f /tmp/sysinfo/board_name ] && {
@@ -57,6 +109,16 @@ start() {
 	case $board in
 		*'ap-al02-c20'*)
 		configure_irq_affinity 2 2 1 4
+		;;
+		*'ipq5424'*)
+		if [ -f /sys/firmware/devicetree/base/MP_256 ] || [ -f /sys/firmware/devicetree/base/MP_512 ]; then
+			configure_al_mr_irq_affinity 2 4 2 4
+		else
+			configure_irq_affinity 2 4 2 4
+		fi
+		;;
+		*ap-al*)
+		configure_al_mr_irq_affinity 2 4 2 4
 		;;
 		*)
 		configure_irq_affinity 2 4 2 4

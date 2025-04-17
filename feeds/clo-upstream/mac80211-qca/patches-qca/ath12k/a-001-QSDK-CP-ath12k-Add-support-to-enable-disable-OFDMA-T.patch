@@ -1,0 +1,182 @@
+From 2db5224e74b2babe89a8248543e694ddf2c54144 Mon Sep 17 00:00:00 2001
+From: Harish Rachakonda <quic_rachakon@quicinc.com>
+Date: Fri, 14 Feb 2025 15:49:39 +0530
+Subject: [PATCH] QSDK:CP ath12k: Add support to enable/disable OFDMA + TXBF
+
+Add support to force enable or disable OFDMA and TXBF. This
+debugfs configuration allows setting TXBF DL OFDMA for EHT/HE
+to optimize throughput. The corresponding bit for EHT DL OFDMA
++ TXBF is set and sent as 1 to the firmware via WMI commands
+WMI_VDEV_PARAM_SET_EHT_MU_MODE and WMI_VDEV_PARAM_SET_HE_MU_MODE.
+
+Command to enable/disable OFDMA + TXBF:
+Enable: echo 1 eht/he > /sys/kernel/debug/ath12k/qcn9274\ <hw id>/mac0/
+ofdma_txbf_enable
+Disable: echo 0 eht/he > /sys/kernel/debug/ath12k/qcn9274\  <hw id>/mac0/
+ofdma_txbf_enable
+
+Patch-dependency:
+587-ath12k-push-EHT-MU-MIMO-and-OFDMA-params-to-hardware.patch
+Patch-work: None
+
+Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h    |  1 +
+ drivers/net/wireless/ath/ath12k/debugfs.c | 36 +++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/mac.c     |  4 ++-
+ drivers/net/wireless/ath/ath12k/mac.h     |  1 +
+ drivers/net/wireless/ath/ath12k/wmi.h     |  1 +
+ 5 files changed, 42 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1097,6 +1097,7 @@ struct ath12k {
+ 	struct ath12k_he ar_he;
+ 	enum ath12k_state state;
+ 	bool supports_6ghz;
++	bool ofdma_txbf_conf;
+ 	struct {
+ 		struct completion started;
+ 		struct completion completed;
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -6077,6 +6077,55 @@ static const struct file_operations fops
+ 	.llseek = default_llseek,
+ };
+ 
++static ssize_t ath12k_enable_ofdma_txbf(struct file *file,
++					const char __user *user_buf,
++					size_t count, loff_t *ppos)
++{
++	struct ath12k *ar = file->private_data;
++	struct ath12k_link_vif *arvif;
++	int value, ret;
++	char buf[32] = {0};
++	char mode[3] = {'\0'};
++
++	ret = simple_write_to_buffer(buf, sizeof(buf) - 1, ppos,
++				     user_buf, count);
++	if (ret < 0)
++		return ret;
++
++	buf[ret] = '\0';
++	ret = sscanf(buf, "%d %s", &value, mode);
++	if (ret != 2) {
++		ath12k_err(ar->ab, "2 arguments required usage: enable/disable eht/he");
++		return -EINVAL;
++	}
++
++	if (strcmp(mode, "eht") && strcmp(mode, "he")) {
++		ath12k_err(ar->ab, "Mode should be eht/he");
++		return -EINVAL;
++	}
++
++	mutex_lock(&ar->conf_mutex);
++	ar->ofdma_txbf_conf = value;
++
++	list_for_each_entry(arvif, &ar->arvifs, list) {
++		if (!strcmp(mode, "eht")) {
++			ath12k_mac_set_he_txbf_conf(arvif);
++			ath12k_mac_set_eht_txbf_conf(arvif);
++		} else {
++			ath12k_mac_set_he_txbf_conf(arvif);
++		}
++	}
++
++	mutex_unlock(&ar->conf_mutex);
++
++	return count;
++}
++
++static const struct file_operations ofdma_txbf = {
++	.write = ath12k_enable_ofdma_txbf,
++	.open = simple_open,
++};
++
+ int ath12k_debugfs_register(struct ath12k *ar)
+ {
+ 	struct ath12k_base *ab = ar->ab;
+@@ -6131,6 +6180,9 @@ int ath12k_debugfs_register(struct ath12
+ 	debugfs_create_file("pktlog_filter", 0644,
+ 			    ar->debug.debugfs_pdev, ar,
+ 			    &fops_pktlog_filter);
++	debugfs_create_file("ofdma_txbf_enable", 0600,
++			    ar->debug.debugfs_pdev, ar,
++			    &ofdma_txbf);
+ 
+ 	if (ar->mac.sbands[NL80211_BAND_5GHZ].channels) {
+ 		debugfs_create_file("dfs_simulate_radar", 0200,
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -4287,7 +4287,7 @@ static int ath12k_setup_peer_smps(struct
+ 					 ath12k_smps_map[smps]);
+ }
+ 
+-static bool ath12k_mac_set_he_txbf_conf(struct ath12k_link_vif *arvif)
++bool ath12k_mac_set_he_txbf_conf(struct ath12k_link_vif *arvif)
+ {
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+ 	struct ath12k *ar = arvif->ar;
+@@ -4330,6 +4330,9 @@ static bool ath12k_mac_set_he_txbf_conf(
+ 	}
+ 
+ 	rcu_read_unlock();
++	if (ar->ofdma_txbf_conf)
++		value |= FIELD_PREP(HE_MODE_DL_OFDMA_TXBF, HE_DL_OFDMA_TXBF_ENABLE);
++
+ 	ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id, param, value);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to set vdev %d HE MU mode: %d\n",
+@@ -4443,7 +4446,7 @@ static bool ath12k_mac_vif_recalc_sta_he
+ 	return true;
+ }
+ 
+-static bool ath12k_mac_set_eht_txbf_conf(struct ath12k_link_vif *arvif)
++bool ath12k_mac_set_eht_txbf_conf(struct ath12k_link_vif *arvif)
+ {
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+ 	struct ath12k *ar = arvif->ar;
+@@ -4489,6 +4492,8 @@ static bool ath12k_mac_set_eht_txbf_conf
+ 
+ 	rcu_read_unlock();
+ 
++	if (ar->ofdma_txbf_conf)
++		value |= FIELD_PREP(EHT_MODE_DL_OFDMA_TXBF, EHT_DL_OFDMA_TXBF_ENABLE);
+ 	ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id, param, value);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to set vdev %d EHT MU mode: %d\n",
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -328,4 +328,6 @@ int ath12k_mac_vendor_send_disassoc_even
+ int
+ ath12k_mac_process_link_migrate_req(struct ath12k_vif *ahvif,
+ 				    struct ath12k_mac_link_migrate_usr_params *params);
++bool ath12k_mac_set_eht_txbf_conf(struct ath12k_link_vif *arvif);
++bool ath12k_mac_set_he_txbf_conf(struct ath12k_link_vif *arvif);
+ #endif
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -3905,6 +3905,7 @@ struct ath12k_wmi_rx_reorder_queue_remov
+ #define HE_MODE_DL_OFDMA	BIT(4)
+ #define HE_MODE_UL_OFDMA	BIT(5)
+ #define HE_MODE_UL_MUMIMO	BIT(6)
++#define HE_MODE_DL_OFDMA_TXBF   BIT(7)
+ 
+ #define HE_DL_MUOFDMA_ENABLE	1
+ #define HE_UL_MUOFDMA_ENABLE	1
+@@ -3914,6 +3915,7 @@ struct ath12k_wmi_rx_reorder_queue_remov
+ #define HE_SU_BFEE_ENABLE	1
+ #define HE_MU_BFER_ENABLE	1
+ #define HE_SU_BFER_ENABLE	1
++#define HE_DL_OFDMA_TXBF_ENABLE 1
+ 
+ #define EHT_MODE_SU_TX_BFEE		BIT(0)
+ #define EHT_MODE_SU_TX_BFER		BIT(1)
+@@ -3934,6 +3936,7 @@ struct ath12k_wmi_rx_reorder_queue_remov
+ #define EHT_SU_BFEE_ENABLE       1
+ #define EHT_MU_BFER_ENABLE       1
+ #define EHT_SU_BFER_ENABLE       1
++#define EHT_DL_OFDMA_TXBF_ENABLE 1
+ 
+ #define HE_VHT_SOUNDING_MODE_ENABLE		1
+ #define HE_SU_MU_SOUNDING_MODE_ENABLE		1

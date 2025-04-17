@@ -1,0 +1,663 @@
+From 8fa1f96bfe35ea56ca64e09a38f976e757bfd2e5 Mon Sep 17 00:00:00 2001
+From: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+Date: Fri, 15 Nov 2024 23:42:28 +0530
+Subject: [PATCH] UPSTREAM:CP:wifi:ath12k: Add peer delete all support WMI cmd
+
+In current flow, when interface is brought down, peer delete will be
+sent to firmware for each client and peer delete response will be received for
+each client. There are below concern in doing so:
+        * This may cause ring backpressure when max clients(512) is
+connected.
+        * Also for each peer delete, driver will wait for peer unmap
+event and peer delete response thus causing a delay the vdev down.
+
+To optimize this, before sending vdev stop, peer delete all will be sent
+for the corresponding vdev. Upon receiving this, firmware will send peer
+unmap for each client and one peer delete all response.
+
+Sequence for MLO client is below:
+	* Individual peer delete for the partner peers
+	* Peer delete all for the link which is going down
+
+Firmware will send peer delete all response event with status. When
+status is failure, driver will do self cleanup of peers except self BSS
+which will be deleted during vdev delete.
+
+Existing flag in wdev is used so that driver will be aware of the link
+which is going down.
+
+Patch-dependency: 911-a-wifi-mac80211-Add-wdev-specific-flag-to-indicate-NET.patch
+		  691-0001-cfg80211-mac80211-add-support-for-channel-switch-wit.patch
+
+Patch-work: none
+
+Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |  1 +
+ drivers/net/wireless/ath/ath12k/mac.c  | 61 ++++++++++++++---
+ drivers/net/wireless/ath/ath12k/mac.h  |  3 +
+ drivers/net/wireless/ath/ath12k/peer.c | 55 +++++++++++++--
+ drivers/net/wireless/ath/ath12k/peer.h |  9 ++-
+ drivers/net/wireless/ath/ath12k/wmi.c  | 95 ++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.h  | 20 ++++++
+ 7 files changed, 227 insertions(+), 17 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -544,6 +544,7 @@ struct ath12k_link_vif {
+ 	/* Add per link DS specific information here */
+ #endif
+ 	u64 tbtt_offset;
++	int num_peers;
+ 
+ };
+ 
+@@ -1263,6 +1264,7 @@ struct ath12k {
+ 	 */
+ 	u32 scan_min_rest_time;
+ 	u32 scan_max_rest_time;
++	struct completion delete_all_peer_done;
+ };
+ 
+ struct ath12k_6ghz_sp_reg_rule {
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -1429,7 +1429,7 @@ int ath12k_mac_partner_peer_cleanup(stru
+ 
+ 			spin_unlock_bh(&partner_ab->base_lock);
+ 			mutex_lock(&ar->conf_mutex);
+-			ret = ath12k_peer_delete_send(ar, arvif->vdev_id, arsta->addr);
++			ret = ath12k_peer_delete_send(ar, arvif->vdev_id, arsta->addr, false);
+ 			if (ret) {
+ 				mutex_unlock(&ar->conf_mutex);
+ 				spin_lock_bh(&partner_ab->base_lock);
+@@ -1447,6 +1447,7 @@ int ath12k_mac_partner_peer_cleanup(stru
+ 
+ 			ar->num_peers--;
+ 			arvif->num_stations--;
++			arvif->num_peers--;
+ 			ath12k_mac_dec_num_stations(arvif, arsta);
+ 			mutex_unlock(&ar->conf_mutex);
+ 			cancel_work_sync(&arsta->update_wk);
+@@ -1507,8 +1508,11 @@ void ath12k_mac_peer_cleanup_all(struct
+ 	ar->num_peers = 0;
+ 	ar->num_stations = 0;
+ 
+-	list_for_each_entry_safe_reverse(arvif, tmp_vif, &ar->arvifs, list)
++	list_for_each_entry_safe_reverse(arvif, tmp_vif, &ar->arvifs, list) {
+ 		arvif->num_stations = 0;
++		arvif->num_peers = 0;
++	}
++
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "ath12k mac peer cleanup done\n");
+ }
+ 
+@@ -5848,6 +5852,33 @@ static int ath12k_mac_vdev_stop(struct a
+ 	int ret;
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
++	reinit_completion(&ar->delete_all_peer_done);
++
++	if (arvif->num_peers &&
++	    arvif->ahvif->vdev_type != WMI_VDEV_TYPE_STA) {
++		ret = ath12k_wmi_peer_delete_all(arvif);
++		if (ret)
++			ath12k_warn(ar->ab, "failed to submit peer delete all for vdev_id:%d\n",
++				    arvif->vdev_id);
++
++		if (!wait_for_completion_timeout(&ar->delete_all_peer_done,
++						 3 * HZ)) {
++			ath12k_info(ar->ab, "Failed wait to get peer delete all resp:%d cleanup peers",
++				    arvif->vdev_id);
++			ath12k_peer_cleanup(ar, arvif->vdev_id, false);
++		}
++		/* Per vif num_peers will have count of station which are not
++		 * deleted through individual peer delete.
++		 * Per radio num_stations will have count of total number of
++		 * stations associated to the radio and will be decremented
++		 * after individual peer delete.
++		 */
++		ar->num_stations -= arvif->num_peers;
++		/* All peers with this vdev should be deleted at this point
++		 * through peer delete all or through peer cleanup.
++		 */
++		arvif->num_peers = 0;
++	}
+ 
+ 	if (!arvif->vdev_stop_notify_done) {
+ 		reinit_completion(&ar->vdev_setup_done);
+@@ -6017,6 +6048,7 @@ ath12k_mac_assign_link_vif(struct ath12k
+ 
+ 			INIT_LIST_HEAD(&arvif->list);
+ 			arvif->num_stations = 0;
++			arvif->num_peers = 0;
+ 			init_completion(&arvif->peer_ch_width_switch_send);
+ 			INIT_WORK(&arvif->peer_ch_width_switch_work,
+ 				  ath12k_wmi_peer_chan_width_switch_work);
+@@ -8200,8 +8232,8 @@ static int ath12k_mac_station_add(struct
+ 
+ 	ret = ath12k_mac_inc_num_stations(arvif, arsta);
+ 	if (ret) {
+-		ath12k_warn(ab, "refusing to associate station: too many connected already (%d)\n",
+-			    ar->max_num_stations);
++		ath12k_warn(ab, "refusing to associate station: Max stations: %d Stations connected: %d\n",
++			    ar->max_num_stations, ar->num_stations);
+ 		goto exit;
+ 	}
+ 
+@@ -8263,8 +8295,10 @@ static int ath12k_mac_station_add(struct
+ 		goto free_rx_stats;
+ 	}
+ 
+-	ath12k_dbg(ab, ATH12K_DBG_PEER, "Added peer: %pM for VDEV: %d num_stations : %d\n",
+-		    arsta->addr, arvif->vdev_id, ar->num_stations);
++	arvif->num_peers++;
++
++	ath12k_dbg(ab, ATH12K_DBG_PEER, "Added peer: %pM for VDEV: %d num_stations : %d link num_peers:%d\n",
++		    arsta->addr, arvif->vdev_id, ar->num_stations, arvif->num_peers);
+ 
+ 	if (ath12k_debugfs_is_extd_tx_stats_enabled(ar) && (!arsta->tx_stats)) {
+ 		arsta->tx_stats = kzalloc(sizeof(*arsta->tx_stats),
+@@ -8799,6 +8833,7 @@ static int ath12k_mac_station_remove(str
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+         struct ieee80211_vif *vif = ahvif->vif;
+ 	bool skip_peer_delete;
++	struct wireless_dev *wdev = ieee80211_vif_to_wdev(vif);
+ 
+ 	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
+ 
+@@ -8806,8 +8841,19 @@ static int ath12k_mac_station_remove(str
+ 
+ 	ath12k_dp_peer_cleanup(ar, arvif->vdev_id, arsta->addr);
+ 
+-	skip_peer_delete = ar->ab->hw_params->vdev_start_delay &&
+-			   vif->type == NL80211_IFTYPE_STATION;
++	skip_peer_delete = (ar->ab->hw_params->vdev_start_delay &&
++			   vif->type == NL80211_IFTYPE_STATION);
++
++	/* is_netdev_going_down: Skip sending peer delete to firmware.
++	 * But delete rhash entry of peer form host
++	 */
++	if (wdev->is_netdev_going_down) {
++		ret = ath12k_peer_rhash_cleanup(ar, arvif->vdev_id, arsta->addr);
++		if (ret)
++			ath12k_warn(ar->ab, "Failed to delete peer: %pM for VDEV:%d\n",
++				    arsta->addr, arvif->vdev_id);
++		goto exit;
++	}
+ 
+ 	if (!skip_peer_delete) {
+ 		ret = ath12k_peer_delete(ar, arvif->vdev_id, arsta->addr);
+@@ -8819,8 +8865,10 @@ static int ath12k_mac_station_remove(str
+ 				   arsta->addr, arvif->vdev_id);
+ 
+ 		ath12k_mac_station_post_remove(ar, arvif, arsta);
++		arvif->num_peers--;
+ 	}
+ 
++exit:
+ 	ath12k_cfr_decrement_peer_count(ar, arsta);
+ 
+ 	if (sta->valid_links)
+@@ -8837,19 +8885,31 @@ static void ath12k_mac_ml_station_remove
+ 	struct ath12k_hw *ah = ahvif->ah;
+  	struct ath12k_link_vif *arvif;
+  	struct ath12k_link_sta *arsta;
++	struct ieee80211_vif *vif = ahvif->vif;
++	struct wireless_dev *wdev =  ieee80211_vif_to_wdev(vif);
+ 	struct ath12k *ar;
+ 	unsigned long links;
+ 	u8 link_id;
++	bool peer_del_all, is_link_down;
++	int link_going_down;
+ 
++	peer_del_all = is_link_down = false;
+ 	lockdep_assert_held(&ah->conf_mutex);
+ 
+ 	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
+ 
+ 	ath12k_wsi_load_info_stats_update(ahvif, ahsta, false);
+ 
+-	ath12k_ml_link_peers_delete(ahvif, ahsta);
++	is_link_down = ath12k_get_link_down(ahsta, &link_going_down);
++
++	if (vif->type != NL80211_IFTYPE_STATION &&
++	    (wdev->is_netdev_going_down || is_link_down))
++		peer_del_all = true;
++
++	ath12k_ml_link_peers_delete(ahvif, ahsta, peer_del_all);
+ 
+ 	/* validate link station removal and clear arsta links */
++
+ 	links = ahsta->links_map;
+ 	for_each_set_bit(link_id, &links, ATH12K_NUM_MAX_LINKS) {
+ 		arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
+@@ -8860,13 +8920,22 @@ static void ath12k_mac_ml_station_remove
+ 
+ 		ar = arvif->ar;
+ 
+-		mutex_lock(&ar->conf_mutex);
++		if (!peer_del_all) {
++			mutex_lock(&ar->conf_mutex);
+ 
+-		ath12k_mac_station_post_remove(ar, arvif, arsta);
+-		mutex_unlock(&ar->conf_mutex);
++			ath12k_mac_station_post_remove(ar, arvif, arsta);
++			mutex_unlock(&ar->conf_mutex);
++		} else if (link_id != link_going_down ||
++			   ahsta->primary_link_id != link_going_down) {
++			/* Partner link peer delete is sent.
++			 * Decrement only for partner links
++			 */
++			ath12k_mac_dec_num_stations(arvif, arsta);
++		}
+ 
+ 		ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
+ 	}
++
+ 	ath12k_ml_peer_delete(ah, sta);
+ }
+ 
+@@ -13493,7 +13562,7 @@ static void ath12k_mac_remove_link_inter
+ 		   arvif->addr, arvif->vdev_id);
+ 
+ err_vdev_del:
+-	ath12k_peer_cleanup(ar, arvif->vdev_id);
++	ath12k_peer_cleanup(ar, arvif->vdev_id, true);
+ 
+ 	spin_lock_bh(&ar->data_lock);
+ 
+@@ -20751,6 +20820,7 @@ static int ath12k_mac_setup(struct ath12
+ 	init_completion(&ar->mlo_setup_done);
+ 	init_completion(&ar->mvr_complete);
+ 	init_completion(&ar->scan.on_channel);
++	init_completion(&ar->delete_all_peer_done);
+ 
+ 	INIT_DELAYED_WORK(&ar->scan.timeout, ath12k_scan_timeout_work);
+ 	INIT_WORK(&ar->scan.vdev_del_wk, ath12k_scan_vdev_del_work);
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -298,6 +298,9 @@ int ath12k_mac_op_set_scs(struct wireles
+ void ath12k_agile_cac_abort_work(struct work_struct *work);
+ bool ath12k_mac_is_bridge_vdev(struct ath12k_link_vif *arvif);
+ void ath12k_mac_bridge_vdev_up(struct ath12k_link_vif *arvif);
++void ath12k_mac_cleanup_vdev_peer(struct ath12k_base *ab,
++				  uint32_t vdev_id);
++void ath12k_ml_peer_delete_all(struct ath12k_hw *ah);
+ 
+ int ath12k_mac_set_tx_antenna(struct ath12k *ar, u32 tx_ant);
+ int ath12k_mac_set_rx_antenna(struct ath12k *ar, u32 rx_ant);
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -467,7 +467,7 @@ void ath12k_mac_peer_disassoc(struct ath
+ 	}
+ }
+ 
+-void ath12k_peer_cleanup(struct ath12k *ar, u32 vdev_id)
++void ath12k_peer_cleanup(struct ath12k *ar, u32 vdev_id, bool cleanup_self_bss)
+ {
+ 	struct ath12k_peer *peer, *tmp;
+ 	struct ath12k_base *ab = ar->ab;
+@@ -500,6 +500,9 @@ void ath12k_peer_cleanup(struct ath12k *
+ 		if (peer->vdev_id != vdev_id)
+ 			continue;
+ 
++		if (!cleanup_self_bss && !peer->sta)
++			continue;
++
+ 		peer_id = peer->peer_id;
+ 		ml_peer_id = peer->ml_peer_id & ~ATH12K_ML_PEER_ID_VALID;
+ 		ath12k_warn(ab, "removing stale peer %pM from vdev_id %d\n",
+@@ -547,7 +550,8 @@ int ath12k_wait_for_peer_delete_done(str
+ 	return 0;
+ }
+ 
+-int ath12k_peer_delete_send(struct ath12k *ar, u32 vdev_id, const u8 *addr)
++int ath12k_peer_delete_send(struct ath12k *ar, u32 vdev_id, const u8 *addr,
++			    bool skip_peer_del)
+ {
+ 	struct ath12k_peer *peer;
+ 	struct ath12k_base *ab = ar->ab;
+@@ -603,6 +607,8 @@ int ath12k_peer_delete_send(struct ath12
+ 
+ 	mutex_unlock(&ab->tbl_mtx_lock);
+ 
++	if (skip_peer_del)
++		return 0;
+ 
+ 	reinit_completion(&ar->peer_delete_done);
+ 
+@@ -632,7 +638,7 @@ static int __ath12k_peer_delete(struct a
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+ 
+-	ret = ath12k_peer_delete_send(ar, vdev_id, addr);
++	ret = ath12k_peer_delete_send(ar, vdev_id, addr, false);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -668,16 +674,67 @@ int ath12k_peer_delete(struct ath12k *ar
+ 	return 0;
+ }
+ 
+-int ath12k_ml_link_peers_delete(struct ath12k_vif *ahvif, struct ath12k_sta *ahsta)
++int ath12k_peer_rhash_cleanup(struct ath12k *ar, u32 vdev_id, const u8 *addr)
++{
++	int ret;
++	struct ath12k_link_vif *arvif = NULL;
++	struct ath12k_base *ab = ar->ab;
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	ret = ath12k_peer_delete_send(ar, vdev_id, addr, true);
++	if (ret)
++		return ret;
++
++	arvif = ath12k_mac_get_arvif(ar, vdev_id);
++	if (!arvif) {
++		ath12k_warn(ab,
++			    "failed to get arvif with vdev_id %d,"
++			    "skip ppeds ast override\n",
++			    vdev_id);
++	} else if (arvif->ahvif->vif->type == NL80211_IFTYPE_STATION) {
++		ath12k_dp_tx_ppeds_cfg_astidx_cache_mapping(ab, arvif, false);
++	}
++
++	ar->num_peers--;
++
++	return 0;
++}
++
++bool ath12k_get_link_down(struct ath12k_sta *ahsta, int *link_going_down)
++{
++	struct ath12k_link_vif *arvif;
++	struct ath12k_vif *ahvif = ahsta->ahvif;
++	struct wireless_dev *wdev;
++	unsigned long links;
++	u8 link_id;
++
++	links = ahsta->links_map;
++
++	for_each_set_bit(link_id, &links,
++			 IEEE80211_MLD_MAX_NUM_LINKS) {
++		arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
++		wdev = ieee80211_vif_to_wdev(arvif->ahvif->vif);
++		if (wdev->links[link_id].ap.is_going_down) {
++			*link_going_down = link_id;
++			return true;
++		}
++	}
++	return false;
++}
++
++int ath12k_ml_link_peers_delete(struct ath12k_vif *ahvif, struct ath12k_sta *ahsta,
++				bool peer_del_all)
+ {
+ 	struct ath12k_link_vif *arvif;
+ 	struct ath12k_link_sta *arsta;
+ 	struct ieee80211_sta *sta;
+ 	struct ath12k *ar;
+-	int ret, err_ret = 0;
++	int ret, link_going_down, err_ret = 0;
+ 	u8 link_id = 0;
+ 	struct ath12k_hw *ah = ahvif->ah;
+ 	unsigned long links;
++	bool skip_send_peer_del;
+ 
+ 	lockdep_assert_held(&ah->conf_mutex);
+ 
+@@ -689,7 +746,12 @@ int ath12k_ml_link_peers_delete(struct a
+ 	/* FW expects delete of all link peers at once before waiting for reception
+ 	 * of peer unmap or delete responses
+ 	 */
++
+ 	links = ahsta->links_map;
++
++	if (peer_del_all)
++		ath12k_get_link_down(ahsta, &link_going_down);
++
+ 	for_each_set_bit(link_id, &links, ATH12K_NUM_MAX_LINKS) {
+ 		arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
+ 		arsta = ahsta->link[link_id];
+@@ -706,7 +768,13 @@ int ath12k_ml_link_peers_delete(struct a
+ 		mutex_lock(&ar->conf_mutex);
+ 		ath12k_dp_peer_cleanup(ar, arvif->vdev_id, arsta->addr);
+ 
+-		ret = ath12k_peer_delete_send(ar, arvif->vdev_id, arsta->addr);
++		if (peer_del_all && link_going_down == arvif->link_id &&
++		    ahsta->primary_link_id == link_going_down)
++			skip_send_peer_del = true;
++		else
++			skip_send_peer_del = false;
++
++		ret = ath12k_peer_delete_send(ar, arvif->vdev_id, arsta->addr, skip_send_peer_del);
+ 		if (ret) {
+ 			mutex_unlock(&ar->conf_mutex);
+ 			ath12k_warn(ar->ab,
+@@ -715,9 +783,14 @@ int ath12k_ml_link_peers_delete(struct a
+ 			err_ret = ret;
+ 			continue;
+ 		}
++		if (!skip_send_peer_del)
++			arvif->num_peers--;
+ 		mutex_unlock(&ar->conf_mutex);
+ 	}
+ 
++	if (peer_del_all)
++		return err_ret;
++
+ 	/* Ensure all link peers are deleted and unmapped */
+ 	links = ahsta->links_map;
+ 	for_each_set_bit(link_id, &links, ATH12K_NUM_MAX_LINKS) {
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -146,9 +146,10 @@ struct ath12k_peer *ath12k_peer_find_by_
+ #ifdef CPTCFG_ATH12K_SAWF
+ struct ath12k_peer *ath12k_peer_find_pri_by_id(struct ath12k_base *ab, int peer_id);
+ #endif
+-void ath12k_peer_cleanup(struct ath12k *ar, u32 vdev_id);
++void ath12k_peer_cleanup(struct ath12k *ar, u32 vdev_id, bool self_bss_skip);
+ int ath12k_peer_delete(struct ath12k *ar, u32 vdev_id, const u8 *addr);
+-int ath12k_ml_link_peers_delete(struct ath12k_vif *ahvif, struct ath12k_sta *ahsta);
++int ath12k_ml_link_peers_delete(struct ath12k_vif *ahvif, struct ath12k_sta *ahsta,
++				bool peer_del_all);
+ int ath12k_ml_peer_create(struct ath12k_hw *ah, struct ieee80211_sta *sta);
+ int ath12k_ml_peer_delete(struct ath12k_hw *ah, struct ieee80211_sta *sta);
+ int ath12k_peer_create(struct ath12k *ar, struct ath12k_link_vif *arvif,
+@@ -162,7 +163,8 @@ void ath12k_peer_rhash_tbl_destroy(struc
+ int ath12k_peer_rhash_delete(struct ath12k_base *ab, struct ath12k_peer *peer);
+ void ath12k_peer_mlo_map_event(struct ath12k_base *ab, struct sk_buff *skb);
+ void ath12k_peer_mlo_unmap_event(struct ath12k_base *ab, struct sk_buff *skb);
+-int ath12k_peer_delete_send(struct ath12k *ar, u32 vdev_id, const u8 *addr);
++int ath12k_peer_delete_send(struct ath12k *ar, u32 vdev_id, const u8 *addr,
++			    bool skip_peer_del);
+ struct ath12k_peer *ath12k_peer_find_by_vdev_id(struct ath12k_base *ab,
+ 		                        int vdev_id);
+ void ath12k_mac_peer_disassoc(struct ath12k_base *ab, struct ieee80211_sta *sta,
+@@ -172,6 +174,9 @@ void ath12k_mac_peer_disassoc(struct ath
+ int ath12k_peer_send_assoc_vendor_response(const struct ath12k_peer *peer,
+ 					   const bool is_assoc);
+ 
++bool ath12k_get_link_down(struct ath12k_sta *ahsta, int *link_going_down);
++int ath12k_peer_rhash_cleanup(struct ath12k *ar, u32 vdev_id, const u8 *addr);
++
+ static inline
+ enum nl80211_iftype ath12k_peer_get_peer_type(struct ath12k_peer *peer)
+ {
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -1614,6 +1614,38 @@ int ath12k_wmi_vdev_down(struct ath12k *
+ 	return ret;
+ }
+ 
++int ath12k_wmi_peer_delete_all(struct ath12k_link_vif *arvif)
++{
++	struct ath12k *ar = arvif->ar;
++	struct ath12k_wmi_pdev *wmi = ar->wmi;
++	struct ath12k_peer_delete_all_cmd *cmd;
++	struct sk_buff *skb;
++	int ret;
++
++	skb = ath12k_wmi_alloc_skb(wmi->wmi_ab, sizeof(*cmd));
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (struct ath12k_peer_delete_all_cmd *)skb->data;
++
++	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_VDEV_DELETE_ALL_PEER_FIXED_PARAMS,
++						 sizeof(*cmd));
++	cmd->vdev_id = cpu_to_le32(arvif->vdev_id);
++	cmd->peer_type_bitmap = 0;
++
++	ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "WMI VDEV Peer delete all for vdev_id:%d",
++		   arvif->vdev_id);
++
++	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_VDEV_DELETE_ALL_PEER_CMDID);
++	if (ret) {
++		ath12k_warn(ar->ab, "failed to submit PEER DELETE ALL cmd vdev_id: %d\n",
++			    arvif->vdev_id);
++		dev_kfree_skb(skb);
++	}
++
++	return ret;
++}
++
+ static inline bool
+ ath12k_wmi_check_device_present(u32 width_device,
+ 				u32 center_freq_device,
+@@ -2027,8 +2059,8 @@ int ath12k_wmi_send_peer_delete_cmd(stru
+ 	cmd->vdev_id = cpu_to_le32(vdev_id);
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_PEER,
+-		   "WMI peer delete vdev_id %d peer_addr %pM num_peer : %d\n",
+-		   vdev_id,  peer_addr, ar->num_peers);
++		   "WMI peer delete vdev_id %d peer_addr %pM num_stations: %d radio num_peer : %d\n",
++		   vdev_id,  peer_addr, ar->num_stations, ar->num_peers);
+ 
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_PEER_DELETE_CMDID);
+ 	if (ret) {
+@@ -16392,6 +16424,65 @@ static void ath12k_wmi_power_boost_event
+ 		   ev->phy_mode, ev->size);
+ }
+ 
++static long int
++ath12k_wmi_delete_all_peer_resp_pull(struct ath12k_base *ab,
++				     struct sk_buff *skb,
++				     struct wmi_delete_all_peer_resp_arg *arg)
++{
++	const void **tb;
++	const struct wmi_delete_all_peer_resp_ev *ev;
++	long int ret;
++
++	tb = ath12k_wmi_tlv_parse_alloc(ab, skb->data, skb->len, GFP_ATOMIC);
++	if (IS_ERR(tb)) {
++		ret = PTR_ERR(tb);
++		ath12k_warn(ab, "failed to parse tlv: %ld\n", ret);
++		return ret;
++	}
++
++	ev = tb[WMI_VDEV_DELETE_ALL_PEER_RESP_EVENT_FIXED_PARAM];
++	if (!ev) {
++		ath12k_warn(ab, "failed to fetch peer delete all resp ev");
++		kfree(tb);
++		return -EPROTO;
++	}
++
++	arg->vdev_id = __le32_to_cpu(ev->vdev_id);
++	arg->status = __le32_to_cpu(ev->status);
++
++	kfree(tb);
++	return 0;
++}
++
++static void
++ath12k_wmi_delete_all_peer_resp_event(struct ath12k_base *ab, struct sk_buff *skb)
++{
++	struct ath12k *ar;
++	struct wmi_delete_all_peer_resp_arg arg = {};
++
++	if (ath12k_wmi_delete_all_peer_resp_pull(ab, skb, &arg)) {
++		ath12k_warn(ab, "failed to parse vdev delete all peer response\n");
++		return;
++	}
++
++	rcu_read_lock();
++	ar = ath12k_mac_get_ar_by_vdev_id(ab, arg.vdev_id);
++	if (!ar) {
++		ath12k_warn(ab, "invalid vdev id in vdev delete resp ev %d",
++			    arg.vdev_id);
++		rcu_read_unlock();
++		return;
++	}
++
++	if (arg.status)
++		complete(&ar->delete_all_peer_done);
++
++	rcu_read_unlock();
++
++	ath12k_dbg(ab, ATH12K_DBG_PEER, "Delete all peer response status:%d for vdev:%d\n",
++		    arg.status, arg.vdev_id);
++}
++
+ static void ath12k_wmi_op_rx(struct ath12k_base *ab, struct sk_buff *skb)
+ {
+ 	struct wmi_cmd_hdr *cmd_hdr;
+@@ -16604,6 +16695,10 @@ static void ath12k_wmi_op_rx(struct ath1
+ 	case WMI_PDEV_POWER_BOOST_EVENTID:
+ 		ath12k_wmi_power_boost_event(ab, skb);
+ 		break;
++	case WMI_VDEV_DELETE_ALL_PEER_RESP_EVENTID:
++		ath12k_wmi_delete_all_peer_resp_event(ab, skb);
++		break;
++
+ 	/* TODO: Add remaining events */
+ 	default:
+ 		ath12k_dbg(ab, ATH12K_DBG_WMI, "Unknown eventid: 0x%x\n", id);
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -945,6 +945,7 @@ enum wmi_tlv_event_id {
+ 	WMI_VDEV_DELETE_RESP_EVENTID,
+ 	WMI_VDEV_ENCRYPT_DECRYPT_DATA_RESP_EVENTID,
+ 	WMI_VDEV_ADD_MAC_ADDR_TO_RX_FILTER_STATUS_EVENTID,
++	WMI_VDEV_DELETE_ALL_PEER_RESP_EVENTID = WMI_VDEV_ADD_MAC_ADDR_TO_RX_FILTER_STATUS_EVENTID + 10,
+ 	WMI_PEER_STA_KICKOUT_EVENTID = WMI_TLV_CMD(WMI_GRP_PEER),
+ 	WMI_PEER_INFO_EVENTID,
+ 	WMI_PEER_TX_FAIL_CNT_THR_EVENTID,
+@@ -2192,6 +2193,8 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_PDEV_PEER_PKTLOG_FILTER_INFO,
+ 	WMI_TAG_PEER_CFR_CAPTURE_EVENT = 0x317,
+ 	WMI_TAG_MUEDCA_PARAMS_CONFIG_EVENT = 0x32a,
++	WMI_TAG_VDEV_DELETE_ALL_PEER_FIXED_PARAMS = 0x32F,
++	WMI_VDEV_DELETE_ALL_PEER_RESP_EVENT_FIXED_PARAM = 0x330,
+ 	WMI_TAG_CFR_CAPTURE_PHASE_PARAM = 0x33b,
+ 	WMI_TAG_SERVICE_READY_EXT2_EVENT = 0x334,
+ 	WMI_TAG_FILS_DISCOVERY_TMPL_CMD = 0x344,
+@@ -3469,6 +3472,22 @@ struct wmi_vdev_down_cmd {
+ 	__le32 vdev_id;
+ } __packed;
+ 
++struct ath12k_peer_delete_all_cmd {
++	__le32 tlv_header;
++	__le32 vdev_id;
++	__le32 peer_type_bitmap;
++} __packed;
++
++struct wmi_delete_all_peer_resp_arg {
++	u32 vdev_id;
++	u32 status;
++};
++
++struct wmi_delete_all_peer_resp_ev {
++	__le32 vdev_id;
++	__le32 status;
++} __packed;
++
+ #define WMI_VDEV_START_HIDDEN_SSID  BIT(0)
+ #define WMI_VDEV_START_PMF_ENABLED  BIT(1)
+ #define WMI_VDEV_START_LDPC_RX_ENABLED BIT(3)
+@@ -9356,4 +9375,5 @@ int ath12k_wmi_send_wsi_stats_info(struc
+ 
+ int ath12k_wmi_pdev_enable_telemetry_stats(struct ath12k_base *ab,
+ 					   struct ath12k *ar);
++int ath12k_wmi_peer_delete_all(struct ath12k_link_vif *arvif);
+ #endif

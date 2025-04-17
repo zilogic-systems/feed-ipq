@@ -23,7 +23,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 
 --- a/include/linux/ieee80211.h
 +++ b/include/linux/ieee80211.h
-@@ -2086,6 +2086,9 @@ struct ieee80211_eht_cap_elem {
+@@ -2208,6 +2208,9 @@ struct ieee80211_eht_cap_elem {
  #define IEEE80211_EHT_OPER_GROUP_ADDRESSED_BU_IND_LIMIT         0x08
  #define IEEE80211_EHT_OPER_GROUP_ADDRESSED_BU_IND_EXP_MASK      0x30
  
@@ -49,7 +49,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
  	if (skb_tailroom(skb) < len)
  		return -ENOMEM;
-@@ -993,6 +996,7 @@ ieee80211_mesh_build_beacon(struct ieee8
+@@ -996,6 +999,7 @@ ieee80211_mesh_build_beacon(struct ieee8
  	u8 *pos;
  	struct ieee80211_sub_if_data *sdata;
  	int hdr_len = offsetofend(struct ieee80211_mgmt, u.beacon);
@@ -57,7 +57,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
  	sdata = container_of(ifmsh, struct ieee80211_sub_if_data, u.mesh);
  	rcu_read_lock();
-@@ -1004,6 +1008,10 @@ ieee80211_mesh_build_beacon(struct ieee8
+@@ -1007,6 +1011,10 @@ ieee80211_mesh_build_beacon(struct ieee8
  						NL80211_IFTYPE_MESH_POINT);
  	ie_len_eht_cap = ieee80211_ie_len_eht_cap(sdata,
  						  NL80211_IFTYPE_MESH_POINT);
@@ -68,7 +68,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	head_len = hdr_len +
  		   2 + /* NULL SSID */
  		   /* Channel Switch Announcement */
-@@ -1028,8 +1036,9 @@ ieee80211_mesh_build_beacon(struct ieee8
+@@ -1031,8 +1039,9 @@ ieee80211_mesh_build_beacon(struct ieee8
  			   sizeof(struct ieee80211_he_6ghz_oper) +
  		   2 + 1 + sizeof(struct ieee80211_he_6ghz_capa) +
  		   ie_len_eht_cap +
@@ -122,7 +122,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		eht_oper->params |=
  			  IEEE80211_EHT_OPER_DISABLED_SUBCHANNEL_BITMAP_PRESENT;
  
- 		eht_oper_info->optional[0] = chandef->ru_punct_bitmap && 0x00FF;
+ 		eht_oper_info->optional[0] = chandef->ru_punct_bitmap & 0x00FF;
  		eht_oper_info->optional[1] = chandef->ru_punct_bitmap >> 8;
 -
 -		eht_oper->optional[3] = eht_oper_info->optional[0];

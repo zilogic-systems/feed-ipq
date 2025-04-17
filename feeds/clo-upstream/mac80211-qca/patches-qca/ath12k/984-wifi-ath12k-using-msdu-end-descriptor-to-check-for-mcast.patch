@@ -1,0 +1,50 @@
+From 2c9b1f34e6a0a6ffe78eb6ae305c2b85c9b26b57 Mon Sep 17 00:00:00 2001
+From: Sarika Sharma <quic_sarishar@quicinc.com>
+Date: Mon, 2 Sep 2024 15:43:14 +0530
+Subject: [PATCH] wifi: ath12k: using msdu end descriptor to check for
+ multicast packets
+
+Currently multicast broadcast packet checking is done using the bit 15
+from info6 of mpdu start descriptor.
+But, this bit is not set for multicast packets and bit 9 from info5 of
+msdu end is set for multicast packets.
+
+Hence, checking for bit 9 from info5 of msdu end descriptor for
+multicast or broadcast packets.
+
+patch-depedency: none
+
+Signed-off-by: Sarika Sharma <quic_sarishar@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/hal.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/hal.c b/drivers/net/wireless/ath/ath12k/hal.c
+index 01e8119..54950e7 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -470,8 +470,8 @@ static u8 *ath12k_hw_qcn9274_rx_desc_mpdu_start_addr2(struct hal_rx_desc *desc)
+ 
+ static bool ath12k_hw_qcn9274_rx_desc_is_da_mcbc(struct hal_rx_desc *desc)
+ {
+-	return __le32_to_cpu(desc->u.qcn9274.mpdu_start.info6) &
+-	       RX_MPDU_START_INFO6_MCAST_BCAST;
++	return __le32_to_cpu(desc->u.qcn9274.msdu_end.info5) &
++	       RX_MSDU_END_INFO5_DA_IS_MCBC;
+ }
+ 
+ static void ath12k_hw_qcn9274_rx_desc_get_dot11_hdr(struct hal_rx_desc *desc,
+@@ -841,8 +841,8 @@ static void ath12k_hw_qcn9274_get_rx_desc_info(struct hal_rx_desc *desc,
+ 
+ 	rx_info->is_mcbc = ((!!le16_get_bits(desc->u.qcn9274.msdu_end.info5,
+ 			    RX_MSDU_END_INFO5_FIRST_MSDU)) &&
+-			    (__le32_to_cpu(desc->u.qcn9274.mpdu_start.info6) &
+-			    RX_MPDU_START_INFO6_MCAST_BCAST));
++			    (__le32_to_cpu(desc->u.qcn9274.msdu_end.info5) &
++			    RX_MSDU_END_INFO5_DA_IS_MCBC));
+ 
+ 	rx_info->peer_id = le16_get_bits(desc->u.qcn9274.mpdu_start.sw_peer_id,
+ 					 RX_MPDU_START_SW_PEER_ID_PEER);
+-- 
+2.34.1
+

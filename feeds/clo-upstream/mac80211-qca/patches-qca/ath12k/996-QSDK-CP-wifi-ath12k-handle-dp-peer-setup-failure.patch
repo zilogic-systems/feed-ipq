@@ -1,0 +1,116 @@
+From f3c29b9d4b301008772439cc02efbdac9aaa9ca7 Mon Sep 17 00:00:00 2001
+From: Harshitha Prem <quic_hprem@quicinc.com>
+Date: Thu, 2 Jan 2025 15:55:49 +0530
+Subject: [PATCH] QSDK:CP:wifi:ath12k: handle dp peer setup failure
+
+Even when peer is not found during dp peer setup, sta state machine
+is trying to send the peer assoc command which leads to a null pointer
+crash as the sta entry is not available in driver.
+
+Handle failure case for dp peer setup and add debug logs in case
+of peer link removal.
+
+Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 31 ++++++++++++++++++++++-----
+ 1 file changed, 26 insertions(+), 5 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -8890,7 +8890,7 @@ int ath12k_mac_create_bridge_peer(struct
+ 	mutex_lock(&ar->conf_mutex);
+ 	ret = ath12k_mac_station_add(ar, arvif, arsta);
+ 	if (ret) {
+-		ath12k_warn(ar->ab, "Failed to add station: %pM for VDEV: %d\n",
++		ath12k_warn(ar->ab, "Failed to add bridge station: %pM for VDEV: %d\n",
+ 			    arsta->addr, arvif->vdev_id);
+ 		ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
+ 	}
+@@ -8987,9 +8987,12 @@ static int ath12k_mac_station_remove(str
+ exit:
+ 	ath12k_cfr_decrement_peer_count(ar, arsta);
+ 
+-	if (sta->valid_links)
++	if (sta->valid_links) {
++		ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "unassign link id %d for sta %pM",
++			   arsta->link_id, sta->addr);
+ 		ath12k_mac_free_unassign_link_sta(arvif->ahvif->ah,
+ 						  arsta->ahsta, arsta->link_id);
++	}
+ 
+  	return ret;
+ }
+@@ -9048,6 +9051,8 @@ static void ath12k_mac_ml_station_remove
+ 			ath12k_mac_dec_num_stations(arvif, arsta);
+ 		}
+ 
++		ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "unassign link sta %pM with link id %d\n",
++			   arsta->addr, link_id);
+ 		ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
+ 	}
+ 
+@@ -9116,9 +9121,11 @@ static int ath12k_mac_handle_link_sta_st
+ 		    new_state == IEEE80211_STA_ASSOC) {
+ 
+ 		ret = ath12k_dp_peer_setup(ar, arvif, arsta);
+-		if (ret)
++		if (ret) {
+ 			ath12k_warn(ar->ab, "failed to setup dp for peer %pM on vdev %i (%d)\n",
+ 					arsta->addr, arvif->vdev_id, ret);
++			goto out;
++		}
+ 
+ 		ath12k_dp_peer_default_route_setup(ar, arvif, arsta);
+ 
+@@ -9160,6 +9167,7 @@ static int ath12k_mac_handle_link_sta_st
+ 				    arsta->addr);
+ 	}
+ 
++out:
+ 	mutex_unlock(&ar->conf_mutex);
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "mac sta %pM old state %d new state :%d\n",
+@@ -9479,6 +9487,8 @@ int ath12k_mac_update_sta_state(struct i
+ 			if (ret)
+ 				ath12k_err(arvif->ar->ab, "Removed STA %pM for vdev %d with an error: %d.\n",
+ 					    arsta->addr, arvif->vdev_id, ret);
++			ath12k_dbg(arvif->ar->ab, ATH12K_DBG_PEER, "Remove non-ML sta %pM",
++				   arsta->addr);
+ 			mutex_unlock(&arvif->ar->conf_mutex);
+ 		} else {
+ 			ret = ath12k_mac_handle_link_sta_state(hw, arvif, arsta,
+@@ -9640,6 +9650,9 @@ int ath12k_mac_update_sta_state(struct i
+ 				/* Unassign this link sta which couldnt be added to FW and
+ 				 * cleanup the other link stations added earlier
+ 				 */
++				ath12k_dbg(arvif->ar->ab, ATH12K_DBG_PEER, "unassign sta %pM with link id %d\n",
++					   sta->addr, link_id);
++
+ 				ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
+ 				ath12k_mac_ml_station_remove(ahvif, ahsta);
+ 			}
+@@ -9804,11 +9817,13 @@ static int ath12k_mac_op_change_sta_link
+ 				continue;
+ 			}
+ 
++			ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "change sta %pM link_id %d",
++				   sta->addr, link_id);
+ 			mutex_lock(&ar->conf_mutex);
+ 			ret = ath12k_mac_station_add(ar, arvif, arsta);
+ 			if (ret) {
+ 				mutex_unlock(&ar->conf_mutex);
+-				ath12k_warn(ar->ab, "Failed to add station: %pM for VDEV: %d\n",
++				ath12k_warn(ar->ab, "Failed to add change station: %pM for VDEV: %d\n",
+ 					    arsta->addr, arvif->vdev_id);
+ 				ath12k_mac_free_unassign_link_sta(ah, ahsta, link_id);
+ 				break;
+@@ -9886,6 +9901,9 @@ static int ath12k_mac_op_change_sta_link
+ 				ath12k_warn(ar->ab, "Failed to disassoc station: %pM for VDEV: %d\n",
+ 					    arsta->addr, arvif->vdev_id);
+ 
++			ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "Remove %s station of %pM link_id %d\n",
++				   sta->mlo ? "ML" : "Non-ML", sta->addr, link_id);
++
+ 			ret = ath12k_mac_station_remove(ar, arvif, arsta);
+ 			if (ret)
+ 				ath12k_warn(ar->ab, "Failed to remove station: %pM for VDEV: %d\n",

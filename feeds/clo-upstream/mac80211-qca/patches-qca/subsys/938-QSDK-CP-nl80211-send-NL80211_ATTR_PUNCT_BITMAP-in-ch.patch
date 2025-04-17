@@ -1,0 +1,32 @@
+From 99667495d2acd5568fed3d45fe300f97fdaecaf4 Mon Sep 17 00:00:00 2001
+From: Aloka Dixit <aloka.dixit@oss.qualcomm.com>
+Date: Tue, 14 Jan 2025 10:36:27 -0800
+Subject: [PATCH] QSDK:CP:nl80211: send NL80211_ATTR_PUNCT_BITMAP in chandef
+
+Send NL80211_ATTR_PUNCT_BITMAP in nl80211_send_chandef() which
+currently sends the same bitmap using NL80211_ATTR_RU_PUNCT_BITMAP
+attribute. The latter will be removed in a separate change.
+
+Patch-dependency: none
+
+Signed-off-by: Aloka Dixit <aloka.dixit@oss.qualcomm.com>
+---
+ net/wireless/nl80211.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/net/wireless/nl80211.c b/net/wireless/nl80211.c
+index 9fcb53ff1d86..322d308e22bd 100644
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -4300,6 +4300,8 @@ int nl80211_send_chandef(struct sk_buff *msg, const struct cfg80211_chan_def *ch
+ 		if (nla_put_u16(msg, NL80211_ATTR_RU_PUNCT_BITMAP,
+ 		    chandef->ru_punct_bitmap))
+ 			return -ENOBUFS;
++		if (nla_put_u16(msg, NL80211_ATTR_PUNCT_BITMAP, chandef->ru_punct_bitmap))
++			return -ENOBUFS;
+ 	}
+ 
+ 	if (nla_put_u16(msg, NL80211_ATTR_RADAR_BITMAP, chandef->radar_bitmap))
+-- 
+2.34.1
+

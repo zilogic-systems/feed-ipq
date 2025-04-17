@@ -1,0 +1,69 @@
+From 8781548b2a67354218c39b26d7bd599123407761 Mon Sep 17 00:00:00 2001
+From: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
+Date: Wed, 5 Feb 2025 16:19:11 +0530
+Subject: [PATCH] QSDK:PLATFORM: Collect the UserPD dumps before going for panic in failsafe mode
+
+Collect crashed UserPD dumps during subsequent FW crash for FW debugging.
+Since the crashed UserPD process gets killed when recovery flag is set,
+during panic case TLB entries are not present for the crashed UserPD instance
+in full dump.
+
+To avoid this, collect the crashed UserPD minidump before invoking the kernel
+panic. This minidump will contain the crash instance for FW debugging. SCM
+call is invoked in userPD power down to flush cache entries before collecting
+the UserPD coredump. This will help in avoiding error during the dump parsing.
+Decrement the number of UserPD count only during shutdown and rmmod case,
+this is required to bring down the RootPD which is not required for the crash
+scenario.
+
+Signed-off-by: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -3562,6 +3562,19 @@ static void ath12k_core_reset(struct wor
+ 		 */
+ 		ath12k_warn(ab, "already resetting count %d\n", reset_count);
+ 
++		/* Need to collect the UserPD dumps during the subsequent FW crash since
++		 * crashed UserPD will get cleared during BUG_ON
++		 */
++		if (ab->hif.bus != ATH12K_BUS_PCI) {
++			struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
++
++			ath12k_info(ab, "Collecting the userpd dumps before full crash\n");
++			if (ab_ahb->crash_type == ATH12K_RPROC_USERPD_CRASH) {
++				ath12k_hif_power_down(ab);
++				ath12k_coredump_ahb_collect(ab);
++			}
++		}
++
+ 		if (ath12k_ssr_failsafe_mode && ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0)
+ 			BUG_ON(1);
+ 
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -595,8 +595,12 @@ static void ath12k_ahb_power_down(struct
+ 		}
+ 
+ 		qcom_smem_state_update_bits(ab_ahb->stop_state, BIT(ab_ahb->stop_bit), 0);
++		ab->ag->num_userpd_started--;
+ 	}
+ 
++	/* SCM callback is invoked in UserPD power down to flush cache entries
++	 * before collecting the coredump.
++	 */
+ 	if (ab_ahb->scm_auth_enabled) {
+ 		pasid = (u32_encode_bits(ab_ahb->userpd_id, ATH12K_USERPD_ID_MASK)) |
+ 			ATH12K_AHB_UPD_SWID;
+@@ -608,8 +612,6 @@ static void ath12k_ahb_power_down(struct
+ 				   ab_ahb->userpd_id);
+ 	}
+ 
+-	ab->ag->num_userpd_started--;
+-
+ 	/* Turn off rootPD during rmmod and shutdown only. RootPD is handled
+ 	 * by RProc driver in case of recovery
+ 	 */

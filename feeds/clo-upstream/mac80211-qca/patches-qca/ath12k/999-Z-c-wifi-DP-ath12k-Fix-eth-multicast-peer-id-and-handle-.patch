@@ -1,0 +1,151 @@
+From f5ed5f6db65c29c280a92ada4a25a8a7fb90a942 Mon Sep 17 00:00:00 2001
+From: Tamizh Chelvam Raja <quic_tamizhr@quicinc.com>
+Date: Mon, 17 Feb 2025 14:45:09 +0530
+Subject: [PATCH] wifi:DP:ath12k: Fix eth multicast peer id and handle
+ duplicate desc
+
+In eth wds multicast frame HAL_TCL_DATA_CMD_INFO4_SEARCH_INDEX
+is being filled with sw peer id and hardware expects hw peer id.
+Fix it by sending hw peer id for the multicast packet
+
+Add new flag in tx_desc flag to check valid tx_desc. Set valid flag at
+tx side and check the same flag at completion side, followed by clear the
+valid flag after adding the tx dec to free list
+
+Signed-off-by: Tamizh Chelvam Raja <quic_tamizhr@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h  |  1 +
+ drivers/net/wireless/ath/ath12k/dp.h    |  7 +++++-
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 31 ++++++++++++++++---------
+ 3 files changed, 27 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 689a766..68287e5 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1498,6 +1498,7 @@ struct ath12k_soc_dp_stats {
+ 	u32 non_fast_mcast_rx[DP_REO_DST_RING_MAX][ATH12K_MAX_SOCS];
+ 	u32 eapol_rx[DP_REO_DST_RING_MAX][ATH12K_MAX_SOCS];
+ 	u32 rx_wbm_rel_source[HAL_WBM_REL_SRC_MODULE_MAX] [ATH12K_MAX_SOCS];
++	u32 duplicate_tx_desc[MAX_TCL_RING];
+ 
+ 	u32 tx_mcast[MAX_TCL_RING];
+ 	u32 tx_unicast[MAX_TCL_RING];
+diff --git a/drivers/net/wireless/ath/ath12k/dp.h b/drivers/net/wireless/ath/ath12k/dp.h
+index f8afa79..77c7add 100644
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -353,6 +353,7 @@ struct ath12k_rx_desc_info {
+ } __attribute__ ((aligned(L1_CACHE_BYTES)));
+ 
+ #define DP_TX_DESC_FLAG_FAST     0x1
++#define DP_TX_DESC_VALID         0x2
+ 
+ struct ath12k_tx_desc_info {
+ 	struct list_head list;
+@@ -361,11 +362,15 @@ struct ath12k_tx_desc_info {
+ 	u32 desc_id; /* Cookie */
+ 	u8 mac_id : 5,
+ 	   in_use : 1,
+-	   flags  : 1;
++	   flags  : 2;
+ 	u8 pool_id;
+ 	ktime_t timestamp;
+ }__attribute__ ((aligned(L1_CACHE_BYTES)));
+ 
++#define ATH12K_DESC_VALID_SET(tx_desc)    tx_desc->flags |= DP_TX_DESC_VALID
++#define ATH12K_DESC_VALID_CHECK(tx_desc)  tx_desc->flags & DP_TX_DESC_VALID
++#define ATH12K_DESC_VALID_CLEAR(tx_desc)  tx_desc->flags &= ~(DP_TX_DESC_VALID)
++
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ struct ath12k_ppeds_tx_desc_info {
+ 	struct list_head list;
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index 3fb5e91..8ad8892 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -345,6 +345,8 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 	else
+ 		tx_desc->flags = 0;
+ 
++	ATH12K_DESC_VALID_SET(tx_desc);
++
+ 	tx_desc->skb = skb;
+ 	tx_desc->mac_id = desc->mac_id;
+ 
+@@ -499,7 +501,7 @@ int ath12k_dp_tx(struct ath12k *ar, struct ath12k_link_vif *arvif,
+ 		ti.meta_data_flags = arsta->tcl_metadata;
+ 		peer_id = u16_get_bits(ti.meta_data_flags, HTT_TCL_META_DATA_PEER_ID_MISSION);
+ 		info4 = FIELD_PREP(HAL_TCL_DATA_CMD_INFO4_IDX_LOOKUP_OVERRIDE, 1);
+-		info4 |= FIELD_PREP(HAL_TCL_DATA_CMD_INFO4_SEARCH_INDEX, peer_id);
++		info4 |= FIELD_PREP(HAL_TCL_DATA_CMD_INFO4_SEARCH_INDEX, arsta->ast_idx);
+ 		info4 |= FIELD_PREP(HAL_TCL_DATA_CMD_INFO4_CACHE_SET_NUM,
+ 					(arsta->ast_hash & 0xF));
+ 		skip_meta_data_flag = true;
+@@ -659,6 +661,7 @@ skip_htt_meta:
+ 	tx_desc->mac_id = ar->pdev_idx;
+ 	tx_desc->timestamp = ktime_get_real();
+ 	tx_desc->flags = 0;
++	ATH12K_DESC_VALID_SET(tx_desc);
+ 	ti.desc_id = tx_desc->desc_id;
+ 	ti.data_len = skb->len;
+ 	skb_cb->paddr = ti.paddr;
+@@ -1642,7 +1645,7 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 	struct list_head desc_free_list, *cur;
+ 	struct sk_buff *msdu;
+ 	u8 mac_id;
+-	u64 desc_va;
++	u64 desc_va = 0;
+ 	u32 desc_id, tp, hp;
+ 	int valid_entries;
+ 	int orig_budget = budget;
+@@ -1652,7 +1655,7 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 	int dp_tx_dec_count[MAX_RADIOS] = {0};
+ 	struct ath12k_pdev *pdevs = ab->pdevs;
+ 	struct htt_tx_wbm_completion *status_desc;
+-	int htt_status;
++	int htt_status = 0;
+ 	int i;
+ 
+ 	INIT_LIST_HEAD(&desc_free_list);
+@@ -1709,16 +1712,18 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 			continue;
+ 		}
+ 
+-		list_add_tail(&tx_desc->list, &desc_free_list);
+-
+ 		msdu = tx_desc->skb;
+-                mac_id = tx_desc->mac_id;
+-
+-		if (unlikely(!msdu)) {
+-			ab->soc_stats.null_tx_complete[data_ring_id]++;
+ 
+-			ath12k_dbg_dump(ab, ATH12K_DBG_DP_TX, NULL, "Null msdu: ",
+-					tx_status, sizeof(*tx_status));
++		if (unlikely(!(ATH12K_DESC_VALID_CHECK(tx_desc))) || unlikely(!msdu)) {
++			if (!(ATH12K_DESC_VALID_CHECK(tx_desc))) {
++				ab->soc_stats.duplicate_tx_desc[data_ring_id]++;
++				ath12k_warn(ab, "Invalid tx desc rel_source:%d htt_status:%d desc_va:%llu", buf_rel_source,
++					    htt_status, desc_va);
++				ath12k_dbg_dump(ab, ATH12K_DBG_DP_TX, NULL, "Invalid tx_desc: ",
++						tx_status, sizeof(*tx_status));
++			} else {
++				ab->soc_stats.null_tx_complete[data_ring_id]++;
++			}
+ 
+ 			if (ath12k_debug_critical)
+ 				BUG_ON(1);
+@@ -1726,6 +1731,10 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 			continue;
+ 		}
+ 
++		mac_id = tx_desc->mac_id;
++		ATH12K_DESC_VALID_CLEAR(tx_desc);
++		list_add_tail(&tx_desc->list, &desc_free_list);
++
+ #ifndef CONFIG_IO_COHERENCY
+ 		if (last_pf_sw_desc) {
+ 			prefetch((u8 *)(last_pf_sw_desc->skb) + offsetof(struct sk_buff, headers));
+-- 
+2.34.1
+

@@ -27,7 +27,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -4689,6 +4689,13 @@ static int ath12k_mac_config_obss_pd(str
+@@ -4705,6 +4705,13 @@ static int ath12k_mac_config_obss_pd(str
  	return 0;
  }
  
@@ -41,7 +41,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  void ath12k_mac_bss_info_changed(struct ath12k *ar,
  				 struct ath12k_link_vif *arvif,
  				 struct ieee80211_bss_conf *info,
-@@ -4711,12 +4718,36 @@ void ath12k_mac_bss_info_changed(struct
+@@ -4727,12 +4734,36 @@ void ath12k_mac_bss_info_changed(struct
  	u32 rate;
  	bool color_collision_detect;
  	u8 link_id = arvif->link_id;
@@ -80,7 +80,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/vendor.c
 +++ b/drivers/net/wireless/ath/ath12k/vendor.c
-@@ -1899,6 +1899,109 @@ void ath12k_erp_deinit(void)
+@@ -2007,6 +2007,112 @@ void ath12k_erp_deinit(void)
  	mutex_destroy(&erp_sm.lock);
  }
  
@@ -121,6 +121,9 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
 +		    NL80211_BAND_6GHZ)
 +			break;
 +	}
++
++	if (link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
++		return -EINVAL;
 +
 +	ar = ath12k_get_ar_from_wdev(wdev, link_id);
 +	if (!ar)
@@ -190,7 +193,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  static struct wiphy_vendor_command ath12k_vendor_commands[] = {
  	{
  		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-@@ -1949,6 +2052,14 @@ static struct wiphy_vendor_command ath12
+@@ -2057,6 +2163,14 @@ static struct wiphy_vendor_command ath12
  		.maxattr = QCA_WLAN_VENDOR_ATTR_SCS_RULE_CONFIG_MAX,
  		.flags = WIPHY_VENDOR_CMD_NEED_NETDEV,
  	},
@@ -205,7 +208,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  };
  
  static const struct nl80211_vendor_cmd_info ath12k_vendor_events[] = {
-@@ -1962,6 +2073,10 @@ static const struct nl80211_vendor_cmd_i
+@@ -2070,6 +2184,10 @@ static const struct nl80211_vendor_cmd_i
  		.vendor_id = QCA_NL80211_VENDOR_ID,
  		.subcmd = QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC,
  	},
@@ -235,7 +238,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  };
  
  #ifdef CPTCFG_ATH12K_SAWF
-@@ -702,4 +706,63 @@ enum qca_wlan_vendor_attr_erp_ath_config
+@@ -706,4 +710,63 @@ enum qca_wlan_vendor_attr_erp_ath_config
  			QCA_WLAN_VENDOR_ATTR_ERP_CONFIG_AFTER_LAST - 1,
  };
  

@@ -29,7 +29,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -3372,8 +3372,10 @@ static void ath12k_core_upd_rproc_boot_r
+@@ -3402,8 +3402,10 @@ static void ath12k_core_upd_rproc_boot_r
  	 * Free Target memory chunk
  	 * Start root pd
  	 */
@@ -40,7 +40,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +	}
  
  	ath12k_qmi_free_target_mem_chunk(ab);
- 
+ 	ab_ahb->crash_type = ATH12K_NO_CRASH;
 --- a/drivers/net/wireless/ath/ath12k/coredump.c
 +++ b/drivers/net/wireless/ath/ath12k/coredump.c
 @@ -6,6 +6,10 @@
@@ -71,7 +71,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  			return 0;
  		}
  
-@@ -513,3 +518,241 @@ send_resp:
+@@ -513,3 +518,263 @@ send_resp:
         if (ret < 0)
                 ath12k_warn(ab, "qmi M3 dump upload done failed\n");
  }
@@ -83,7 +83,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +
 +static void *ath12k_coredump_find_ahb_segment(loff_t user_offset,
 +					      struct ath12k_ahb_dump_segment *segment,
-+					      int num_seg, size_t *data_left)
++					      int num_seg, unsigned long *data_left)
 +{
 +	int i;
 +
@@ -149,6 +149,22 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +	struct ath12k_elf_coredump_state *elf_dump_state = data;
 +
 +	complete(&elf_dump_state->dump_done);
++}
++
++static void ath12k_coredump_free_seg_info(struct ath12k_base *ab, void *segment,
++                     int num_phdr)
++{
++	struct ath12k_ahb_dump_segment *seg_info = segment;
++	int index;
++
++	if (!seg_info)
++		return;
++
++	for (index = 0; index < num_phdr - 1; index++) {
++		if (seg_info && seg_info->vaddr)
++			devm_iounmap(ab->dev, seg_info->vaddr);
++		seg_info++;
++	}
 +}
 +
 +static int ath12k_coredump_build_seg_info(struct ath12k_base *ab, void *segment,
@@ -221,6 +237,11 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +		seg_info->len = phdr->p_memsz;
 +	}
 +end:
++	/* request_firmware is used to read the headers which has
++	 * the start address this is used form the dump headers.
++	 * however these address are not used for reading the
++	 * coredump contents */
++
 +	release_firmware(fw);
 +	return ret;
 +}
@@ -311,6 +332,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +	wait_for_completion(&elf_dump_state.dump_done);
 +	vfree(elf_dump_state.header);
 +end:
++	ath12k_coredump_free_seg_info(ab, segment, phnum);
 +	kfree(segment);
 +}
 --- a/drivers/net/wireless/ath/ath12k/coredump.h

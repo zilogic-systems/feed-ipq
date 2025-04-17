@@ -23,7 +23,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -13400,6 +13400,8 @@ void ath12k_mac_fill_reg_tpc_info(struct
+@@ -13423,6 +13423,8 @@ void ath12k_mac_fill_reg_tpc_info(struct
                  psd_power, tx_power = 0, eirp_power = 0;
          u16 oper_freq = 0, start_freq = 0, center_freq = 0;
  	u8 reg_6g_power_mode;
@@ -32,7 +32,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  
  	rcu_read_lock();
  
-@@ -13540,7 +13542,21 @@ void ath12k_mac_fill_reg_tpc_info(struct
+@@ -13563,7 +13565,21 @@ void ath12k_mac_fill_reg_tpc_info(struct
                                                             &temp_chan,
                                                             &tx_power,
  							   reg_6g_power_mode);
@@ -55,7 +55,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
  				if (temp_chan) {
  					psd_power = temp_chan->psd;
  					max_tx_power[pwr_lvl_idx] = psd_power;
-@@ -13557,6 +13573,18 @@ void ath12k_mac_fill_reg_tpc_info(struct
+@@ -13580,6 +13596,18 @@ void ath12k_mac_fill_reg_tpc_info(struct
                                                            &tx_power,
  							  reg_6g_power_mode);
                                  max_tx_power[pwr_lvl_idx] = tx_power;
@@ -167,7 +167,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
 +					  struct cfg80211_chan_def *chan_def,
 +					  s8 *tx_power)
 +{
-+	int bw, cfi;
++	int bw = 0, cfi;
 +
 +	if (chan_def->width == NL80211_CHAN_WIDTH_80P80 && pwr_level == 3)
 +		*center_freq = (u16)chan_def->center_freq2;

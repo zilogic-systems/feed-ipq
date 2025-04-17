@@ -28,7 +28,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -7466,41 +7466,6 @@ static void ath12k_mac_station_post_remo
+@@ -7870,41 +7870,6 @@ static void ath12k_mac_station_post_remo
  	ahsta->ahvif = NULL;
  }
  
@@ -70,8 +70,8 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  static int ath12k_mac_station_add(struct ath12k *ar,
  				  struct ath12k_link_vif *arvif,
  				  struct ath12k_link_sta *arsta)
-@@ -7784,6 +7749,47 @@ static int ath12k_mac_free_unassign_link
- 	return 0;
+@@ -8306,6 +8271,47 @@ out_err:
+ 	return ret;
  }
  
 +static int ath12k_mac_station_remove(struct ath12k *ar,
@@ -118,8 +118,8 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  static void ath12k_mac_ml_station_remove(struct ath12k_vif *ahvif,
  				        struct ath12k_sta *ahsta)
  {
-@@ -8028,6 +8034,14 @@ exit:
- 	mutex_unlock(&arvif->ar->conf_mutex);
+@@ -8624,6 +8630,14 @@ static int ath12k_mac_reconfig_ahsta_lin
+ 	return 0;
  }
  
 +/*
@@ -133,7 +133,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  int ath12k_mac_update_sta_state(struct ieee80211_hw *hw,
  				struct ieee80211_vif *vif,
  				struct ieee80211_sta *sta,
-@@ -8075,16 +8089,33 @@ int ath12k_mac_update_sta_state(struct i
+@@ -8672,16 +8686,43 @@ int ath12k_mac_update_sta_state(struct i
  			ret = -EINVAL;
  			goto exit;
  		}
@@ -154,6 +154,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
 -						       old_state, new_state);
 -		if (arvif->ar &&
 -		    test_bit(ATH12K_FLAG_RECOVERY, &arvif->ar->ab->dev_flags))
+-			ret = 0;
 +		    old_state == IEEE80211_STA_NONE) {
 +			if (ahvif->vdev_type == WMI_VDEV_TYPE_STA)
 +				ath12k_vdev_stop_notify(arvif);
@@ -164,13 +165,23 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
 +				ath12k_warn(arvif->ar->ab, "Removed STA %pM for vdev %d with an error: %d.\n",
 +					    arsta->addr, arvif->vdev_id, ret);
 +			mutex_unlock(&arvif->ar->conf_mutex);
-+		} else
++		} else {
 +			ret = ath12k_mac_handle_link_sta_state(hw, arvif, arsta,
 +						       	       old_state, new_state);
-+		if (test_bit(ATH12K_FLAG_RECOVERY, &arvif->ar->ab->dev_flags)) {
-+			ath12k_warn(arvif->ar->ab, "Overwriting error with 0 during recovery after removal of non-ml STA %pM for vdev %d with an error: %d.\n",
-+				    arsta->addr, arvif->vdev_id, ret);
- 			ret = 0;
++		}
++
++		if (ret) {
++			if (test_bit(ATH12K_FLAG_RECOVERY, &arvif->ar->ab->dev_flags)) {
++				/* If FW recovery is ongoing, no need to move down sta states
++				 * as FW will wake up with a clean slate. Hence we set the
++				 * return value to 0, so that upper layers are not aware
++				 * of the FW being in recovery state.
++				 */
++				if (old_state > new_state) {
++					ath12k_warn(arvif->ar->ab, "Overwriting error with 0 during recovery after removal of non-ml STA %pM for vdev %d with an error: %d.\n", arsta->addr, arvif->vdev_id, ret);
++					ret = 0;
++				}
++                        }
 +		}
  
  		mutex_unlock(&ah->conf_mutex);

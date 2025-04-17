@@ -1,0 +1,41 @@
+From 8fb46e78e394db119d0cb25cc907f6aaec74b14b Mon Sep 17 00:00:00 2001
+From: Narendhar Reddy <quic_nare@quicinc.com>
+Date: Wed, 18 Dec 2024 14:01:36 +0530
+Subject: [PATCH] QSDK:PLATFORM mac80211: Prevent wdev registration if wiphy is not registered.
+
+During rmmod, wdev list is cleared,and the wiphy is unregistered.
+However, wdevs are sometimes added after the wiphy has been unregistered,
+leading to a WARN_ON.
+Add a check to ensure that the wiphy is still registered before proceeding 
+with the registration of wireless devices. If the wiphy is not registered,
+trigger a WARN_ON to identify the process attempting to add wireless devices 
+after the wiphy has been unregistered.
+
+Signed-off-by: Narendhar Reddy <quic_nare@quicinc.com>
+---
+ net/mac80211/main.c | 1 +
+ net/wireless/core.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+--- a/net/mac80211/main.c
++++ b/net/mac80211/main.c
+@@ -1691,6 +1691,7 @@ void ieee80211_unregister_hw(struct ieee
+ 	ieee80211_remove_interfaces(local);
+ 
+ 	wiphy_lock(local->hw.wiphy);
++	local->hw.wiphy->registered = false;
+ 	wiphy_delayed_work_cancel(local->hw.wiphy, &local->roc_work);
+ 	wiphy_work_cancel(local->hw.wiphy, &local->sched_scan_stopped_work);
+ 	wiphy_work_cancel(local->hw.wiphy, &local->radar_detected_work);
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -202,6 +202,9 @@ static struct wireless_dev *ieee80211_ad
+ 	struct ieee80211_sub_if_data *sdata;
+ 	int err;
+ 
++	if(!wiphy->registered)
++		return NULL;
++
+ 	err = ieee80211_if_add(local, name, name_assign_type, &wdev, type, params);
+ 	if (err)
+ 		return ERR_PTR(err);

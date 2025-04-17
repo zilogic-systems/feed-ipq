@@ -165,11 +165,11 @@ Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
 +
 +	if (!link_sta) {
 +		ath12k_warn(ar->ab, "unable to access link sta in peer assoc vht set\n");
- 		return;
++		return;
 +	}
 +	vht_cap = &link_sta->vht_cap;
 +	if (WARN_ON(ath12k_mac_vif_chan(vif, &def, link_id))) {
-+		return;
+ 		return;
 +	}
  
  	if (!vht_cap->vht_supported)
@@ -745,7 +745,7 @@ Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
  	ath12k_peer_assoc_h_basic(ar, arvif, arsta, arg);
  	ath12k_peer_assoc_h_crypto(ar, arvif, arsta, arg);
  	ath12k_peer_assoc_h_rates(ar, arvif, arsta, arg);
-@@ -5553,6 +5619,11 @@ static int ath12k_station_assoc(struct a
+@@ -5549,11 +5615,13 @@ static int ath12k_station_assoc(struct a
  	struct cfg80211_bitrate_mask *mask;
  	u8 num_vht_rates, num_he_rates, num_eht_rates, num_ht_rates;
  	u8 link_id = arvif->link_id;
@@ -753,11 +753,16 @@ Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
 +	struct ieee80211_sta_ht_cap ht_cap;
 +	enum ieee80211_sta_rx_bandwidth bandwidth;
 +	u16 he_6ghz_capa;
-+
  
- 	lockdep_assert_held(&ar->conf_mutex);
+-	lockdep_assert_held(&ar->conf_mutex);
  
-@@ -5573,8 +5644,31 @@ static int ath12k_station_assoc(struct a
+-	if (!arvif)
+-		return -EINVAL;
++	lockdep_assert_held(&ar->conf_mutex);
+ 
+ 	if (WARN_ON(ath12k_mac_vif_chan(vif, &def, link_id)))
+ 		return -EPERM;
+@@ -5569,8 +5637,31 @@ static int ath12k_station_assoc(struct a
  	ahsta = (struct ath12k_sta *)sta->drv_priv;
  	arsta = ahsta->link[link_id];
  
@@ -789,7 +794,7 @@ Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
  	peer_arg.is_assoc = true;
  	ret = ath12k_wmi_send_peer_assoc_cmd(ar, &peer_arg);
  	if (ret) {
-@@ -5599,22 +5693,22 @@ static int ath12k_station_assoc(struct a
+@@ -5595,22 +5686,22 @@ static int ath12k_station_assoc(struct a
  	 * specific fixed param.
  	 * Note that all other rates and NSS will be disabled for this peer.
  	 */
@@ -816,7 +821,7 @@ Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
  		ret = ath12k_mac_set_peer_ht_fixed_rate(arvif, arsta, mask,
  							band);
  		if (ret)
-@@ -5628,8 +5722,8 @@ static int ath12k_station_assoc(struct a
+@@ -5624,8 +5715,8 @@ static int ath12k_station_assoc(struct a
  		return 0;
  
  	ret = ath12k_setup_peer_smps(ar, arvif, arsta->addr,
@@ -827,7 +832,7 @@ Signed-off-by: Sriram R <quic_srirrama@quicinc.com>
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to setup peer SMPS for vdev %d: %d\n",
  			    arvif->vdev_id, ret);
-@@ -5655,15 +5749,8 @@ static int ath12k_station_assoc(struct a
+@@ -5651,15 +5742,8 @@ static int ath12k_station_assoc(struct a
  	spin_lock_bh(&ar->data_lock);
  
  	/* Set arsta bw and prev bw */

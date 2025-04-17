@@ -1,0 +1,153 @@
+From da224bd9f63ea8768ea4355d76ad5491c24e806f Mon Sep 17 00:00:00 2001
+From: Hari Chandrakanthan <quic_haric@quicinc.com>
+Date: Mon, 27 Jan 2025 12:12:56 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: optimize ring full condition check
+
+In the dp tx path, the tcl ring full condition with volatile
+access to tail ptr is done for every packet.
+This is not optimal.
+
+The following are known behavior for data path  rings.
+a) tp always follows hp.
+b) ring full condition is not a very frequent event
+(i.e it does not happen for every packet).
+
+Since tp always follows hp, if hp is not equal to last cached tp,
+it means that ring is not full.
+
+Since this condition is sufficient to put a new entry into the ring,
+remove the volatile access of tp for every packet and fetch the real tp only
+if ring full condition is hit with last cached tp.
+
+This change gives ~1200Mbps improvement in 240MHz TBTC case and ~5% improvement
+of CPU in UDP DL in RDP433.
+
+This change gives ~490Mbps improvement in 160MHz TBTC case and ~10% improvement
+of CPU in UDP DL in RDP433.
+
+Patch-depdendency: None
+Patch-work: None
+
+Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 15 ++++----
+ drivers/net/wireless/ath/ath12k/hal.h   | 47 +++++++++++++++++++++++++
+ 2 files changed, 54 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index d8505e7..ac1d564 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -381,14 +381,13 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 	hal_ring_id = ring_id + HAL_SRNG_RING_ID_SW2TCL1;
+ 	tcl_ring = &ab->hal.srng_list[hal_ring_id];
+ 	ATH12K_DP_TCL_RING_LOCK(&tcl_ring->lock);
+-	ath12k_hal_srng_access_src_ring_begin_nolock(tcl_ring);
+ 
+-	hal_tcl_desc = (void *)ath12k_hal_srng_src_get_next_entry_nolock(ab, tcl_ring);
++	hal_tcl_desc = (void *)ath12k_hal_srng_src_begin_get_next_entry_nolock_fast(tcl_ring);
+ 	if (unlikely(!hal_tcl_desc)) {
+ 		/* NOTE: It is highly unlikely we'll be running out of tcl_ring
+ 		 * desc because the desc is directly enqueued onto hw queue.
+ 		 */
+-		ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
++		ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(tcl_ring);
+ 		ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 		ab->soc_stats.tx_err.desc_na[ring_id]++;
+ 		ret = -ENOMEM;
+@@ -399,7 +398,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 
+ 	memcpy(hal_tcl_desc, &tcl_desc, sizeof(tcl_desc));
+ 	dsb(st);
+-	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
++	ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(tcl_ring);
+ 	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+ 	atomic_inc(&ar->dp.num_tx_pending);
+@@ -680,13 +679,13 @@ skip_htt_meta:
+ 	hal_ring_id = tx_ring->tcl_data_ring.ring_id;
+ 	tcl_ring = &ab->hal.srng_list[hal_ring_id];
+ 	ATH12K_DP_TCL_RING_LOCK(&tcl_ring->lock);
+-	ath12k_hal_srng_access_src_ring_begin_nolock(tcl_ring);
+-	hal_tcl_desc = ath12k_hal_srng_src_get_next_entry(ab, tcl_ring);
++
++	hal_tcl_desc = ath12k_hal_srng_src_begin_get_next_entry_nolock_fast(tcl_ring);
+ 	if (unlikely(!hal_tcl_desc)) {
+ 		/* NOTE: It is highly unlikely we'll be running out of tcl_ring
+ 		 * desc because the desc is directly enqueued onto hw queue.
+ 		 */
+-		ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
++		ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(tcl_ring);
+ 		ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 		ab->soc_stats.tx_err.desc_na[ti.ring_id]++;
+ 		ret = -ENOMEM;
+@@ -755,7 +754,7 @@ skip_htt_meta:
+ #endif /* CPTCFG_ATH12K_SAWF */
+ 
+ 	dsb(st);
+-	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
++	ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(tcl_ring);
+ 	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+ 	ath12k_dbg_dump(ab, ATH12K_DBG_DP_TX, NULL, "dp tx msdu: ",
+diff --git a/drivers/net/wireless/ath/ath12k/hal.h b/drivers/net/wireless/ath/ath12k/hal.h
+index 2587914..c3da192 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.h
++++ b/drivers/net/wireless/ath/ath12k/hal.h
+@@ -1369,6 +1369,53 @@ void ath12k_hal_srng_access_lmac_src_ring_end_nolock(struct hal_srng *srng)
+ 	*srng->u.src_ring.hp_addr = srng->u.src_ring.hp;
+ }
+ 
++/*
++ * ath12k_hal_srng_src_begin_get_next_entry_nolock_fast can be used
++ * only when the calling context tries to fill 1 entry of the ring at a time
++ */
++static inline
++void *ath12k_hal_srng_src_begin_get_next_entry_nolock_fast(struct hal_srng *srng)
++{
++	u32 *desc;
++	u32 next_hp;
++
++	/* TODO: Using % is expensive, but we have to do this since size of some
++	 * SRNG rings is not power of 2 (due to descriptor sizes). Need to see
++	 * if separate function is defined for rings having power of 2 ring size
++	 * (TCL2SW, REO2SW, SW2RXDMA and CE rings) so that we can avoid the
++	 * overhead of % by using mask (with &).
++	 */
++	next_hp = (srng->u.src_ring.hp + srng->entry_size) % srng->ring_size;
++
++	if (next_hp == srng->u.src_ring.cached_tp) {
++		srng->u.src_ring.cached_tp = *(volatile u32 *)srng->u.src_ring.tp_addr;
++		if (next_hp == srng->u.src_ring.cached_tp)
++			return NULL;
++	}
++
++	desc = srng->ring_base_vaddr + srng->u.src_ring.hp;
++	srng->u.src_ring.hp = next_hp;
++
++	/* TODO: Reap functionality is not used by all rings. If particular
++	 * ring does not use reap functionality, we need not update reap_hp
++	 * with next_hp pointer. Need to make sure a separate function is used
++	 * before doing any optimization by removing below code updating
++	 * reap_hp.
++	 */
++	srng->u.src_ring.reap_hp = next_hp;
++	return desc;
++}
++
++/*
++ * ath12k_hal_srng_access_umac_src_ring_end_nolock_fast can be used
++ * only when the calling context tries to fill 1 entry of the ring at a time
++ */
++static inline
++void ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(struct hal_srng *srng)
++{
++	writel_relaxed(srng->u.src_ring.hp, srng->u.src_ring.hp_addr_direct);
++	srng->timestamp = jiffies;
++}
+ 
+ ssize_t ath12k_debugfs_hal_dump_srng_stats(struct ath12k_base *ab, char *buf, int size);
+ struct hal_reo_dest_ring *
+-- 
+2.34.1
+

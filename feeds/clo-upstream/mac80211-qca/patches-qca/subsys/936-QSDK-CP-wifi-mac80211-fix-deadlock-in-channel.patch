@@ -1,0 +1,51 @@
+From d9f83019495bbc5b795f9806fe31aad6136b202e Mon Sep 17 00:00:00 2001
+From: Narendhar Reddy <quic_nare@quicinc.com>
+Date: Tue, 10 Dec 2024 11:37:52 +0530
+Subject: [PATCH] QSDK:CP wifi: mac80211: fix deadlock in channel change.
+
+When a channel change command is issued and if
+it fails to finalize channel switch assesment,
+it sends command to stop iface which holds the
+wdev mutex. ieee80211_csa_finalize_work tries to
+acquire the same lock during a call to cancel_work_sync.
+This leads to dead lock. is_going_down variable is not
+updated because of race condition.
+
+Fix this by unlocking mutex before cancelling the work
+and acquire the lock again.
+
+cfg80211_process_wdev_events --> wdev_lock(wdev)
+				(mutex_lock(&wdev->mtx)) held.
+cfg80211_process_wdev_events --> __cfg80211_leave
+                ___cfg80211_stop_ap
+		ieee80211_stop_ap
+		cancel_work_sync(&link->csa_finalize_work);
+ieee80211_csa_finalize_work - mutex_lock(&sdata->wdev.mtx);
+    trying to same acquire wdev mutex lock.
+
+Signed-off-by: Narendhar Reddy <quic_nare@quicinc.com>
+---
+ net/mac80211/cfg.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/net/mac80211/cfg.c b/net/mac80211/cfg.c
+index c9e7b2a..f960e92 100644
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -1909,11 +1909,13 @@ static int ieee80211_stop_ap(struct wiphy *wiphy, struct net_device *dev,
+ 	 * is true, which we have made false above. Hence, it will not proceed
+ 	 * to acquire the sdata lock and deadlock will be avoided.
+ 	 */
++	sdata_unlock(sdata);
+ 	cancel_work_sync(&link->csa_finalize_work);
+ 
+ 	/* see comment above */
+ 	cancel_work_sync(&link->color_change_finalize_work);
+ 
++	sdata_lock(sdata);
+ 	ieee80211_free_next_beacon(link);
+ 
+ 	/* turn off carrier for this interface and dependent VLANs */
+-- 
+2.34.1
+

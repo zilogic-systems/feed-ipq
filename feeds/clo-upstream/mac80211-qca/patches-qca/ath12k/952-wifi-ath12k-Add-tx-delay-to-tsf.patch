@@ -32,7 +32,7 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -462,6 +462,7 @@ struct ath12k_link_vif {
+@@ -467,6 +467,7 @@ struct ath12k_link_vif {
  	int ppe_vp_profile_idx;
  	/* Add per link DS specific information here */
  #endif
@@ -42,7 +42,7 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -1784,6 +1784,15 @@ static void ath12k_mac_setup_bcn_tmpl_vi
+@@ -1809,6 +1809,15 @@ static void ath12k_mac_setup_bcn_tmpl_vi
  				    WLAN_OUI_TYPE_MICROSOFT_WPA,
  				    ies, (skb_tail_pointer(bcn) - ies)))
  		ahvif->wpaie_present = true;
@@ -58,15 +58,15 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
  }
  
  static bool ath12k_mac_setup_bcn_tmpl_nontx_vif_params(struct ath12k_link_vif *tx_arvif,
-@@ -9807,6 +9816,7 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -9903,6 +9912,7 @@ static void ath12k_mac_op_tx(struct ieee
  	struct sk_buff *msdu_copied;
  	struct ieee80211_sta *sta = NULL;
  	struct ath12k_peer *peer;
 +	struct ieee80211_mgmt *mgmt;
  	u32 info_flags;
  	bool is_prb_rsp;
- 	bool is_mcast = false;
-@@ -9899,6 +9909,14 @@ static void ath12k_mac_op_tx(struct ieee
+ 	bool is_mcast = false, is_eth = false;
+@@ -9996,6 +10006,14 @@ static void ath12k_mac_op_tx(struct ieee
  	} else if (ieee80211_is_mgmt(hdr->frame_control)) {
  		frm_type = FIELD_GET(IEEE80211_FCTL_STYPE, hdr->frame_control);
  		is_prb_rsp = ieee80211_is_probe_resp(hdr->frame_control);
@@ -83,7 +83,7 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
  		if (ret) {
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -14662,6 +14662,137 @@ static void ath12k_wmi_parse_cfr_capture
+@@ -14845,6 +14845,142 @@ static void ath12k_wmi_parse_cfr_capture
  			    ret);
  }
  
@@ -135,6 +135,11 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
 +
 +	if (!link_conf) {
 +		ret = -ENOENT;
++		goto exit;
++	}
++
++	if (link_conf->csa_active) {
++		ath12k_warn(ab, "Skip TBTT event since CSA is active\n");
 +		goto exit;
 +	}
 +
@@ -221,7 +226,7 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
  static void ath12k_wmi_op_rx(struct ath12k_base *ab, struct sk_buff *skb)
  {
  	struct wmi_cmd_hdr *cmd_hdr;
-@@ -14769,8 +14900,10 @@ static void ath12k_wmi_op_rx(struct ath1
+@@ -14952,8 +15088,10 @@ static void ath12k_wmi_op_rx(struct ath1
  	case WMI_OFFCHAN_DATA_TX_COMPLETION_EVENTID:
  		ath12k_offchan_tx_completion_event(ab, skb);
  		break;
@@ -235,7 +240,7 @@ Signed-off-by: Dhanavandhana Kannan <quic_dhanavan@quicinc.com>
  	case WMI_TWT_DISABLE_EVENTID:
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -5176,6 +5176,24 @@ struct wmi_vdev_stopped_event {
+@@ -5244,6 +5244,24 @@ struct wmi_vdev_stopped_event {
  	__le32 vdev_id;
  } __packed;
  

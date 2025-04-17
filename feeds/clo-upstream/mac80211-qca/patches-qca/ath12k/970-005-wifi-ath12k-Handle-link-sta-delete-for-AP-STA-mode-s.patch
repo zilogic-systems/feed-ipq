@@ -27,7 +27,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -7823,7 +7823,13 @@ static void ath12k_mac_station_post_remo
+@@ -7897,7 +7897,13 @@ static void ath12k_mac_station_post_remo
  	kfree(arsta->rx_stats);
  	arsta->rx_stats = NULL;
  	ath12k_mac_ap_ps_recalc(ar);
@@ -42,7 +42,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  }
  
  static int ath12k_mac_station_add(struct ath12k *ar,
-@@ -8891,86 +8897,147 @@ static int ath12k_mac_op_change_sta_link
+@@ -9009,86 +9015,171 @@ static int ath12k_mac_op_change_sta_link
  	struct ath12k_hw *ah = hw->priv;
  	struct ath12k *ar;
  	struct ath12k_link_vif *arvif;
@@ -97,6 +97,12 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
 -					if (link_id != ahsta->primary_link_id) {
 -						ahsta->primary_link_id = link_id;
 -						break;
++		if (hweight16(ahsta->links_map) >= ATH12K_WMI_MLO_PEER_MAX_LINKS) {
++			ath12k_err(NULL, "More than 3 links are not supported for ML STA %pM\n", sta->addr);
++			mutex_unlock(&ah->conf_mutex);
++			return -EINVAL;
++		}
++
 +		if ((test_bit(ahvif->primary_link_id, &sta->valid_links))) {
 +			arvif = ahvif->link[ahvif->primary_link_id];
 +			if (arvif->ar->ab->hw_params->is_plink_preferable) {
@@ -209,12 +215,30 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
 +				ieee80211_report_low_ack(sta, ATH12K_REPORT_LOW_ACK_NUM_PKT);
 +				return -EINVAL;
 +			}
- 
-+			if (ath12k_station_unauthorize(ar, arvif, arsta) ||
-+			    ath12k_station_disassoc(ar, arvif, arsta) ||
-+			    ath12k_mac_station_remove(ar, arvif, arsta))
-+				ath12k_warn(ar->ab, "Failed to remove station: %pM for VDEV: %d\n",
++
++			ret = ath12k_station_unauthorize(ar, arvif, arsta);
++			if (ret)
++				ath12k_warn(ar->ab, "Failed to unauth station: %pM for VDEV: %d\n",
 +					    arsta->addr, arvif->vdev_id);
+ 
++			ret = ath12k_station_disassoc(ar, arvif, arsta);
++			if (ret)
++				ath12k_warn(ar->ab, "Failed to disassoc station: %pM for VDEV: %d\n",
++					    arsta->addr, arvif->vdev_id);
++
++			ret = ath12k_mac_station_remove(ar, arvif, arsta);
++			if (ret)
++				ath12k_warn(ar->ab, "Failed to remove station: %pM for VDEV: %d\n",
++					    sta->addr, arvif->vdev_id);
++
++			if (ret) {
++				if (test_bit(ATH12K_FLAG_RECOVERY, &arvif->ar->ab->ag->dev_flags)) {
++					ath12k_info(ar->ab, " overwritting ret %d with 0 for %pM",
++						    ret, arsta->addr);
++					ret = 0;
++				}
++			}
++
 +		} else if (vif->type == NL80211_IFTYPE_STATION) {
 +			if (ath12k_mac_free_unassign_link_sta(ahsta->ahvif->ah, arsta->ahsta,
 +							      arsta->link_id))
@@ -244,7 +268,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	mutex_unlock(&ah->conf_mutex);
  
  	return ret;
-@@ -15167,7 +15234,11 @@ ath12k_mac_unassign_vif_chanctx_handle(s
+@@ -15314,7 +15405,11 @@ ath12k_mac_unassign_vif_chanctx_handle(s
  	}
  
  stop_primary:
@@ -257,7 +281,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  
  	ret = ath12k_mac_vdev_stop(arvif);
  	if (ret)
-@@ -17957,6 +18028,19 @@ exit:
+@@ -18129,6 +18224,19 @@ exit:
  	return ret;
  }
  
@@ -277,7 +301,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  static const struct ieee80211_ops ath12k_ops = {
  	.tx				= ath12k_mac_op_tx,
  	.wake_tx_queue			= ieee80211_handle_wake_tx_queue,
-@@ -18008,6 +18092,7 @@ static const struct ieee80211_ops ath12k
+@@ -18180,6 +18288,7 @@ static const struct ieee80211_ops ath12k
  	.get_txpower			= ath12k_mac_op_get_txpower,
  	.set_radar_background		= ath12k_mac_op_set_radar_background,
  	.link_reconfig_remove		= ath12k_mac_op_link_reconfig_remove,
@@ -287,7 +311,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  static void ath12k_mac_update_ch_list(struct ath12k *ar,
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -6177,15 +6177,20 @@ void ath12k_debugfs_remove_interface(str
+@@ -6476,15 +6476,20 @@ void ath12k_debugfs_remove_interface(str
  		return;
  	}
  

@@ -1,0 +1,190 @@
+From 470b96dd6e8a8026f9e1cb1a7aa4171907914e3e Mon Sep 17 00:00:00 2001
+From: Amith A <amitajit@qti.qualcomm.com>
+Date: Thu, 19 Dec 2024 14:19:07 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL: Replace CAC timeout delayed work with HR
+ timer
+
+Prior initiating communication in a DFS channel, there should be a
+monitoring of RADAR in that channel for a minimum of 600 seconds if it
+is a Weather RADAR channel and 60 seconds for other DFS channels. This
+Channel Availability Check(CAC) is currently implemented by scheduling
+a work item for execution with a delay equal to an appropriate timeout.
+But this work item is observed to take more delay than specified
+(4-5 seconds in regular DFS channels and 25-30 seconds in Weather RADAR
+channels). Even though this delay is expected in case of delayed work
+queue as there is no guarantee that the work will be scheduled exactly
+after the specified delay, a delay of more than 20 seconds is too much
+for the AP to be in non-operational state.
+
+Starting from 4.8 Kernel, Timer wheel implementation has changed for
+better design. This has resulted in loss of accuracy
+(worst case - up to 12.5%). Following is the commit that made the change
+https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=500462a9de657
+This inherent delay is resulting in the delay observed in CAC timeout.
+
+Therefore, to have a better precision for the CAC timeout, use High
+Resolution(HR) timer instead of delayed work queue.
+
+Signed-off-by: Amith A <amitajit@qti.qualcomm.com>
+---
+ net/mac80211/cfg.c         | 11 ++++++-----
+ net/mac80211/ieee80211_i.h |  6 ++++--
+ net/mac80211/iface.c       |  3 ++-
+ net/mac80211/link.c        |  8 ++++----
+ net/mac80211/mlme.c        | 19 ++++++++++++++-----
+ net/mac80211/util.c        |  2 +-
+ 6 files changed, 31 insertions(+), 18 deletions(-)
+
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -1977,7 +1977,9 @@ static int ieee80211_stop_ap(struct wiph
+ 
+ 	if (sdata->wdev.links[link_id].cac_started) {
+ 		chandef = link_conf->chandef;
+-		cancel_delayed_work_sync(&link->dfs_cac_timer_work);
++		hrtimer_cancel(&link->dfs_cac_timer);
++		wiphy_work_cancel(sdata->local->hw.wiphy,
++				  &link->dfs_cac_timeout_work);
+ 		cfg80211_cac_event(sdata->dev, &chandef,
+ 				   NL80211_RADAR_CAC_ABORTED,
+ 				   GFP_KERNEL, link_id);
+@@ -3968,6 +3970,7 @@ static int ieee80211_start_radar_detecti
+ 	struct ieee80211_local *local = sdata->local;
+ 	struct ieee80211_link_data *link;
+ 	int err;
++	ktime_t ktime = ms_to_ktime(cac_time_ms);
+ 
+ 	link = sdata_dereference(sdata->link[link_id], sdata);
+ 	if (!link)
+@@ -3988,9 +3991,7 @@ static int ieee80211_start_radar_detecti
+ 	if (err)
+ 		goto out_unlock;
+ 
+-	ieee80211_queue_delayed_work(&sdata->local->hw,
+-				     &link->dfs_cac_timer_work,
+-				     msecs_to_jiffies(cac_time_ms));
++	hrtimer_start(&link->dfs_cac_timer, ktime, HRTIMER_MODE_REL);
+ 
+  out_unlock:
+ 	mutex_unlock(&local->mtx);
+@@ -4017,7 +4018,9 @@ static void ieee80211_end_cac(struct wip
+ 		if (!link)
+ 			continue;
+ 
+-		cancel_delayed_work(&link->dfs_cac_timer_work);
++		hrtimer_cancel(&link->dfs_cac_timer);
++		wiphy_work_cancel(sdata->local->hw.wiphy,
++				  &link->dfs_cac_timeout_work);
+ 
+ 		if (sdata->wdev.links[link_id].cac_started) {
+ 			ieee80211_link_release_channel(link);
+--- a/net/mac80211/ieee80211_i.h
++++ b/net/mac80211/ieee80211_i.h
+@@ -1021,7 +1021,8 @@ struct ieee80211_link_data {
+ 	int ap_power_level; /* in dBm */
+ 
+ 	bool radar_required;
+-	struct delayed_work dfs_cac_timer_work;
++	struct hrtimer dfs_cac_timer;
++	struct wiphy_work dfs_cac_timeout_work;
+ 
+ 	union {
+ 		struct ieee80211_link_data_managed mgd;
+@@ -2684,7 +2685,9 @@ void ieee80211_recalc_chanctx_min_def(st
+ bool ieee80211_is_radar_required(struct ieee80211_local *local,
+ 				struct cfg80211_scan_request *req);
+ 
+-void ieee80211_dfs_cac_timer_work(struct work_struct *work);
++enum hrtimer_restart ieee80211_dfs_cac_timeout(struct hrtimer *timer);
++void ieee80211_dfs_cac_timer_timeout_work(struct wiphy *wiphy,
++					  struct wiphy_work *work);
+ void ieee80211_dfs_cac_cancel(struct ieee80211_local *local);
+ void ieee80211_dfs_radar_detected_work(struct wiphy *wiphy, struct wiphy_work *work);
+ void ieee80211_awgn_detected_work(struct work_struct *work);
+--- a/net/mac80211/iface.c
++++ b/net/mac80211/iface.c
+@@ -568,7 +568,9 @@ static void ieee80211_do_stop(struct iee
+ 	cancel_work_sync(&sdata->deflink.csa_finalize_work);
+ 	cancel_work_sync(&sdata->deflink.color_change_finalize_work);
+ 
+-	cancel_delayed_work_sync(&sdata->deflink.dfs_cac_timer_work);
++	hrtimer_cancel(&sdata->deflink.dfs_cac_timer);
++	wiphy_work_cancel(sdata->local->hw.wiphy,
++			  &sdata->deflink.dfs_cac_timeout_work);
+ 
+ 	if (sdata->wdev.links[0].cac_started) {
+ 		chandef = sdata->vif.bss_conf.chandef;
+--- a/net/mac80211/link.c
++++ b/net/mac80211/link.c
+@@ -77,9 +77,10 @@ void ieee80211_link_init(struct ieee8021
+ 			  ieee80211_color_collision_detection_work);
+ 	INIT_LIST_HEAD(&link->assigned_chanctx_list);
+ 	INIT_LIST_HEAD(&link->reserved_chanctx_list);
+-	INIT_DELAYED_WORK(&link->dfs_cac_timer_work,
+-			  ieee80211_dfs_cac_timer_work);
+-
++	wiphy_work_init(&link->dfs_cac_timeout_work,
++			ieee80211_dfs_cac_timer_timeout_work);
++	hrtimer_init(&link->dfs_cac_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++	link->dfs_cac_timer.function = ieee80211_dfs_cac_timeout;
+ 	link->ap_power_level = IEEE80211_UNSET_POWER_LEVEL;
+ 	link->user_power_level = local->user_power_level;
+ 
+@@ -159,7 +160,9 @@ static void ieee80211_free_links(struct
+ 		if (!link || !link_conf)
+ 			continue;
+ 
+-		cancel_delayed_work(&link->dfs_cac_timer_work);
++		hrtimer_cancel(&link->dfs_cac_timer);
++		wiphy_work_cancel(sdata->local->hw.wiphy,
++				  &link->dfs_cac_timeout_work);
+ 
+ 		if (sdata->wdev.links[link_id].cac_started) {
+ 			chandef = link_conf->chandef;
+--- a/net/mac80211/mlme.c
++++ b/net/mac80211/mlme.c
+@@ -2504,15 +2504,26 @@ void ieee80211_dynamic_ps_timer(struct t
+ 	ieee80211_queue_work(&local->hw, &local->dynamic_ps_enable_work);
+ }
+ 
+-void ieee80211_dfs_cac_timer_work(struct work_struct *work)
++enum hrtimer_restart ieee80211_dfs_cac_timeout(struct hrtimer *timer)
+ {
+-	struct delayed_work *delayed_work = to_delayed_work(work);
+ 	struct ieee80211_link_data *link =
+-		container_of(delayed_work, struct ieee80211_link_data,
+-			     dfs_cac_timer_work);
+-	struct cfg80211_chan_def chandef = link->conf->chandef;
++		container_of(timer, struct ieee80211_link_data,
++			     dfs_cac_timer);
+ 	struct ieee80211_sub_if_data *sdata = link->sdata;
+ 
++	wiphy_work_queue(sdata->local->hw.wiphy, &link->dfs_cac_timeout_work);
++
++	return HRTIMER_NORESTART;
++}
++
++void ieee80211_dfs_cac_timer_timeout_work(struct wiphy *wiphy,
++					  struct wiphy_work *work)
++{
++	struct ieee80211_link_data *link =
++		container_of(work, struct ieee80211_link_data,
++			     dfs_cac_timeout_work);
++	struct ieee80211_sub_if_data *sdata = link->sdata;
++	struct cfg80211_chan_def chandef = link->conf->chandef;
+ 	mutex_lock(&sdata->local->mtx);
+ 
+ 	if (sdata->wdev.links[link->link_id].cac_started) {
+--- a/net/mac80211/util.c
++++ b/net/mac80211/util.c
+@@ -4777,7 +4777,9 @@ void ieee80211_dfs_cac_cancel(struct iee
+ 			if (!link)
+ 				continue;
+ 
+-			cancel_delayed_work(&link->dfs_cac_timer_work);
++			hrtimer_cancel(&link->dfs_cac_timer);
++			wiphy_work_cancel(sdata->local->hw.wiphy,
++					  &link->dfs_cac_timeout_work);
+ 
+ 			if (!sdata->wdev.links[link_id].cac_started)
+ 				continue;

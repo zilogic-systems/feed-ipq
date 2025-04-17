@@ -52,7 +52,7 @@ Signed-off-by: Ramanathan Choodamani <quic_rchoodam@quicinc.com>
  
  	if (kstrtobool_from_user(user_buf, count, &disable))
  		return -EINVAL;
-@@ -2623,16 +2626,32 @@ static ssize_t ath12k_write_stats_disabl
+@@ -2623,16 +2626,38 @@ static ssize_t ath12k_write_stats_disabl
  		for (i = 0; i < ab->num_radios; i++) {
  			pdev = &ab->pdevs[i];
  			if (pdev && pdev->ar) {
@@ -74,8 +74,14 @@ Signed-off-by: Ramanathan Choodamani <quic_rchoodam@quicinc.com>
  
  				if (!disable)
  					mask = HTT_PPDU_STATS_TAG_DEFAULT;
-+				else if (!skip_htt_ppdu_stats)
++				else if (!skip_htt_ppdu_stats) {
++					/* Requesting certain stats from FW for
++					 * link metric updates.
++					 * Set is_link_metrics_update_enabled to true
++					 */
++					ab->is_link_metrics_update_enabled = true;
 +					mask = HTT_PPDU_STATS_ENHANCED_TX_COMPLN;
++				}
  
 +				ath12k_info(ab, "Requesting ppdu stats with mask 0x%x", mask);
  				ath12k_dp_tx_htt_h2t_ppdu_stats_req(pdev->ar, mask);
@@ -88,6 +94,124 @@ Signed-off-by: Ramanathan Choodamani <quic_rchoodam@quicinc.com>
  	ret = count;
  
  	return ret;
+@@ -2643,6 +2668,107 @@ static const struct file_operations fops
+ 	.write = ath12k_write_stats_disable,
+ };
+ 
++static ssize_t ath12k_manage_link_metrics_update(struct file *file,
++					  const char __user *user_buf,
++					  size_t count, loff_t *ppos)
++{
++	struct ath12k_base *ab = file->private_data;
++	struct ath12k_pdev *pdev;
++	struct ath12k *ar;
++	struct ath12k_link_vif *arvif;
++	int ret, i;
++	u32 mask = 0;
++	bool link_metrics_update;
++	char buf[20] = {0};
++
++	if (count > 20)
++		return -EFAULT;
++
++	ret = copy_from_user(buf, user_buf, count);
++	if (ret)
++		return -EFAULT;
++
++	if (strstr(buf, "disable"))
++		link_metrics_update = false;
++	else if (strstr(buf, "enable"))
++		link_metrics_update = true;
++	else
++		return -EINVAL;
++
++	/* If stats are enabled, no need to specifically ask
++	 * for ENHANCED stats
++	 */
++	if (!ab->stats_disable)
++		return count;
++
++	if (!ath12k_mesh_metric_offload) {
++		ath12k_err(ab, "Mesh Metric offload feature not enabled");
++		return -EINVAL;
++	}
++
++	for (i = 0; i < ab->num_radios; i++) {
++		pdev = &ab->pdevs[i];
++		if (pdev && pdev->ar) {
++			ar = pdev->ar;
++			mutex_lock(&ar->conf_mutex);
++			list_for_each_entry(arvif, &ar->arvifs, list) {
++				/* Do not request for any FW stats if there is a
++				 * non-11s VAP present in this radio
++				 */
++				if (arvif->vdev_subtype != WMI_VDEV_SUBTYPE_MESH_11S) {
++					mutex_unlock(&ar->conf_mutex);
++					return count;
++				}
++			}
++			mutex_unlock(&ar->conf_mutex);
++			/* If the link metrics update state is true,
++			 * request for ENHANCED stats from FW.
++			 *
++			 * It is fine to keep the same logic in stats_disable as
++			 * user may decide to disable stats again after enabling
++			 * link metrics here - so ENHANCED_STATS has to be requested
++			 * again.
++			 *
++			 * If link metrics update was disabled initially and then
++			 * stats are disabled, then it is necessary to disable
++			 * link metrics again.
++			 */
++			if (link_metrics_update) {
++				ab->is_link_metrics_update_enabled = true;
++				mask = HTT_PPDU_STATS_ENHANCED_TX_COMPLN;
++			} else
++				ab->is_link_metrics_update_enabled = false;
++
++			ath12k_info (ab, "Path selection metrics update has been %s",
++					link_metrics_update ? "enabled" : "disabled");
++			ath12k_info(ab, "Requesting ppdu stats with mask 0x%x", mask);
++			ath12k_dp_tx_htt_h2t_ppdu_stats_req(pdev->ar, mask);
++		}
++	}
++
++	ret = count;
++	return ret;
++}
++
++static ssize_t ath12k_read_link_metrics_update(struct file *file,
++					 char __user *user_buf,
++					 size_t count, loff_t *ppos)
++{
++	struct ath12k_base *ab = file->private_data;
++	char buf[32];
++	size_t len;
++
++	len = scnprintf(buf, sizeof(buf), "%u\n", ab->is_link_metrics_update_enabled);
++
++	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
++}
++
++static const struct file_operations fops_link_metrics_update = {
++	.open = simple_open,
++	.write = ath12k_manage_link_metrics_update,
++	.read = ath12k_read_link_metrics_update,
++};
++
+ static ssize_t ath12k_write_rx_hash_ix3(struct file *file,
+ 				        const char __user *ubuf,
+ 				        size_t count, loff_t *ppos)
+@@ -3337,6 +3463,9 @@ int ath12k_debugfs_pdev_create(struct at
+ 	debugfs_create_file("stats_disable", 0600, ab->debugfs_soc, ab,
+ 			    &fops_soc_stats_disable);
+ 
++	debugfs_create_file("link_metrics_update", 0600, ab->debugfs_soc, ab,
++			    &fops_link_metrics_update);
++
+ 	debugfs_create_file("rx_hash_ix2", 0600, ab->debugfs_soc, ab,
+ 			    &fops_soc_rx_hash_ix2);
+ 
 --- a/drivers/net/wireless/ath/ath12k/debugfs.h
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.h
 @@ -22,6 +22,7 @@
@@ -128,7 +252,7 @@ Signed-off-by: Ramanathan Choodamani <quic_rchoodam@quicinc.com>
  		if(arsta->wbm_tx_stats && wbm_status < HAL_WBM_REL_HTT_TX_COMP_STATUS_MAX)
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -10747,7 +10747,8 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -10767,7 +10767,8 @@ static void ath12k_mac_op_tx(struct ieee
  				break;
  			case ATH12K_HW_TXRX_NATIVE_WIFI:
  				ath12k_dp_tx_encap_nwifi(skb);
@@ -138,3 +262,37 @@ Signed-off-by: Ramanathan Choodamani <quic_rchoodam@quicinc.com>
  					skb->is_from_recycler = 0;
  				skb_cb->flags |= ATH12K_SKB_TX_STATUS;
  				ret = ath12k_dp_tx_hw_enqueue(arvif, skb);
+@@ -11264,6 +11265,23 @@ int ath12k_mac_radio_start(struct ath12k
+ 		}
+ 	}
+ 
++	/* When mesh metric offload feature is enabled,
++	 * there is a possibility that the link_metrics_update_enabled
++	 * might have been set before, when user disables all the stats
++	 * and HTT_ENHANCED_PPDU_STATS would have been requested to fw.
++	 * Ensure the same state is maintained when the radio is started
++	 */
++	if (ath12k_mesh_metric_offload && ab->stats_disable) {
++		if (ab->is_link_metrics_update_enabled) {
++			ret = ath12k_dp_tx_htt_h2t_ppdu_stats_req(ar,
++							  HTT_PPDU_STATS_ENHANCED_TX_COMPLN);
++			if (ret) {
++				ath12k_err(ab, "failed to req ppdu stats: %d\n", ret);
++				goto err;
++			}
++		}
++	}
++
+ 	ret = ath12k_wmi_pdev_set_param(ar, WMI_PDEV_PARAM_MESH_MCAST_ENABLE,
+ 					1, pdev->pdev_id);
+ 
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1466,6 +1466,7 @@ struct ath12k_base {
+ 
+ 	struct ath12k_dp dp;
+ 
++	u8 is_link_metrics_update_enabled;
+ 	void __iomem *mem;
+ 	void __iomem *mem_ce;
+ 	void __iomem *mem_cmem;

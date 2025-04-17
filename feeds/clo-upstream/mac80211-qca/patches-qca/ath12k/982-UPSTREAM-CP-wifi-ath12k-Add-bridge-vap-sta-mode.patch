@@ -36,7 +36,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -577,6 +577,7 @@ struct ath12k_vif {
+@@ -598,6 +598,7 @@ struct ath12k_vif {
  	struct ath12k_vlan_iface *vlan_iface;
  #endif
  	bool mode0_recover_bridge_vdevs;
@@ -46,7 +46,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  struct ath12k_vif_iter {
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -5041,6 +5041,22 @@ bool ath12k_mac_is_bridge_required(u8 de
+@@ -5049,6 +5049,22 @@ bool ath12k_mac_is_bridge_required(u8 de
  	return bridge_needed;
  }
  
@@ -69,7 +69,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  static struct
  ieee80211_link_sta *ath12k_mac_inherit_radio_cap(struct ath12k *ar,
  						 struct ath12k_link_sta *arsta)
-@@ -12834,6 +12850,7 @@ static struct ath12k *ath12k_mac_assign_
+@@ -12852,6 +12868,7 @@ static struct ath12k *ath12k_mac_assign_
  	if (!is_bridge_vdev)
  		ath12k_mac_vif_cache_flush(ar, vif, arvif->link_id);
  
@@ -77,7 +77,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  unlock:
  	mutex_unlock(&ar->conf_mutex);
  out:
-@@ -13163,6 +13180,7 @@ err_vdev_del:
+@@ -13180,6 +13197,7 @@ err_vdev_del:
  			kfree(key_conf);
  		}
  	}
@@ -85,7 +85,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  
  	/* TODO: recal traffic pause state based on the available vdevs */
  
-@@ -15931,6 +15949,9 @@ ath12k_mac_assign_vif_chanctx_handle(str
+@@ -15944,6 +15962,9 @@ ath12k_mac_assign_vif_chanctx_handle(str
  
  	arvif->is_started = true;
  
@@ -95,7 +95,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	/* TODO: Setup ps and cts/rts protection */
  
  out:
-@@ -16115,6 +16136,9 @@ stop_primary:
+@@ -16128,6 +16149,9 @@ stop_primary:
  
  	peer = ath12k_peer_find_by_vdev_id(ab, arvif->vdev_id);
  	if (ahvif->vdev_type == WMI_VDEV_TYPE_STA && peer) {
@@ -105,7 +105,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		struct ieee80211_sta *sta;
  		unsigned int sta_link_id = 0xff;
  
-@@ -16130,6 +16154,7 @@ stop_primary:
+@@ -16143,6 +16167,7 @@ stop_primary:
  
  		if ((ab->hw_params->vdev_start_delay && !sta && !peer->sta) ||
  		     !ab->hw_params->vdev_start_delay) {
@@ -113,7 +113,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  			ret = ath12k_peer_delete(ar, arvif->vdev_id, arvif->bssid);
  			if (ret) {
  				ath12k_warn(ar->ab,
-@@ -16187,7 +16212,8 @@ ath12k_mac_stop_and_delete_bridge_vdev(s
+@@ -16199,7 +16224,8 @@ ath12k_mac_stop_and_delete_bridge_vdev(s
  	if (!vif->valid_links)
  		return;
  
@@ -123,7 +123,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		return;
  
  	ahvif = (void *)vif->drv_priv;
-@@ -16414,6 +16440,45 @@ static void ath12k_mac_handle_failures_b
+@@ -16426,6 +16452,45 @@ static void ath12k_mac_handle_failures_b
  	}
  }
  
@@ -136,12 +136,12 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
 +	struct ieee80211_chanctx_conf *bridge_ctx = NULL;
 +	int ret;
 +	u32 device_idx = 0;
-+	u16 bridge_bitmap = 0;
++	unsigned long bridge_bitmap = 0;
 +	u8 bridge_ar_link_idx;
 +
 +	ret = ath12k_mac_is_bridge_required(ahvif->device_bitmap,
 +					    num_devices,
-+					    &bridge_bitmap);
++					    (u16 *)&bridge_bitmap);
 +	if (!ret)
 +		return;
 +
@@ -169,7 +169,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  static int ath12k_mac_create_and_start_bridge(struct ieee80211_hw *hw,
  					      struct ieee80211_vif *vif,
  					      struct ieee80211_bss_conf *link_conf,
-@@ -16431,8 +16496,9 @@ static int ath12k_mac_create_and_start_b
+@@ -16443,8 +16508,9 @@ static int ath12k_mac_create_and_start_b
  	u8 link_id, bridge_ar_link_idx, curr_link_id;
  	bool bridge_needed = false;
  
@@ -181,7 +181,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		goto exit;
  
  	/* Bridge needed only during MLO */
-@@ -16503,6 +16569,14 @@ static int ath12k_mac_create_and_start_b
+@@ -16515,6 +16581,14 @@ static int ath12k_mac_create_and_start_b
  		if (!bridge_needed)
  			goto exit;
  
@@ -198,7 +198,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  			ath12k_dbg(NULL, ATH12K_DBG_MAC,
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -2758,6 +2758,7 @@ static int ath12k_mlo_recovery_link_vif_
+@@ -2678,6 +2678,7 @@ static int ath12k_mlo_recovery_link_vif_
  	struct wmi_wmm_params_arg *p = NULL;
  	struct ieee80211_bss_conf *info;
  	u64 changed = 0;
@@ -206,7 +206,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  
  	switch (vif->type) {
  	case NL80211_IFTYPE_AP_VLAN:
-@@ -2820,7 +2821,9 @@ static int ath12k_mlo_recovery_link_vif_
+@@ -2740,7 +2741,9 @@ static int ath12k_mlo_recovery_link_vif_
  		  BSS_CHANGED_TXPOWER |
  		  BSS_CHANGED_MCAST_RATE;
  
@@ -217,7 +217,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		changed |= BSS_CHANGED_MU_GROUPS;
  
  	switch (vif->type) {
-@@ -2857,13 +2860,15 @@ static int ath12k_mlo_recovery_link_vif_
+@@ -2777,13 +2780,15 @@ static int ath12k_mlo_recovery_link_vif_
  		arvif->is_up = false;
  		ath12k_mac_bss_info_changed(ar, arvif, link_conf, changed);
  		if (vif->valid_links) {
@@ -239,7 +239,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		}
  		mutex_unlock(&ar->conf_mutex);
  		break;
-@@ -3262,7 +3267,16 @@ int ath12k_mode1_recovery_reconfig(struc
+@@ -3182,7 +3187,16 @@ int ath12k_mode1_recovery_reconfig(struc
  				continue;
  
  			if (ath12k_mac_is_bridge_vdev(arvif)) {
@@ -257,7 +257,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  				continue;
  			}
  
-@@ -3275,6 +3289,7 @@ int ath12k_mode1_recovery_reconfig(struc
+@@ -3195,6 +3209,7 @@ int ath12k_mode1_recovery_reconfig(struc
  			}
  			rcu_read_unlock();
  

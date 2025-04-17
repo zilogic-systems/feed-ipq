@@ -24,38 +24,38 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
  }
  
 +static inline void
-+ath12k_dp_rx_prefetch_sw_hw_desc(struct ath12k_rx_desc_info **l_pf_sw_desc,
-+				 struct hal_srng *srng,
-+				 struct hal_reo_dest_ring *l_pf_reo_desc)
++ath12k_dp_rx_prefetch_sw_hw_desc(struct hal_srng *srng,
++				 struct ath12k_rx_desc_info **l_pf_sw_desc,
++				 struct hal_reo_dest_ring **l_pf_reo_desc)
 +{
 +	u64 desc_va_next;
 +	u32 tp, srng_tp = srng->u.dst_ring.tp;
 +	u32 srng_cached_hp = srng->u.dst_ring.cached_hp;
 +
-+	if (*l_pf_sw_desc) {
++	if (*l_pf_sw_desc)
 +		prefetch((*l_pf_sw_desc)->skb);
-+		prefetch(&(*l_pf_sw_desc)->skb->len);
-+	}
 +
-+	if (l_pf_reo_desc) {
-+		desc_va_next = ((u64)le32_to_cpu(l_pf_reo_desc->buf_va_hi) << 32 |
-+				le32_to_cpu(l_pf_reo_desc->buf_va_lo));
++	if (*l_pf_reo_desc) {
++		desc_va_next = ((u64)le32_to_cpu((*l_pf_reo_desc)->buf_va_hi) << 32 |
++				le32_to_cpu((*l_pf_reo_desc)->buf_va_lo));
 +		prefetch((void *)(uintptr_t)desc_va_next);
 +		*l_pf_sw_desc = (struct ath12k_rx_desc_info *)((unsigned long)desc_va_next);
 +
 +	        if (srng_tp == srng_cached_hp) {
-+			l_pf_reo_desc = NULL;
++			*l_pf_reo_desc = NULL;
 +	        } else {
 +			tp = srng_tp + srng->entry_size;
 +			if (tp == srng->ring_size)
 +				tp = 0;
 +
-+			if (tp != srng_cached_hp)
-+				l_pf_reo_desc =
-+					(struct hal_reo_dest_ring *)srng->ring_base_vaddr + tp;
++			if (tp != srng_cached_hp) {
++				*l_pf_reo_desc =
++					(struct hal_reo_dest_ring *)(srng->ring_base_vaddr + tp);
 +
-+			if (!IS_ALIGNED((unsigned long)l_pf_reo_desc, 64))
-+				prefetch(l_pf_reo_desc);
++				if (!IS_ALIGNED((unsigned long)*l_pf_reo_desc, 64))
++					prefetch(*l_pf_reo_desc);
++			} else
++				*l_pf_reo_desc = NULL;
 +	        }
 +	}
 +}
@@ -73,27 +73,28 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
  	u8 ip_csum_fail, l4_csum_fail, l3_pad;
  	int valid_entries, ret;
  	struct list_head rx_desc_used_list[ATH12K_MAX_SOCS];
-+	struct hal_reo_dest_ring *l_pf_reo_desc;
++	struct hal_reo_dest_ring *l_pf_reo_desc = NULL;
  
  	__skb_queue_head_init(&msdu_list);
  
-@@ -3704,6 +3742,8 @@ try_again:
+@@ -3704,6 +3742,9 @@ try_again:
  	}
  	ath12k_hal_srng_dst_invalidate_entry(ab, srng, valid_entries);
  
-+	l_pf_reo_desc = ath12k_hal_srng_dst_prefetch_reo_desc(srng);
++	if (valid_entries > DP_VALID_PREFETCH_ENTRY)
++		l_pf_reo_desc = ath12k_hal_srng_dst_prefetch_reo_desc(srng);
 +
  	while (likely((rx_desc = ath12k_hal_srng_dst_get_next_cache_entry(ab, srng)))) {
  		struct hal_reo_dest_ring desc = *(struct hal_reo_dest_ring *)rx_desc;
  		u32 cookie;
-@@ -3751,9 +3791,7 @@ try_again:
+@@ -3751,9 +3792,7 @@ try_again:
  
  		msdu = desc_info->skb;
  
 -		/* To prefetch skb->cb */
 -		prefetch(msdu);
 -		prefetch(&msdu->len);
-+		ath12k_dp_rx_prefetch_sw_hw_desc(&l_pf_sw_desc, srng, l_pf_reo_desc);
++		ath12k_dp_rx_prefetch_sw_hw_desc(srng, &l_pf_sw_desc, &l_pf_reo_desc);
  
  		if (unlikely(desc_info->magic != ATH12K_DP_RX_DESC_MAGIC))
  			ath12k_warn(ab, "Check HW CC implementation");
@@ -122,7 +123,7 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
 +	else
 +	        tp += (entry_size * 2);
 +
-+	if (tp == entry_size)
++	if (tp == srng->ring_size)
 +		tp = 0;
 +
 +	desc = srng->ring_base_vaddr + tp;
@@ -142,3 +143,13 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
 +struct hal_reo_dest_ring *
 +ath12k_hal_srng_dst_prefetch_reo_desc(struct hal_srng *srng);
  #endif
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -215,6 +215,7 @@ struct ath12k_pdev_dp {
+ #define DP_PPE2TCL_RING_SIZE 2048
+ #define DP_PPE_WBM2SW_RING_SIZE 8192
+ #define HAL_REO2PPE_DST_IND 6
++#define DP_VALID_PREFETCH_ENTRY 3
+ 
+ #define DP_DIR_BUF_COOKIE_BUF_ID	GENMASK(17, 0)
+ #define DP_DIR_BUF_COOKIE_PDEV_ID	GENMASK(19, 18)

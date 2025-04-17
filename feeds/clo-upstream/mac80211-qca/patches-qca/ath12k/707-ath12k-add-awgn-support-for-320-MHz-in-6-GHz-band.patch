@@ -11,16 +11,18 @@ Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
  drivers/net/wireless/ath/ath12k/wmi.h | 45 ++++++++++++++++++++++-------------
  2 files changed, 38 insertions(+), 16 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
-index 42c27eb..fe3a0f4 100644
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -8612,6 +8612,14 @@ bool ath12k_wmi_validate_dcs_awgn_info(struct ath12k *ar, struct wmi_dcs_awgn_in
+@@ -9189,6 +9189,18 @@ bool ath12k_wmi_validate_dcs_awgn_info(s
                          return false;
                  }
                  break;
 +	case WMI_HOST_CHAN_WIDTH_320:
-+		if (awgn_info->chan_bw_interference_bitmap > WMI_DCS_SEG_SEC160) {
++		if (awgn_info->chan_bw_interference_bitmap > (WMI_DCS_SEG_PRI20 |
++							      WMI_DCS_SEG_SEC20 |
++							      WMI_DCS_SEG_SEC40 |
++							      WMI_DCS_SEG_SEC80 |
++							      WMI_DCS_SEG_SEC160)) {
 +			ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +				   "dcs interference event received with wrong chan width bmap %d for 320MHz",
 +				   awgn_info->chan_bw_interference_bitmap);
@@ -30,7 +32,7 @@ index 42c27eb..fe3a0f4 100644
          default:
                  ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
                             "dcs interference event received with unknown channel width %d",
-@@ -8620,6 +8628,7 @@ bool ath12k_wmi_validate_dcs_awgn_info(struct ath12k *ar, struct wmi_dcs_awgn_in
+@@ -9197,6 +9209,7 @@ bool ath12k_wmi_validate_dcs_awgn_info(s
          }
          return true;
  }
@@ -38,11 +40,9 @@ index 42c27eb..fe3a0f4 100644
  static void
  ath12k_wmi_dcs_awgn_interference_event(struct ath12k_base *ab,
                                         struct sk_buff *skb)
-diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
-index f134e37..05ffd96 100644
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -5066,27 +5066,40 @@ struct wmi_dcs_interference_ev {
+@@ -5083,27 +5083,40 @@ struct wmi_dcs_interference_ev {
  } __packed;
  
  enum wmi_host_channel_width {
@@ -99,6 +99,3 @@ index f134e37..05ffd96 100644
  };
  
  struct wmi_pdev_temperature_event {
--- 
-2.7.4
-

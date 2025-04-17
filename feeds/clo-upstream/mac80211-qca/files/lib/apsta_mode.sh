@@ -228,7 +228,6 @@ hostapd_set_op_class() {
             80) vht_he_opclass=128 ;;  # 80 MHz
             160) vht_he_opclass=129 ;;  # 160 MHz
             "80+80") vht_he_opclass=130 ;;  # 80+80 MHz
-            320) vht_he_opclass=129 ;;  # 320 MHz
             *)
         esac
 
@@ -296,11 +295,6 @@ hostapd_set_op_class() {
     if [ "$freq" -eq 5950 ];then
 	    op_class=136
     fi
-    if [ "$freq" -ge 5500 ] && [ "$freq" -le 5720 ]; then
-	    if [ "$width" -eq 320 ]; then
-		return
-	    fi
-    fi
 
 	hostapd_cli -i $ap_intf $ml_link set op_class $op_class> /dev/null
 }
@@ -313,6 +307,7 @@ hostapd_adjust_config() {
         wifi_gen=$(wpa_cli -i $sta_intf status 2> /dev/null | grep wifi_generation | cut -d'=' -f 2)
         ieee80211ac=$(wpa_cli -i $sta_intf status 2> /dev/null | grep ieee80211ac | cut -d'=' -f 2)
         ap_intf=$2
+        punct_bitmap=$3
         wifi_6gband=$(hostapd_is_6ghz_band $sta_freq)
         wifi_5gband=$(hostapd_is_5ghz_band $sta_freq)
 
@@ -362,6 +357,7 @@ hostapd_adjust_config() {
 			hostapd_cli -i $ap_intf $ml_link set ieee80211be 1 2> /dev/null
 			hostapd_cli -i $ap_intf $ml_link set eht_oper_chwidth $ap_vht_he_eht_oper_chwidth
 			hostapd_cli -i $ap_intf $ml_link set eht_oper_centr_freq_seg0_idx $ap_vht_he_eht_oper_centr_freq_seg0_idx
+			hostapd_cli -i $ap_intf $ml_link set punct_bitmap $punct_bitmap
 		fi
 		hostapd_cli -i $ap_intf $ml_link set ieee80211ax 1 2> /dev/null
 		hostapd_cli -i $ap_intf $ml_link set he_oper_chwidth $ap_vht_he_eht_oper_chwidth
@@ -613,21 +609,35 @@ do
 		wifi_gen=$(wpa_cli -i $sta_intf status 2> /dev/null | grep wifi_generation | cut -d'=' -f 2)
 		if [ $wifi_gen -eq 7 ]; then
 			sta_link_freqs=$(wpa_cli -i $sta_intf mlo_status | grep freq | cut -d'=' -f 2)
+			sta_link_punct_bitmaps=$(wpa_cli -i $sta_intf mlo_signal_poll | grep PUNCT_BITMAP | cut -d'=' -f 2)
 
 			#Backward compatability where STA MLO support is not there in EHT
 			if [ -z "$sta_link_freqs"]; then
 				sta_link_freqs=$(wpa_cli -i $sta_intf status 2> /dev/null | grep freq | cut -d'=' -f 2)
+				sta_link_punct_bitmaps=$(wpa_cli -i $sta_intf signal_poll | grep PUNCT_BITMAP | cut -d'=' -f 2)
 			fi
+
+			index=1
 			for freq in $sta_link_freqs
 			do
+				link_punct_bitmap=0
+				if [ -n "$sta_link_punct_bitmaps" ]; then
+					link_punct_bitmap=$(echo "$sta_link_punct_bitmaps" |  cut -d ' ' -f 2 | awk -v n="$index" 'NR == n {print}')
+					if [ -z "$link_punct_bitmap"]; then
+						link_punct_bitmap=0
+					fi
+				fi
+
 				for ap_intf in $ap_intfs
 				do
 					ml_link=$(get_link_info $ap_intf $freq)
 					echo link config command is $ml_link $freq $ap_intf  > /dev/console
 					if [ -n "$ml_link" ]; then
-						hostapd_adjust_config $freq $ap_intf
+						hostapd_adjust_config $freq $ap_intf $link_punct_bitmap
 					fi
 				done
+
+				let index++
 			done
 		else
 			sta_chan=$(iw $sta_intf info 2> /dev/null | grep channel | cut -d' ' -f 2)
@@ -641,9 +651,10 @@ do
 
 			wifi_6gband=$(hostapd_is_6ghz_band $sta_freq)
 
+			link_punct_bitmap=0
 			for ap_intf in $ap_intfs
 			do
-				hostapd_adjust_config $sta_freq $ap_intf
+				hostapd_adjust_config $sta_freq $ap_intf $link_punct_bitmap
 			done
 		fi
 

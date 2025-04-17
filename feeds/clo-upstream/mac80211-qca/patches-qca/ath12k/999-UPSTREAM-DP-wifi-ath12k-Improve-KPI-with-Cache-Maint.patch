@@ -1,0 +1,76 @@
+From f8b184d1d23b6ed0760a0b3c3d8145c52ad6b7d1 Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Thu, 30 Jan 2025 17:28:28 +0530
+Subject: [PATCH] UPSTREAM:DP:wifi:ath12k: Improve KPI with Cache Maintenance
+ Optimizations
+
+Several cache maintenance optimizations that significantly enhance
+the KPI in TBTC DL. The changes includes
+1. Prefetch the next tx descriptor improves 150mbps throughput.
+2. Replace dsb(st) with dmb(oshst) MB (memory barrier) improves
+100mbps.
+3. Add tx completion free desc list to the list head instead
+of list tail which improves 700mbps.
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index a5e04c8..d4f5eda 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -216,7 +216,7 @@ static inline
+ struct ath12k_tx_desc_info *ath12k_dp_tx_assign_buffer(struct ath12k_dp *dp,
+ 							      u8 pool_id)
+ {
+-	struct ath12k_tx_desc_info *desc = NULL;
++	struct ath12k_tx_desc_info *desc = NULL, *next_desc = NULL;
+ 
+ 	spin_lock_bh(&dp->tx_desc_lock[pool_id]);
+ 	desc = list_first_entry_or_null(&dp->tx_desc_free_list[pool_id],
+@@ -230,6 +230,12 @@ struct ath12k_tx_desc_info *ath12k_dp_tx_assign_buffer(struct ath12k_dp *dp,
+ 
+ 	prefetch(desc);
+ 	list_del(&desc->list);
++	next_desc = list_first_entry_or_null(&dp->tx_desc_free_list[pool_id],
++					     struct ath12k_tx_desc_info,
++					     list);
++	if (next_desc)
++		prefetch(next_desc);
++
+ 	desc->in_use = true;
+ 	spin_unlock_bh(&dp->tx_desc_lock[pool_id]);
+ 
+@@ -414,7 +420,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 	ab->soc_stats.tx_unicast[ring_id]++;
+ 
+ 	memcpy(hal_tcl_desc, &tcl_desc, sizeof(tcl_desc));
+-	dsb(st);
++	dmb(oshst);
+ 	ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(tcl_ring);
+ 	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+@@ -767,8 +773,7 @@ skip_htt_meta:
+ 		skb->mark = u32_encode_bits((u32_get_bits(skb->mark, SAWF_NW_TAG_SHIFT)), SAWF_TAG_ID) | (info->sawf.nw_delay << SAWF_NW_DELAY_SHIFT) | msduq_id;
+ 	}
+ #endif /* CPTCFG_ATH12K_SAWF */
+-
+-	dsb(st);
++	dmb(oshst);
+ 	ath12k_hal_srng_access_umac_src_ring_end_nolock_fast(tcl_ring);
+ 	ATH12K_DP_TCL_RING_UNLOCK(&tcl_ring->lock);
+ 
+@@ -1835,7 +1840,7 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 		tx_desc->skb_ext_desc = NULL;
+ 		tx_desc->in_use = false;
+ 	}
+-	list_splice_tail(&desc_free_list, &dp->tx_desc_free_list[ring_id]);
++	list_splice(&desc_free_list, &dp->tx_desc_free_list[ring_id]);
+ 	spin_unlock_bh(&dp->tx_desc_lock[ring_id]);
+ 	return (orig_budget - budget);
+ }
+-- 
+2.34.1
+

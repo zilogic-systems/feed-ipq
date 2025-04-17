@@ -1420,7 +1420,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	if (ath12k_ppe_ds_enabled) {
  		if (ath12k_frame_mode != ATH12K_HW_TXRX_ETHERNET) {
  			ath12k_warn(ab,
-@@ -2609,11 +2605,6 @@ static int ath12k_mlo_recovery_link_vif_
+@@ -2591,11 +2587,6 @@ static int ath12k_mlo_recovery_link_vif_
  		changed |= BSS_CHANGED_MU_GROUPS;
  
  	switch (vif->type) {
@@ -1432,7 +1432,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	case NL80211_IFTYPE_STATION:
  		if (!vif->valid_links) {
  			/* Set this only for legacy stations */
-@@ -3425,52 +3416,6 @@ static int ath12k_core_trigger_umac_rese
+@@ -3408,52 +3399,6 @@ static int ath12k_core_trigger_umac_rese
  	return ret;
  }
  
@@ -1485,7 +1485,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  static void ath12k_core_reset(struct work_struct *work)
  {
  	struct ath12k_base *ab = container_of(work, struct ath12k_base, reset_work);
-@@ -3478,9 +3423,7 @@ static void ath12k_core_reset(struct wor
+@@ -3461,9 +3406,7 @@ static void ath12k_core_reset(struct wor
  	struct ath12k_hw *ah;
  	struct ath12k_base *partner_ab;
  	struct ath12k_ahb *ab_ahb = NULL;
@@ -1496,7 +1496,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	long time_left;
  	bool teardown = false;
  
-@@ -3509,12 +3452,14 @@ static void ath12k_core_reset(struct wor
+@@ -3492,12 +3435,14 @@ static void ath12k_core_reset(struct wor
  		ath12k_info(ab, "Recovery is initiated with Mode%s\n",
  			   (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0 ? "0" : "1"));
  
@@ -1513,15 +1513,12 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	}
  #endif
  
-@@ -3579,26 +3524,10 @@ static void ath12k_core_reset(struct wor
+@@ -3562,26 +3507,11 @@ static void ath12k_core_reset(struct wor
  	if (ag->num_started && ab->fw_recovery_support)
  		ag->num_started--;
  
 -	if (!ag->hw_queues_stopped) {
-+	/* TODO: DS: How to stop ppeds queues during SSR??
-+	 * PPE hardware might still be enqueuing packets on PPE2TCL */
-+	if (!ag->hw_queues_stopped)
- 		ath12k_core_mlo_hw_queues_stop(ag, ab);
+-		ath12k_core_mlo_hw_queues_stop(ag);
 -#ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
 -		if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE1) {
 -			for (i = 0; i < ag->num_chip; i++) {
@@ -1539,11 +1536,15 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 -		}
 -#endif
 -	}
--
+ 
++	/* TODO: DS: How to stop ppeds queues during SSR??
++	 * PPE hardware might still be enqueuing packets on PPE2TCL */
++	if (!ag->hw_queues_stopped)
++		ath12k_core_mlo_hw_queues_stop(ag);
  
  	for (i = 0; i < ag->num_chip; i++) {
  		partner_ab = ag->ab[i];
-@@ -3646,7 +3575,7 @@ static void ath12k_core_reset(struct wor
+@@ -3629,7 +3559,7 @@ static void ath12k_core_reset(struct wor
  			 * failed
  			 */
  			ag->recovery_mode = ATH12K_MLO_RECOVERY_MODE0;
@@ -1552,7 +1553,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  			ath12k_info(ab, "Recovery is falling back to Mode0\n");
  		} else {
  			/* wake queues here as ping should continue for
-@@ -3659,21 +3588,6 @@ static void ath12k_core_reset(struct wor
+@@ -3642,21 +3572,6 @@ static void ath12k_core_reset(struct wor
  
  				ieee80211_wake_queues(ah->hw);
  			}
@@ -1574,7 +1575,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  			ath12k_dbg(ab, ATH12K_DBG_MODE1_RECOVERY,
  				   "Queues are started as umac reset is completed for partner chipset\n");
  		}
-@@ -4086,6 +4000,8 @@ struct ath12k_base *ath12k_core_alloc(st
+@@ -4072,6 +3987,8 @@ struct ath12k_base *ath12k_core_alloc(st
  	ab->qmi.num_radios = ATH12K_QMI_INVALID_RADIO;
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -1583,7 +1584,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	ab->ppeds_node_idx = -1;
  #endif
  	return ab;
-@@ -4407,9 +4323,6 @@ static void ath12k_exit(void)
+@@ -4393,9 +4310,6 @@ static void ath12k_exit(void)
  	ath12k_pci_exit();
  	ath12k_ahb_exit();
  	ath12k_debugfs_destroy();
@@ -1603,7 +1604,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
  #include <ppe_ds_wlan.h>
  #include <ppe_vp_public.h>
-@@ -379,20 +380,6 @@ struct ath12k_vif_tcl_desc_template {
+@@ -380,20 +381,6 @@ struct ath12k_vif_tcl_desc_template {
  	u32 info4;
  };
  
@@ -1624,7 +1625,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  struct ath12k_peer_ch_width_switch_data {
  	int count;
  	struct wmi_chan_width_peer_arg peer_arg[];
-@@ -461,14 +448,8 @@ struct ath12k_link_vif {
+@@ -462,14 +449,8 @@ struct ath12k_link_vif {
  	u64 obss_color_bitmap;
  	struct work_struct update_obss_color_notify_work;
  	u32 tx_vdev_id;
@@ -1641,7 +1642,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	bool mvr_processing;
  	bool pending_csa_up;
-@@ -479,6 +460,12 @@ struct ath12k_link_vif {
+@@ -480,6 +461,12 @@ struct ath12k_link_vif {
  	struct ath12k_peer_ch_width_switch_data *peer_ch_width_switch_data;
  	struct ieee80211_key_conf *keys[WMI_MAX_KEY_INDEX + 1];
  	struct ath12k_prb_resp_tmpl_ml_info ml_info;
@@ -1654,12 +1655,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  };
  
  struct ath12k_vif {
-@@ -524,11 +511,17 @@ struct ath12k_vif {
- 	struct dentry *debugfs_primary_link;
- 	struct dentry *debugfs_rfs_core_mask;
- #endif /* CPTCFG_ATH12K_DEBUGFS */
--	bool mcast_to_ucast_en;
- 	bool chanctx_peer_del_done;
+@@ -531,6 +518,13 @@ struct ath12k_vif {
  
  	int ppe_rfs_vp_num;
  	int ppe_rfs_core_mask;
@@ -1673,7 +1669,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  };
  
  struct ath12k_vif_iter {
-@@ -1310,16 +1303,6 @@ struct ath12k_soc_dp_stats {
+@@ -1313,16 +1307,6 @@ struct ath12k_soc_dp_stats {
  	u32 tx_enqueued[MAX_TCL_RING];
  	u32 tx_completed[MAX_TCL_RING];
  	u32 null_tx_complete[MAX_TCL_RING];
@@ -1692,7 +1688,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	u32 non_fast_rx[DP_REO_DST_RING_MAX] [ATH12K_MAX_SOCS];
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -1817,42 +1817,6 @@ static ssize_t ath12k_debugfs_dump_soc_d
+@@ -1825,42 +1825,6 @@ static ssize_t ath12k_debugfs_dump_soc_d
  			soc_stats->tx_completed[2],
  			soc_stats->tx_completed[3]);
  
@@ -2001,7 +1997,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  static const struct ieee80211_channel ath12k_2ghz_channels[] = {
  	CHAN2G(1, 2412, 0),
  	CHAN2G(2, 2417, 0),
-@@ -5199,14 +5189,6 @@ static int ath12k_mac_vdev_delete(struct
+@@ -5222,14 +5212,6 @@ static int ath12k_mac_vdev_delete(struct
  	ar->ab->free_vdev_map |= 1LL << arvif->vdev_id;
  	spin_unlock_bh(&ar->ab->base_lock);
  
@@ -2016,7 +2012,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
  	ar->ab->free_vdev_stats_id_map &= ~(1LL << arvif->vdev_stats_id);
  	ar->num_created_vdevs--;
-@@ -6691,7 +6673,7 @@ static int ath12k_station_assoc(struct a
+@@ -6710,7 +6692,7 @@ static int ath12k_station_assoc(struct a
  		return ret;
  	}
  
@@ -2025,7 +2021,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	ret = ath12k_wmi_set_peer_intra_bss_cmd(ar, arvif->vdev_id, arsta->addr, 1);
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to set vdev %i intra bss enable: %d\n",
-@@ -10087,14 +10069,13 @@ static int ath12k_mac_config_mon_status_
+@@ -10109,14 +10091,13 @@ static int ath12k_mac_config_mon_status_
  		if (ath12k_debugfs_rx_filter(ar))
  			tlv_filter.rx_filter = ath12k_debugfs_rx_filter(ar);
  
@@ -2047,7 +2043,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	}
  
-@@ -10834,8 +10815,9 @@ static void ath12k_mac_update_vif_offloa
+@@ -10857,8 +10838,9 @@ static void ath12k_mac_update_vif_offloa
  					IEEE80211_OFFLOAD_DECAP_ENABLED);
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -2059,7 +2055,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		vif->offload_flags |= (IEEE80211_OFFLOAD_ENCAP_ENABLED |
  					IEEE80211_OFFLOAD_DECAP_ENABLED);
  #endif
-@@ -10959,11 +10941,6 @@ static void ath12k_update_obss_color_not
+@@ -10982,11 +10964,6 @@ static void ath12k_update_obss_color_not
  	struct ath12k_wmi_peer_create_arg peer_param = {0};
  	struct ieee80211_bss_conf *link_conf;
  	u32 param_id, param_value;
@@ -2071,7 +2067,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	u16 nss;
  	int i;
  	int ret, fbret, vdev_id;
-@@ -11036,17 +11013,6 @@ static void ath12k_update_obss_color_not
+@@ -11061,17 +11038,6 @@ static void ath12k_update_obss_color_not
  	arvif->dp = &ab->dp;
  	arvif->dev = ab->dev;
  	arvif->pdev_idx = ar->pdev_idx;
@@ -2089,7 +2085,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	switch (vif->type) {
  	case NL80211_IFTYPE_UNSPECIFIED:
-@@ -11145,22 +11111,6 @@ static void ath12k_update_obss_color_not
+@@ -11171,22 +11137,6 @@ static void ath12k_update_obss_color_not
  				    arvif->vdev_id, ret);
  			goto err_peer_del;
  		}
@@ -2112,7 +2108,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		break;
  	case WMI_VDEV_TYPE_STA:
  		param_id = WMI_STA_PS_PARAM_RX_WAKE_POLICY;
-@@ -11229,7 +11179,7 @@ static void ath12k_update_obss_color_not
+@@ -11255,7 +11205,7 @@ static void ath12k_update_obss_color_not
  	    test_bit(MONITOR_CONF_ENABLED, &ar->monitor_flags))
  		ath12k_mac_monitor_vdev_create(ar);
  
@@ -2121,7 +2117,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	ret = ath12k_wmi_send_vdev_set_intra_bss_cmd(ar, arvif->vdev_id,
  						     1);
  	if (ret) {
-@@ -11448,6 +11398,12 @@ static int ath12k_mac_op_add_interface(s
+@@ -11474,6 +11424,12 @@ static int ath12k_mac_op_add_interface(s
  		ahvif->ppe_rfs_core_mask = ppe_rfs_core_mask;
  	}
  
@@ -2134,7 +2130,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	INIT_LIST_HEAD(&ahvif->deflink.list);
  	INIT_DELAYED_WORK(&ahvif->deflink.connection_loss_work,
  			ath12k_mac_vif_sta_connection_loss_work);
-@@ -11822,7 +11778,6 @@ static int ath12k_mac_op_ampdu_action(st
+@@ -11848,7 +11804,6 @@ static int ath12k_mac_op_ampdu_action(st
  	return ret;
  }
  
@@ -2142,7 +2138,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  int ath12k_mac_op_change_vif_links(struct ieee80211_hw *hw,
  				   struct ieee80211_vif *vif,
  				   u16 old_links, u16 new_links,
-@@ -11832,7 +11787,6 @@ int ath12k_mac_op_change_vif_links(struc
+@@ -11858,7 +11813,6 @@ int ath12k_mac_op_change_vif_links(struc
  		    "link changed for MLD %pM old %d new %d\n", vif->addr, old_links, new_links);
  	return 0;
  }
@@ -2150,7 +2146,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  static int ath12k_mac_op_add_chanctx(struct ieee80211_hw *hw,
  				     struct ieee80211_chanctx_conf *ctx)
-@@ -16306,9 +16260,6 @@ static const struct ieee80211_ops ath12k
+@@ -16344,9 +16298,6 @@ static const struct ieee80211_ops ath12k
  	.cancel_remain_on_channel       = ath12k_mac_op_cancel_remain_on_channel,
  	.get_txpower			= ath12k_mac_op_get_txpower,
  	.set_radar_background		= ath12k_mac_op_set_radar_background,
@@ -2160,7 +2156,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  };
  
  static void ath12k_mac_update_ch_list(struct ath12k *ar,
-@@ -17599,9 +17550,6 @@ int ath12k_mac_allocate(struct ath12k_hw
+@@ -17644,9 +17595,6 @@ int ath12k_mac_allocate(struct ath12k_hw
  			goto err_mac_destroy;
  		}
  
@@ -2180,7 +2176,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #include "pcic.h"
  
  #define ATH12K_PCI_BAR_NUM		0
-@@ -909,9 +908,7 @@ static int ath12k_pci_probe(struct pci_d
+@@ -926,9 +925,7 @@ static int ath12k_pci_probe(struct pci_d
  	u32 addr;
  	u32 msi = 0;
  	int ret;
@@ -2193,7 +2189,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	if (!ab) {
 --- a/drivers/net/wireless/ath/ath12k/peer.c
 +++ b/drivers/net/wireless/ath/ath12k/peer.c
-@@ -817,8 +817,9 @@ int ath12k_peer_create(struct ath12k *ar
+@@ -830,8 +830,9 @@ int ath12k_peer_create(struct ath12k *ar
  	if (peer->vif->ppe_vp_type == PPE_VP_USER_TYPE_ACTIVE)
  		peer->ppe_vp_num = peer->vif->ppe_vp_num;
  #endif
@@ -2420,7 +2416,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  int ath12k_dp_ppeds_register_soc(struct ath12k_dp *dp,
  				 struct dp_ppe_ds_idxs *idx)
  {
-@@ -1279,7 +1226,7 @@ void ath12k_dp_srng_ppeds_cleanup(struct
+@@ -1280,7 +1227,7 @@ void ath12k_dp_srng_ppeds_cleanup(struct
  	ath12k_dp_srng_cleanup(ab, &dp->ppeds_comp_ring.ppe_wbm2sw_ring);
  }
  
@@ -2429,7 +2425,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  {
  	struct ath12k_pdev *pdev;
  	struct ath12k *ar = ahvif->ah->radio;
-@@ -1314,7 +1261,7 @@ int ath12k_change_core_mask_for_ppe_rfs(
+@@ -1315,7 +1262,7 @@ int ath12k_change_core_mask_for_ppe_rfs(
  	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
  	int ret;
  
@@ -2438,7 +2434,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		return 0;
  
  	if (!ahvif->ppe_rfs_vp_num) {
-@@ -1347,7 +1294,7 @@ void ath12k_disable_ppe_rfs(struct ath12
+@@ -1348,7 +1295,7 @@ void ath12k_disable_ppe_rfs(struct ath12
  {
  	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
  
@@ -2447,7 +2443,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		return;
  
  	if (!ahvif->ppe_rfs_vp_num) {
-@@ -1371,7 +1318,7 @@ int ath12k_enable_ppe_rfs(struct ath12k_
+@@ -1372,7 +1319,7 @@ int ath12k_enable_ppe_rfs(struct ath12k_
  	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
  
  	ahvif->ppe_rfs_vp_num = ATH12K_INVALID_PPE_RFS_VP_NUM;
@@ -2456,7 +2452,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	    ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR ||
  	    !wdev->netdev)
  		return 0;
-@@ -1386,7 +1333,7 @@ int ath12k_enable_ppe_rfs(struct ath12k_
+@@ -1387,7 +1334,7 @@ int ath12k_enable_ppe_rfs(struct ath12k_
  	if (core_mask)
  		vpai.core_mask = *core_mask;
  	else
@@ -2465,7 +2461,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	ppe_vp_num = ppe_vp_alloc(wdev->netdev, &vpai);
  	if (ppe_vp_num <= 0) {
-@@ -1406,111 +1353,20 @@ int ath12k_enable_ppe_rfs(struct ath12k_
+@@ -1407,111 +1354,20 @@ int ath12k_enable_ppe_rfs(struct ath12k_
  	return 0;
  }
  
@@ -2638,7 +2634,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #include "dp_rx.h"
  #include "pci.h"
  
-@@ -1003,7 +1002,9 @@ static int ath12k_vendor_ds_handler(stru
+@@ -1016,7 +1015,9 @@ static int ath12k_vendor_ds_handler(stru
  	int ret = 0;
  	int ml_netdev = 0;
  
@@ -2649,7 +2645,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		return 0;
  
  	ret = nla_parse(tb, QCA_WLAN_VENDOR_ATTR_DS_MAX, data, data_len,
-@@ -1019,7 +1020,6 @@ static int ath12k_vendor_ds_handler(stru
+@@ -1032,7 +1033,6 @@ static int ath12k_vendor_ds_handler(stru
  
  	ath12k_dbg(NULL, ATH12K_DBG_PPE,
  		   "Marking dev [%s] as mlo netdev. %d\n", wdev->netdev->name, ml_netdev);

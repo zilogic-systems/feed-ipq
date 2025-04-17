@@ -1,0 +1,41 @@
+From a492692900680ef362dca0ec4120c94ca28fdcd5 Mon Sep 17 00:00:00 2001
+From: Vignesh C <quic_vignc@quicinc.com>
+Date: Sun, 9 Mar 2025 16:07:52 +0530
+Subject: [PATCH] UPSTREAM:CP wifi:ath12k Decrement ahsta->num_peer during link
+ sta unassignment
+
+There is a gap in the logical_link_idx sent in the peer_assoc command.
+For a two-link association, it should be 0 and 1. However, due to a
+failure in creating link station (which was assigned link_idx 1) caused
+by an AST failure, the next link creation is assigned link_idx 2.
+This count should be decremented whenever a link station creation fails.
+
+As a result, potential incorrect IPC messages are sent across the chipset
+on FW, leading to unexpected behavior.
+
+Decrement ahsta->num_peer which is assigned as link station logical_link_idx
+during ath12k_mac_unassign_link_sta().
+
+Patch-dependency: None
+Patch-work: None
+
+Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 369e242..057b988 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -8642,6 +8642,7 @@ static int ath12k_mac_unassign_link_sta(struct ath12k_hw *ah,
+ 		return -EINVAL;
+ 
+ 	ahsta->link[link_id] = NULL;
++	ahsta->num_peer--;
+ 	ath12k_mac_unmap_link_sta(ahsta, link_id);
+ 	ahsta->device_bitmap &= ~BIT(ab->wsi_info.chip_idx);
+ 
+-- 
+2.34.1
+

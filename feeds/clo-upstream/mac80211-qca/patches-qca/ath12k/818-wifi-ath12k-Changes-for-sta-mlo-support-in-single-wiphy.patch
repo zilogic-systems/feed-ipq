@@ -12,7 +12,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -3950,18 +3950,28 @@ static void ath12k_bss_assoc(struct ath1
+@@ -4040,18 +4040,25 @@ static void ath12k_bss_assoc(struct ath1
  	bool is_auth = false;
  	int ret;
  	struct vdev_up_params params = { 0 };
@@ -21,13 +21,12 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  
  	lockdep_assert_held(&ar->conf_mutex);
  
- 	if (!arvif)
- 		return;
+-	if (!arvif)
+-		return;
++	link_id = bss_conf->link_id;
  
 -	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac vdev %i assoc bssid %pM aid %d\n",
 -		   arvif->vdev_id, arvif->bssid, ahvif->aid);
-+	link_id = bss_conf->link_id;
-+
 +	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac vdev %i link_id:%d assoc bssid %pM aid %d\n",
 +		   arvif->vdev_id, link_id,  arvif->bssid, ahvif->aid);
  
@@ -44,7 +43,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  	if (!ap_sta) {
  		ath12k_warn(ar->ab, "failed to find station entry for bss %pM vdev %i\n",
  			    bss_conf->bssid, arvif->vdev_id);
-@@ -3970,10 +3980,10 @@ static void ath12k_bss_assoc(struct ath1
+@@ -4060,10 +4067,10 @@ static void ath12k_bss_assoc(struct ath1
  	}
  
  	ahsta = (struct ath12k_sta *)ap_sta->drv_priv;
@@ -57,7 +56,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  
  	ath12k_peer_assoc_prepare(ar, arvif, arsta, &peer_arg, false);
  
-@@ -3993,9 +4003,11 @@ static void ath12k_bss_assoc(struct ath1
+@@ -4083,9 +4090,11 @@ static void ath12k_bss_assoc(struct ath1
  		return;
  	}
  
@@ -71,7 +70,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to setup peer SMPS for vdev %d: %d\n",
  			    arvif->vdev_id, ret);
-@@ -4810,6 +4822,9 @@ static void ath12k_mac_op_vif_cfg_change
+@@ -4888,6 +4897,9 @@ static void ath12k_mac_op_vif_cfg_change
  	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
  	struct ath12k_link_vif *arvif;
  	struct ath12k *ar;
@@ -81,7 +80,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  
  	if (changed & BSS_CHANGED_SSID &&
  	    vif->type == NL80211_IFTYPE_AP) {
-@@ -4818,19 +4833,21 @@ static void ath12k_mac_op_vif_cfg_change
+@@ -4896,19 +4908,21 @@ static void ath12k_mac_op_vif_cfg_change
  			memcpy(ahvif->u.ap.ssid, vif->cfg.ssid, vif->cfg.ssid_len);
  	}
  
@@ -114,7 +113,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  	}
  }
  
-@@ -6835,10 +6852,6 @@ static int ath12k_mac_station_remove(str
+@@ -6986,10 +7000,6 @@ static int ath12k_mac_station_remove(str
  
  	lockdep_assert_held(&ar->conf_mutex);
  
@@ -125,7 +124,7 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
  	ath12k_dp_peer_cleanup(ar, arvif->vdev_id, arsta->addr);
  
  	skip_peer_delete = ar->ab->hw_params->vdev_start_delay &&
-@@ -7364,12 +7377,6 @@ int ath12k_mac_update_sta_state(struct i
+@@ -7551,12 +7561,6 @@ int ath12k_mac_update_sta_state(struct i
  		return ret;
  	}
  
@@ -135,6 +134,6 @@ Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
 -		goto exit;
 -	}
 -
-	if (!sta->valid_links && !vif->valid_links)
+ 	if (!sta->valid_links && !vif->valid_links)
  		WARN_ON(1);
  

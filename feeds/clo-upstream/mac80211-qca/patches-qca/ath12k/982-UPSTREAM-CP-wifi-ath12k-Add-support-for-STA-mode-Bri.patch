@@ -33,7 +33,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -2781,13 +2781,17 @@ static void ath12k_core_ml_sta_add(struc
+@@ -2640,13 +2640,17 @@ static void ath12k_core_ml_sta_add(struc
  
  		ath12k_core_iterate_sta_list(ar, arvif);
  
@@ -55,7 +55,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			ath12k_bss_disassoc(ar, arvif, false);
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -280,6 +280,9 @@ static int ath12k_fw_stats_request(struc
+@@ -281,6 +281,9 @@ static int ath12k_fw_stats_request(struc
  				   struct stats_request_params *req_param);
  static void ath12k_mac_bridge_vdevs_down(struct ath12k_vif *ahvif, u8 cur_link_id);
  static void ath12k_mac_bridge_vdevs_up(struct ath12k_link_vif *arvif);
@@ -65,7 +65,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  enum nl80211_he_ru_alloc ath12k_mac_phy_he_ru_to_nl80211_he_ru_alloc(u16 ru_phy)
  {
-@@ -2452,7 +2455,12 @@ static void ath12k_peer_assoc_h_crypto(s
+@@ -2478,7 +2481,12 @@ static void ath12k_peer_assoc_h_crypto(s
  	}
  
  	/* FIXME: base on RSN IE/WPA IE is a correct idea? */
@@ -79,7 +79,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
  			   "%s: rsn ie found\n", __func__);
  		if (sta->ft_auth)
-@@ -4221,23 +4229,25 @@ static bool ath12k_mac_vif_recalc_sta_he
+@@ -4310,23 +4318,25 @@ static bool ath12k_mac_vif_recalc_sta_he
  	struct ieee80211_bss_conf* link_conf;
  	enum nl80211_band band;
  
@@ -116,7 +116,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  	if (vif->type != NL80211_IFTYPE_STATION)
  		return false;
  
-@@ -4363,18 +4373,28 @@ void ath12k_bss_assoc(struct ath12k *ar,
+@@ -4452,15 +4462,28 @@ void ath12k_bss_assoc(struct ath12k *ar,
  	struct ath12k_sta *ahsta;
  	struct ath12k_peer *peer;
  	struct ieee80211_sta_he_cap he_cap;
@@ -131,12 +131,11 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	lockdep_assert_held(&ar->conf_mutex);
  
--	if (!arvif)
+-	link_id = bss_conf->link_id;
 +	/* bss_conf shouldnt be NULL expect for bridge vdev */
 +	if (!arvif || (!bss_conf && !ath12k_mac_is_bridge_vdev(arvif)))
- 		return;
- 
--	link_id = bss_conf->link_id;
++ 		return;
++
 +	if (ath12k_mac_is_bridge_vdev(arvif)) {
 +		link_id = arvif->link_id;
 +		ether_addr_copy(bssid, arvif->bssid);
@@ -147,7 +146,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac vdev %i link_id:%d assoc bssid %pM aid %d\n",
  		   arvif->vdev_id, link_id,  arvif->bssid, ahvif->aid);
-@@ -4390,18 +4410,37 @@ void ath12k_bss_assoc(struct ath12k *ar,
+@@ -4476,18 +4499,37 @@ void ath12k_bss_assoc(struct ath12k *ar,
  
  	if (!ap_sta) {
  		ath12k_warn(ar->ab, "failed to find station entry for bss %pM vdev %i\n",
@@ -188,7 +187,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	rcu_read_unlock();
  
-@@ -4409,13 +4448,13 @@ void ath12k_bss_assoc(struct ath12k *ar,
+@@ -4495,13 +4537,13 @@ void ath12k_bss_assoc(struct ath12k *ar,
  	ret = ath12k_wmi_send_peer_assoc_cmd(ar, &peer_arg);
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to run peer assoc for %pM vdev %i: %d\n",
@@ -204,7 +203,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		return;
  	}
  
-@@ -4428,11 +4467,8 @@ void ath12k_bss_assoc(struct ath12k *ar,
+@@ -4514,11 +4556,8 @@ void ath12k_bss_assoc(struct ath12k *ar,
  	}
  	spin_unlock_bh(&ar->ab->base_lock);
  
@@ -218,7 +217,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  				     le16_to_cpu(he_6ghz_capa));
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to setup peer SMPS for vdev %d: %d\n",
-@@ -4442,20 +4478,21 @@ void ath12k_bss_assoc(struct ath12k *ar,
+@@ -4528,20 +4567,21 @@ void ath12k_bss_assoc(struct ath12k *ar,
  
  	if (!ath12k_mac_vif_recalc_sta_he_txbf(ar, arvif, &he_cap)) {
  		ath12k_warn(ar->ab, "failed to recalc he txbf for vdev %i on bss %pM\n",
@@ -243,7 +242,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		params.profile_idx = bss_conf->bssid_index;
  		params.profile_count = BIT(bss_conf->bssid_indicator) - 1;
  		params.tx_bssid = bss_conf->transmitter_bssid;
-@@ -4480,7 +4517,7 @@ skip_vdev_up:
+@@ -4566,7 +4606,7 @@ skip_vdev_up:
  
  	ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
  		   "mac vdev %d up (associated) bssid %pM aid %d\n",
@@ -252,7 +251,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	spin_lock_bh(&ar->ab->base_lock);
  
-@@ -4500,11 +4537,13 @@ skip_vdev_up:
+@@ -4586,11 +4626,13 @@ skip_vdev_up:
  			ath12k_warn(ar->ab, "Unable to authorize BSS peer: %d\n", ret);
  	}
  
@@ -271,7 +270,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  }
  
  void ath12k_bss_disassoc(struct ath12k *ar,
-@@ -5561,18 +5600,23 @@ static void ath12k_mac_op_vif_cfg_change
+@@ -5650,18 +5692,23 @@ static void ath12k_mac_op_vif_cfg_change
  
  	mutex_lock(&ah->conf_mutex);
  	if (changed & BSS_CHANGED_ASSOC) {
@@ -302,7 +301,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		}
  	}
  	mutex_unlock(&ah->conf_mutex);
-@@ -8077,6 +8121,12 @@ static int ath12k_mac_station_add(struct
+@@ -8218,6 +8265,12 @@ static int ath12k_mac_station_add(struct
  	peer_param.peer_addr = arsta->addr;
  	if (arsta->is_bridge_peer) {
  		peer_param.peer_type = WMI_PEER_TYPE_MLO_BRIDGE;
@@ -315,7 +314,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		peer_param.mlo_bridge_peer = true;
  	} else {
  		peer_param.peer_type = WMI_PEER_TYPE_DEFAULT;
-@@ -9150,10 +9200,11 @@ int ath12k_mac_update_sta_state(struct i
+@@ -9301,10 +9354,11 @@ int ath12k_mac_update_sta_state(struct i
  		ahsta->primary_link_id = link_id;
  	}
  
@@ -329,7 +328,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  				arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
  				ath12k_vdev_stop_notify(arvif);
  			}
-@@ -9191,7 +9242,7 @@ int ath12k_mac_update_sta_state(struct i
+@@ -9344,7 +9398,7 @@ int ath12k_mac_update_sta_state(struct i
  
  	}
  

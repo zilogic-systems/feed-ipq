@@ -20,7 +20,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -5668,22 +5668,6 @@ ath12k_mac_find_link_id_by_freq(struct i
+@@ -5726,22 +5726,6 @@ ath12k_mac_find_link_id_by_freq(struct i
  	return ATH12K_DEFAULT_SCAN_LINK;
  }
  
@@ -43,7 +43,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  int ath12k_mac_add_update_link_vif_rcu(struct ath12k_vif *ahvif,
  				       int link_id,
  				       struct ath12k_link_vif *new_arvif)
-@@ -5733,6 +5717,15 @@ int ath12k_mac_remove_link_vif_rcu(struc
+@@ -5791,6 +5775,15 @@ int ath12k_mac_remove_link_vif_rcu(struc
  	return 0;
  }
  
@@ -59,7 +59,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  
  struct ath12k_link_vif *
  ath12k_mac_assign_link_vif(struct ath12k_hw *ah, struct ieee80211_vif *vif,
-@@ -5744,12 +5737,13 @@ ath12k_mac_assign_link_vif(struct ath12k
+@@ -5802,12 +5795,13 @@ ath12k_mac_assign_link_vif(struct ath12k
  
  	lockdep_assert_held(&ah->conf_mutex);
  
@@ -76,13 +76,14 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  	}
  
  	/* Not a ML vif */
-@@ -5783,10 +5777,9 @@ ath12k_mac_assign_link_vif(struct ath12k
+@@ -5841,11 +5835,10 @@ ath12k_mac_assign_link_vif(struct ath12k
  		}
  	}
  
 -	ahvif->link[link_id] = arvif;
  	arvif->ahvif = ahvif;
  	arvif->link_id = link_id;
+ 	arvif->key_cipher = INVALID_CIPHER;
 -	ahvif->links_map |= BIT(link_id);
 +	ath12k_mac_add_update_link_vif_rcu(ahvif, link_id, arvif);
  

@@ -61,7 +61,16 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/dp_rx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
-@@ -2712,7 +2712,7 @@ static void ath12k_get_dot11_hdr_from_rx
+@@ -2027,7 +2027,7 @@ ath12k_dp_htt_ppdu_stats_update_tx_comp_
+ 	lockdep_assert_held(&ar->data_lock);
+ 	if (!ab->stats_disable)
+ 		return;
+-	ath12k_htt_update_ppdu_stats(ar, &ppdu_info->ppdu_stats);
++	ath12k_htt_update_ppdu_stats(ar, ppdu_info);
+ 
+ 	for (i = 0; i < ppdu_info->ppdu_stats.common.num_users; i++) {
+ 		usr_stats = &ppdu_info->ppdu_stats.user_stats[i];
+@@ -2895,7 +2895,7 @@ static void ath12k_get_dot11_hdr_from_rx
  			qos_ctl |= IEEE80211_QOS_CTL_MESH_CONTROL_PRESENT;
  
  		/* TODO: Add other QoS ctl fields when required */
@@ -70,7 +79,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  		       &qos_ctl, IEEE80211_QOS_CTL_LEN);
  	}
  }
-@@ -5882,7 +5882,7 @@ int ath12k_htt_rx_flow_fst_setup(struct
+@@ -6065,7 +6065,7 @@ int ath12k_htt_rx_flow_fst_setup(struct
  		return -ENOMEM;
  
  	skb_put(skb, len);
@@ -79,7 +88,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	memset(cmd, 0, sizeof(*cmd));
  
  	cmd->info0 = le32_encode_bits(HTT_H2T_MSG_TYPE_RX_FSE_SETUP_CFG,
-@@ -5967,7 +5967,7 @@ int ath12k_htt_rx_flow_fse_operation(str
+@@ -6150,7 +6150,7 @@ int ath12k_htt_rx_flow_fse_operation(str
  		return -ENOMEM;
  
  	skb_put(skb, len);
@@ -88,7 +97,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	memset(cmd, 0, sizeof(*cmd));
  
  	cmd->info0 = le32_encode_bits(HTT_H2T_MSG_TYPE_RX_FSE_OPERATION_CFG,
-@@ -6103,7 +6103,7 @@ ath12k_dp_rx_flow_get_fse(struct dp_rx_f
+@@ -6286,7 +6286,7 @@ ath12k_dp_rx_flow_get_fse(struct dp_rx_f
  	struct dp_rx_fse *fse;
  	u32 idx = ath12k_hal_rx_get_trunc_hash(fst->hal_rx_fst, flow_hash);
  
@@ -97,7 +106,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	return &fse[idx];
  }
  
-@@ -6161,7 +6161,7 @@ ath12k_dp_rx_flow_alloc_entry(struct ath
+@@ -6344,7 +6344,7 @@ ath12k_dp_rx_flow_alloc_entry(struct ath
  	u32 flow_idx;
  	int status;
  
@@ -106,7 +115,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	status = ath12k_hal_rx_insert_flow_entry(ab, fst->hal_rx_fst, flow_hash,
  						 &flow_info->flow_tuple_info,
-@@ -6371,7 +6371,7 @@ int ath12k_dp_rx_flow_delete_all_entries
+@@ -6554,7 +6554,7 @@ int ath12k_dp_rx_flow_delete_all_entries
  
  	spin_lock_bh(&fst->fst_lock);
  
@@ -126,7 +135,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  		desc->in_use = false;
  		if (!skb) {
  			ath12k_warn(NULL, "no skb in ds completion path");
-@@ -1353,7 +1353,7 @@ static inline bool ath12k_dp_tx_completi
+@@ -1357,7 +1357,7 @@ static inline bool ath12k_dp_tx_completi
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
  static void ath12k_ppeds_tx_update_stats(struct ath12k *ar,
@@ -135,7 +144,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  {
  	struct ath12k_base *ab = ar->ab;
  	struct ath12k_peer *peer;
-@@ -1367,7 +1367,7 @@ static void ath12k_ppeds_tx_update_stats
+@@ -1371,7 +1371,7 @@ static void ath12k_ppeds_tx_update_stats
  	memset(&info, 0, sizeof(info));
  	info.status.rates[0].idx = -1;
  
@@ -144,7 +153,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	info.status.ack_signal = ATH12K_DEFAULT_NOISE_FLOOR +
  					  ts.ack_rssi;
  	info.status.flags = IEEE80211_TX_STATUS_ACK_SIGNAL_VALID;
-@@ -1460,12 +1460,12 @@ void ath12k_dp_ppeds_tx_comp_get_desc(st
+@@ -1464,12 +1464,12 @@ void ath12k_dp_ppeds_tx_comp_get_desc(st
  int ath12k_ppeds_tx_completion_handler(struct ath12k_base *ab, int budget)
  {
  	struct ath12k_dp *dp = &ab->dp;
@@ -159,7 +168,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	struct hal_wbm_completion_ring_tx *tx_status;
  	struct htt_tx_wbm_completion *status_desc;
  	enum hal_wbm_rel_src_module buf_rel_source;
-@@ -1498,8 +1498,7 @@ int ath12k_ppeds_tx_completion_handler(s
+@@ -1502,8 +1502,7 @@ int ath12k_ppeds_tx_completion_handler(s
  	ath12k_hal_srng_ppeds_dst_inv_entry(ab, status_ring, valid_entries);
  
  	while (likely(valid_entries--)) {
@@ -169,7 +178,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  		if (!desc || !ath12k_dp_tx_completion_valid(desc))
  			continue;
  
-@@ -1603,7 +1602,7 @@ int ath12k_dp_tx_completion_handler(stru
+@@ -1607,7 +1606,7 @@ int ath12k_dp_tx_completion_handler(stru
  		buf_rel_source = FIELD_GET(HAL_WBM_COMPL_TX_INFO0_REL_SRC_MODULE, tx_status->info0);
  		ab->soc_stats.tx_wbm_rel_source[buf_rel_source]++;
  

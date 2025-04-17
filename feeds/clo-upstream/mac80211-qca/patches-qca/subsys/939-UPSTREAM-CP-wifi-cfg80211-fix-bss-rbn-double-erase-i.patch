@@ -1,0 +1,89 @@
+From d0f2ba0991dc2b6b758910a752590c437576822c Mon Sep 17 00:00:00 2001
+From: Jiazi Li <jiazi.li@transsion.com>
+Date: Thu, 13 Feb 2025 16:20:14 +0530
+Subject: [PATCH] UPSTREAM:CP:wifi:cfg80211: fix bss rbn double erase issue
+
+Possible rb tree corruption leads to multiple crash related to rb
+tree. Below possible downstream patch fix the corruption issue in
+rb tree.
+
+If cfg80211_update_assoc_bss_entry call rb_insert_bss re-insert bss
+failed because cmp_bss return 0, this bss->rbn will continue to hold
+expired data, such as __rd_parent_color.
+And this bss still in rdev->bss_list, maybe double erase in
+__cfg80211_bss_expire later.
+Double erase a rbtree node(with expired parent and color data) maybe
+corrupt rbtree, so add a in_rbtree flag to fix this issue.
+
+Patch-work: https://patchwork.kernel.org/project/linux-wireless/patch/
+20231025103304.22082-1-jiazi.li@transsion.com/#25571146
+Patch-dependency: None
+
+Signed-off-by: Jiazi Li <jiazi.li@transsion.com>
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ net/wireless/core.h |  1 +
+ net/wireless/scan.c | 13 +++++++++----
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+--- a/net/wireless/core.h
++++ b/net/wireless/core.h
+@@ -168,6 +168,7 @@ struct cfg80211_internal_bss {
+ 	unsigned long ts;
+ 	unsigned long refcount;
+ 	atomic_t hold;
++	bool in_rbtree;
+ 
+ 	/* time at the start of the reception of the first octet of the
+ 	 * timestamp field of the last beacon/probe received for this BSS.
+--- a/net/wireless/scan.c
++++ b/net/wireless/scan.c
+@@ -202,7 +202,11 @@ static bool __cfg80211_unlink_bss(struct
+ 
+ 	list_del_init(&bss->list);
+ 	list_del_init(&bss->pub.nontrans_list);
+-	rb_erase(&bss->rbn, &rdev->bss_tree);
++	if (bss->in_rbtree) {
++		rb_erase(&bss->rbn, &rdev->bss_tree);
++		bss->in_rbtree = false;
++	}
++
+ 	rdev->bss_entries--;
+ 	WARN_ONCE((rdev->bss_entries == 0) ^ list_empty(&rdev->bss_list),
+ 		  "rdev bss entries[%d]/list[empty:%d] corruption\n",
+@@ -1563,6 +1567,7 @@ static void rb_insert_bss(struct cfg8021
+ 
+ 		if (WARN_ON(!cmp)) {
+ 			/* will sort of leak this BSS */
++			bss->in_rbtree = false;
+ 			return;
+ 		}
+ 
+@@ -1572,6 +1577,7 @@ static void rb_insert_bss(struct cfg8021
+ 			p = &(*p)->rb_right;
+ 	}
+ 
++	bss->in_rbtree = true;
+ 	rb_link_node(&bss->rbn, parent, p);
+ 	rb_insert_color(&bss->rbn, &rdev->bss_tree);
+ }
+@@ -3095,7 +3101,8 @@ void cfg80211_update_assoc_bss_entry(str
+ 			rdev->bss_generation++;
+ 	}
+ 
+-	rb_erase(&cbss->rbn, &rdev->bss_tree);
++	if (cbss->in_rbtree)
++		rb_erase(&cbss->rbn, &rdev->bss_tree);
+ 	rb_insert_bss(rdev, cbss);
+ 	rdev->bss_generation++;
+ 
+@@ -3104,7 +3111,8 @@ void cfg80211_update_assoc_bss_entry(str
+ 				 nontrans_list) {
+ 		bss = bss_from_pub(nontrans_bss);
+ 		bss->pub.channel = chan;
+-		rb_erase(&bss->rbn, &rdev->bss_tree);
++		if (bss->in_rbtree)
++			rb_erase(&bss->rbn, &rdev->bss_tree);
+ 		rb_insert_bss(rdev, bss);
+ 		rdev->bss_generation++;
+ 	}

@@ -490,7 +490,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  static void ath12k_dp_cc_cleanup(struct ath12k_base *ab)
  {
  	struct ath12k_rx_desc_info *desc_info, *tmp;
-@@ -2297,3 +2438,81 @@ fail_link_desc_cleanup:
+@@ -2296,3 +2437,81 @@ fail_link_desc_cleanup:
  
  	return ret;
  }
@@ -1288,7 +1288,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  static
 --- /dev/null
 +++ b/drivers/net/wireless/ath/ath12k/umac_reset.c
-@@ -0,0 +1,470 @@
+@@ -0,0 +1,476 @@
 +/* SPDX-License-Identifier: BSD-3-Clause-Clear */
 +/*
 + * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
@@ -1578,13 +1578,13 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
 +	return 0;
 +}
 +
-+void ath12k_umac_reset_initiate_recovery(struct ath12k_base *ab)
++int ath12k_umac_reset_initiate_recovery(struct ath12k_base *ab)
 +{
 +	struct ath12k_hw_group *ag = ab->ag;
 +	struct ath12k_mlo_dp_umac_reset *mlo_umac_reset = &ag->mlo_umac_reset;
 +
 +	if (!mlo_umac_reset)
-+		return;
++		return -EOPNOTSUPP;
 +
 +	spin_lock_bh(&mlo_umac_reset->lock);
 +
@@ -1592,13 +1592,15 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
 +	    ATH12K_IS_UMAC_RESET_IN_PROGRESS) {
 +		spin_unlock_bh(&mlo_umac_reset->lock);
 +		ath12k_warn(ab, "UMAC RECOVERY IS IN PROGRESS\n");
-+		return;
++		WARN_ON(1);
++		return -ECANCELED;
 +	}
 +	mlo_umac_reset->umac_reset_info = BIT(0); /* UMAC recovery is in progress */
 +	mlo_umac_reset->umac_reset_info |= BIT(1); /* Target recovery */
 +	atomic_set(&mlo_umac_reset->response_chip, 0);
 +	mlo_umac_reset->initiator_chip = ab->chip_id;
 +	spin_unlock_bh(&mlo_umac_reset->lock);
++	return 0;
 +}
 +
 +void ath12k_umac_reset_notify_target_sync_and_send(struct ath12k_base *ab,
@@ -1649,12 +1651,16 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
 +void ath12k_dp_umac_reset_action(struct ath12k_base *ab,
 +				 enum dp_umac_reset_recover_action rx_event)
 +{
++	int ret;
++
 +	switch(rx_event) {
 +	case ATH12K_UMAC_RESET_INIT_UMAC_RECOVERY:
 +	case ATH12K_UMAC_RESET_INIT_TARGET_RECOVERY_SYNC_USING_UMAC:
-+		ath12k_umac_reset_initiate_recovery(ab);
-+		ab->dp_umac_reset.ts.trigger_start = jiffies_to_msecs(jiffies);
-+		ath12k_umac_reset_notify_target(ab, ATH12K_UMAC_RESET_TX_CMD_TRIGGER_DONE);
++		ret = ath12k_umac_reset_initiate_recovery(ab);
++		if (!ret) {
++			ab->dp_umac_reset.ts.trigger_start = jiffies_to_msecs(jiffies);
++			ath12k_umac_reset_notify_target(ab, ATH12K_UMAC_RESET_TX_CMD_TRIGGER_DONE);
++		}
 +		break;
 +	case ATH12K_UMAC_RESET_DO_POST_RESET_COMPLETE:
 +		ab->dp_umac_reset.ts.post_reset_complete_start = jiffies_to_msecs(jiffies);

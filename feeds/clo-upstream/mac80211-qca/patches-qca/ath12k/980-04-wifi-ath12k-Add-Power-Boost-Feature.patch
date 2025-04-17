@@ -1,4 +1,4 @@
-From 1a63ba9729faf8ae8a886f3e08bcced578478086 Mon Sep 17 00:00:00 2001
+From f694df562155a5dc3aea0bdc6003a15e0cbbb9a5 Mon Sep 17 00:00:00 2001
 From: Thomas Wu <quic_wthomas@quicinc.com>
 Date: Tue, 15 Oct 2024 15:44:48 -0700
 Subject: [PATCH 4/6] wifi: ath12k: Add Power Boost Feature
@@ -42,15 +42,16 @@ Patch-dependency: none
 Signed-off-by: Thomas Wu <quic_wthomas@quicinc.com>
 ---
  drivers/net/wireless/ath/ath12k/core.c        |   2 +
- drivers/net/wireless/ath/ath12k/power_boost.c | 339 ++++++++++++++++++
- 2 files changed, 341 insertions(+)
+ drivers/net/wireless/ath/ath12k/power_boost.c | 342 ++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/power_boost.h |  17 +-
+ 3 files changed, 355 insertions(+), 6 deletions(-)
  create mode 100644 drivers/net/wireless/ath/ath12k/power_boost.c
 
 diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
-index 7127b45..c0043cf 100644
+index 7b9dfbb..6bf1a8a 100644
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -1393,6 +1393,7 @@ static int ath12k_core_pdev_init(struct ath12k_base *ab)
+@@ -1397,6 +1397,7 @@ static int ath12k_core_pdev_init(struct ath12k_base *ab)
  	ath12k_telemetry_init(ab);
  	ath12k_fse_init(ab);
  	ath12k_dp_accel_cfg_init(ab);
@@ -58,7 +59,7 @@ index 7127b45..c0043cf 100644
  
  	ret = ath12k_dp_ppeds_start(ab);
  	if (ret) {
-@@ -1417,6 +1418,7 @@ static void ath12k_core_pdev_deinit(struct ath12k_base *ab)
+@@ -1421,6 +1422,7 @@ static void ath12k_core_pdev_deinit(struct ath12k_base *ab)
  	ath12k_cfr_deinit(ab);
  	ath12k_spectral_deinit(ab);
  	ath12k_thermal_unregister(ab);
@@ -68,10 +69,10 @@ index 7127b45..c0043cf 100644
  	ath12k_telemetry_deinit(ab);
 diff --git a/drivers/net/wireless/ath/ath12k/power_boost.c b/drivers/net/wireless/ath/ath12k/power_boost.c
 new file mode 100644
-index 0000000..3041368
+index 0000000..c84ff5c
 --- /dev/null
 +++ b/drivers/net/wireless/ath/ath12k/power_boost.c
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,342 @@
 +// SPDX-License-Identifier: BSD-3-Clause-Clear
 +/*
 + * Copyright (c) 2020 The Linux Foundation. All rights reserved.
@@ -158,9 +159,10 @@ index 0000000..3041368
 +	}
 +
 +	tah->start_magic_num = ATH12K_POWER_BOOST_START_MAGIC;
-+	tah->stats_version = 1;
-+	tah->stats_type = 1;
-+	tah->payload_len = sizeof(struct ath12k_power_boost_meta_header) + ev->size;
++	tah->stats_version = ATH12K_POWER_BOOST_VERSION;
++	tah->stats_type = ATH12K_POWER_BOOST_TYPE;
++	tah->payload_len = sizeof(struct ath12k_power_boost_meta_header)
++			   + (ev->size * ATH12K_POWER_BOOST_KB_SZ) + sizeof(u32);
 +
 +	meta->pdev_id = ev->pdev_id;
 +	meta->status = ev->status;
@@ -173,11 +175,12 @@ index 0000000..3041368
 +	meta->band_center_freq2 = ev->band_center_freq2;
 +	meta->phy_mode = ev->phy_mode;
 +	meta->link_id = ar->link_idx;
++	meta->length = ev->size * ATH12K_POWER_BOOST_KB_SZ;
 +
 +	ath12k_power_boost_rfs_write(ar,
 +				     tah, sizeof(struct ath12k_power_boost_telemetry_agent_header),
 +				     meta, sizeof(struct ath12k_power_boost_meta_header),
-+				     shmem->vaddr, ev->size,
++				     shmem->vaddr, ev->size * ATH12K_POWER_BOOST_KB_SZ,
 +				     &end_magic, sizeof(u32));
 +}
 +
@@ -259,7 +262,7 @@ index 0000000..3041368
 +
 +	shmem->vaddr_unaligned = dma_alloc_coherent(ar->ab->dev,
 +						    shmem->size +
-+						    ATH12K_POWER_BOOST_SHMEM_ALIGN,
++						    ATH12K_POWER_BOOST_SHARED_MEM_ALIGN,
 +						    &shmem->paddr_unaligned,
 +						    GFP_KERNEL);
 +	if (!shmem->vaddr_unaligned) {
@@ -268,8 +271,8 @@ index 0000000..3041368
 +		return -ENOMEM;
 +	}
 +
-+	memset(shmem->vaddr_unaligned, 0, shmem->size + ATH12K_POWER_BOOST_SHMEM_ALIGN);
-+	shmem->vaddr = PTR_ALIGN(shmem->vaddr_unaligned, ATH12K_POWER_BOOST_SHMEM_ALIGN);
++	memset(shmem->vaddr_unaligned, 0, shmem->size + ATH12K_POWER_BOOST_SHARED_MEM_ALIGN);
++	shmem->vaddr = PTR_ALIGN(shmem->vaddr_unaligned, ATH12K_POWER_BOOST_SHARED_MEM_ALIGN);
 +	shmem->paddr = shmem->paddr_unaligned + ((unsigned long)shmem->vaddr -
 +		       (unsigned long)shmem->vaddr_unaligned);
 +
@@ -285,7 +288,7 @@ index 0000000..3041368
 +
 +	if (shmem->vaddr_unaligned) {
 +		dma_free_coherent(ar->ab->dev,
-+				  shmem->size + ATH12K_POWER_BOOST_SHMEM_ALIGN,
++				  shmem->size + ATH12K_POWER_BOOST_SHARED_MEM_ALIGN,
 +				  shmem->vaddr_unaligned,
 +				  shmem->paddr_unaligned);
 +		shmem->vaddr_unaligned = NULL;
@@ -308,7 +311,7 @@ index 0000000..3041368
 +		goto unregister;
 +	}
 +
-+	ret = ath12k_wmi_power_boost_mem_addr_cmd(ar, shmem->paddr, shmem->size);
++	ret = ath12k_wmi_power_boost_mem_addr_cmd(ar, shmem->paddr, ATH12K_POWER_BOOST_NUM_KB);
 +	if (ret) {
 +		ath12k_warn(ar->ab, "failed to allocate shared mem for power boost in pdev %d\n",
 +			    ar->pdev_idx);
@@ -367,6 +370,7 @@ index 0000000..3041368
 +	}
 +
 +	if (!ag->pb_rfs_capture) {
++		memset(ag->pb_rfs_path, '\0', sizeof(ag->pb_rfs_path));
 +		ag->pb_rfs_capture = relay_open("pb_capture",
 +						NULL,
 +						ATH12K_POWER_BOOST_RELAY_SUB_BUFS_SZ,
@@ -390,7 +394,7 @@ index 0000000..3041368
 +		pb->num_subbufs = ATH12K_POWER_BOOST_RELAY_NUM_SUB_BUFS;
 +		pb->subbuf_size = ATH12K_POWER_BOOST_RELAY_SUB_BUFS_SZ;
 +
-+		pb->shmem.size = ATH12K_POWER_BOOST_SHMEM_SZ;
++		pb->shmem.size = ATH12K_POWER_BOOST_SHARED_MEM_SZ;
 +		pb->shmem.vaddr_unaligned = NULL;
 +		pb->shmem.vaddr = NULL;
 +		pb->shmem.paddr_unaligned = 0;
@@ -411,6 +415,43 @@ index 0000000..3041368
 +	ath12k_power_boost_deinit(ab);
 +}
 +
+diff --git a/drivers/net/wireless/ath/ath12k/power_boost.h b/drivers/net/wireless/ath/ath12k/power_boost.h
+index dd5bfd2..491d6d8 100644
+--- a/drivers/net/wireless/ath/ath12k/power_boost.h
++++ b/drivers/net/wireless/ath/ath12k/power_boost.h
+@@ -10,14 +10,18 @@
+ struct ath12k_base;
+ 
+ #ifdef CPTCFG_ATH12K_POWER_BOOST
+-#define ATH12K_POWER_BOOST_START_MAGIC 0xDEADBEAF
+-#define ATH12K_POWER_BOOST_END_MAGIC 0xBEAFDEAD
++#define ATH12K_POWER_BOOST_VERSION	1
++#define ATH12K_POWER_BOOST_TYPE		2
++#define ATH12K_POWER_BOOST_START_MAGIC	0xDEADBEAF
++#define ATH12K_POWER_BOOST_END_MAGIC	0xBEAFDEAD
+ 
+-#define ATH12K_POWER_BOOST_RELAY_NUM_SUB_BUFS 3
+-#define ATH12K_POWER_BOOST_RELAY_SUB_BUFS_SZ 100512
++#define ATH12K_POWER_BOOST_RELAY_NUM_SUB_BUFS	3
++#define ATH12K_POWER_BOOST_RELAY_SUB_BUFS_SZ	100512
+ 
+-#define ATH12K_POWER_BOOST_SHMEM_SZ	     100000
+-#define ATH12K_POWER_BOOST_SHMEM_ALIGN	     8
++#define ATH12K_POWER_BOOST_KB_SZ	     1024
++#define ATH12K_POWER_BOOST_NUM_KB	     100
++#define ATH12K_POWER_BOOST_SHARED_MEM_SZ     ATH12K_POWER_BOOST_KB_SZ * ATH12K_POWER_BOOST_NUM_KB
++#define ATH12K_POWER_BOOST_SHARED_MEM_ALIGN  8
+ 
+ struct ath12k_power_boost_telemetry_agent_header {
+ 	u32 start_magic_num;
+@@ -46,6 +50,7 @@ struct ath12k_power_boost_meta_header {
+ 	u32 band_center_freq2;
+ 	u32 phy_mode;
+ 	u32 link_id;
++	u32 length;
+ } __packed;
+ 
+ struct ath12k_power_boost {
 -- 
 2.25.1
 

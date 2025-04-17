@@ -26,11 +26,9 @@ Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
  drivers/net/wireless/ath/ath12k/qmi.c  | 2 +-
  3 files changed, 6 insertions(+), 2 deletions(-)
 
-Index: b/drivers/net/wireless/ath/ath12k/core.c
-===================================================================
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -3611,6 +3611,10 @@ static void ath12k_core_reset(struct wor
+@@ -3592,6 +3592,10 @@ static void ath12k_core_reset(struct wor
  	long time_left;
  	bool teardown = false;
  
@@ -41,7 +39,7 @@ Index: b/drivers/net/wireless/ath/ath12k/core.c
  	/* Initializing this flag to false, as this flag will be only
  	 * set true on Mode1 SSR.
  	 */
-@@ -4437,6 +4441,10 @@ static void ath12k_rddm_notifier(struct
+@@ -4421,6 +4425,10 @@ static void ath12k_rddm_notifier(struct
  	int i;
  
  	list_for_each_entry(ag, &ath12k_hw_groups, list) {
@@ -52,29 +50,17 @@ Index: b/drivers/net/wireless/ath/ath12k/core.c
  		for (i = 0; i < ag->num_chip; i++) {
  			ab = ag->ab[i];
  			if (ab->in_panic)
-Index: b/drivers/net/wireless/ath/ath12k/mhi.c
-===================================================================
 --- a/drivers/net/wireless/ath/ath12k/mhi.c
 +++ b/drivers/net/wireless/ath/ath12k/mhi.c
-@@ -383,15 +383,13 @@ static void ath12k_mhi_op_status_cb(stru
+@@ -384,7 +384,7 @@ static void ath12k_mhi_op_status_cb(stru
  		}
  
  		/* In-case of rddm for fatal error and ab is registered. */
 -		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->dev_flags))) {
 +		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
+ 			ath12k_info(ab, "Schedule SSR Recovery reset work queue\n");
  			set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
  			set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
- 			set_bit(ATH12K_FLAG_RECOVERY, &ab->ag->dev_flags);
- 			queue_work(ab->workqueue_aux, &ab->reset_work);
- 			ath12k_dbg(ab, ATH12K_DBG_BOOT, "Schedule SSR Recovery reset work queue\n");
- 			ath12k_hal_dump_srng_stats(ab);
--		} else {
--			BUG_ON(1);
- 		}
- 		break;
- 	default:
-Index: b/drivers/net/wireless/ath/ath12k/qmi.c
-===================================================================
 --- a/drivers/net/wireless/ath/ath12k/qmi.c
 +++ b/drivers/net/wireless/ath/ath12k/qmi.c
 @@ -6559,7 +6559,7 @@ static void ath12k_qmi_driver_event_work

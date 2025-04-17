@@ -348,7 +348,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
 +	int ret = 0;
 +	u8 tid, q_id, sawf_max_q_per_tid;
 +
-+	if (!ab && !sawf_stats)
++	if (!ab || !sawf_stats)
 +		return -ENODATA;
 +
 +	spin_lock_bh(&ab->base_lock);
@@ -388,7 +388,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
 +	int ret = 0;
 +	u8 tid, q_id, sawf_max_q_per_tid;
 +
-+	if (!ab && !sawf_stats)
++	if (!ab || !sawf_stats)
 +		return -ENODATA;
 +
 +	spin_lock_bh(&ab->base_lock);
@@ -428,7 +428,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
 +	int ret = 0;
 +	u8 tid, q_id, sawf_max_q_per_tid;
 +
-+	if (!ab && !sawf_stats)
++	if (!ab || !sawf_stats)
 +		return -ENODATA;
 +
 +	spin_lock_bh(&ab->base_lock);
@@ -1148,7 +1148,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
  #include <ppe_ds_wlan.h>
  #include <ppe_vp_public.h>
-@@ -1595,6 +1596,7 @@ void ath12k_fw_stats_free(struct ath12k_
+@@ -1596,6 +1597,7 @@ void ath12k_fw_stats_free(struct ath12k_
  int ath12k_send_sawf_configs_soc(struct ath12k_sawf_svc_params *new_param);
  int ath12k_sawf_send_disable_soc(u8 svc_id);
  int ath12k_core_sawf_ul_config(struct net_device *dev, struct ath12k_sawf_wmi_peer_latency_param *latency_info);
@@ -1209,7 +1209,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		kfree(peer);
  	}
  	spin_unlock_bh(&ab->base_lock);
-@@ -6838,6 +6842,10 @@ static void ath12k_mac_station_post_remo
+@@ -6848,6 +6852,10 @@ static void ath12k_mac_station_post_remo
  		ath12k_peer_rhash_delete(ar->ab, peer);
  		peer->sta = NULL;
  		list_del(&peer->list);

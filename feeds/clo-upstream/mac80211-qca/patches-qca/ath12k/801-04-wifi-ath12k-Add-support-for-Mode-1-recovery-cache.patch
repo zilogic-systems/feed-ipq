@@ -89,38 +89,34 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	ath12k_umac_reset_completion(ab);
  
  	ab->free_vdev_map = (1LL << (ab->num_radios * TARGET_NUM_VDEVS)) - 1;
-@@ -1849,7 +1863,8 @@ err_hal_srng_deinit:
- 	return ret;
- }
+@@ -1851,7 +1865,6 @@ err_hal_srng_deinit:
  
--static void ath12k_core_mlo_hw_queues_stop(struct ath12k_hw_group *ag)
-+static void ath12k_core_mlo_hw_queues_stop(struct ath12k_hw_group *ag,
-+					   struct ath12k_base *block_ab)
+ static void ath12k_core_mlo_hw_queues_stop(struct ath12k_hw_group *ag)
  {
- 	struct ath12k_base *ab;
+-	struct ath12k_base *ab;
  	struct ath12k_hw *ah;
-@@ -1866,6 +1881,11 @@ static void ath12k_core_mlo_hw_queues_st
+ 	int i;
+ 
+@@ -1865,18 +1878,6 @@ static void ath12k_core_mlo_hw_queues_st
+ 		ieee80211_stop_queues(ah->hw);
  	}
  	ag->hw_queues_stopped = true;
- 
-+	if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE1) {
-+		block_ab->qmi.num_radios = ATH12K_QMI_INVALID_RADIO;
-+		return;
-+	}
-+
- 	for (i = 0; i < ag->num_chip; i++) {
- 		ab = ag->ab[i];
- 
-@@ -1873,7 +1893,7 @@ static void ath12k_core_mlo_hw_queues_st
- 		* In Mode0, partner chips are expected to be asserted, hence reset
- 		* qmi.num_radios count to ensure avoiding duplicate host cap triggers.
- 		*/
+-
+-	for (i = 0; i < ag->num_chip; i++) {
+-		ab = ag->ab[i];
+-
+-		/*
+-		* In Mode0, partner chips are expected to be asserted, hence reset
+-		* qmi.num_radios count to ensure avoiding duplicate host cap triggers.
+-		*/
 -		if (ath12k_recovery_mode == ATH12K_MLO_RECOVERY_MODE0)
-+		if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0)
- 			ab->qmi.num_radios = ATH12K_QMI_INVALID_RADIO;
+-			ab->qmi.num_radios = ATH12K_QMI_INVALID_RADIO;
+-
+-	}
+ }
  
- 	}
-@@ -1985,6 +2005,7 @@ static void ath12k_core_post_reconfigure
+ static void ath12k_core_pre_reconfigure_recovery(struct ath12k_base *ab)
+@@ -1985,6 +1986,7 @@ static void ath12k_core_post_reconfigure
  void ath12k_core_halt(struct ath12k *ar)
  {
  	struct ath12k_base *ab = ar->ab;
@@ -128,7 +124,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  
  	lockdep_assert_held(&ar->conf_mutex);
  
-@@ -1995,16 +2016,728 @@ void ath12k_core_halt(struct ath12k *ar)
+@@ -1995,16 +1997,728 @@ void ath12k_core_halt(struct ath12k *ar)
  	cancel_work_sync(&ar->regd_update_work);
  	rcu_assign_pointer(ab->pdevs_active[ar->pdev_idx], NULL);
  	synchronize_rcu();
@@ -858,7 +854,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	int i;
  
  	if (!ab->is_reset)
-@@ -2017,16 +2750,20 @@ static void ath12k_core_restart(struct w
+@@ -2017,16 +2731,20 @@ static void ath12k_core_restart(struct w
  		 * If for any reason, reconfiguration fails, issue bug on for
  		 * Mode 0
  		 */
@@ -881,7 +877,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  		for (i = 0; i < ag->num_hw; i++) {
  			ah = ag->ah[i];
  			if (!ah)
-@@ -2041,6 +2778,19 @@ static void ath12k_core_restart(struct w
+@@ -2041,6 +2759,19 @@ static void ath12k_core_restart(struct w
  	if (ath12k_sawf_reconfigure_on_crash(ab))
  		ath12k_warn(ab, "SAWF SLA reconfiguring failed\n");
  #endif /* CPTCFG_ATH12K_SAWF */
@@ -901,7 +897,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  }
  
  static void ath12k_rproc_recovery_do_coredump(struct rproc *rproc)
-@@ -2144,26 +2894,26 @@ static int ath12k_rproc_recovery_power_u
+@@ -2144,26 +2875,26 @@ static int ath12k_rproc_recovery_power_u
   * is identified by waiting for MLO Teardown complete for all
   * chipsets
   */
@@ -935,7 +931,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  }
  
  #ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
-@@ -2211,9 +2961,11 @@ static void ath12k_core_reset(struct wor
+@@ -2211,9 +2942,11 @@ static void ath12k_core_reset(struct wor
  {
  	struct ath12k_base *ab = container_of(work, struct ath12k_base, reset_work);
  	struct ath12k_hw_group *ag = ab->ag;
@@ -947,7 +943,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  
  #ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
  	if (!ab->is_reset) {
-@@ -2224,9 +2976,20 @@ static void ath12k_core_reset(struct wor
+@@ -2224,9 +2957,20 @@ static void ath12k_core_reset(struct wor
  	}
  #endif
  
@@ -970,7 +966,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	}
  
  	/* Sometimes the recovery will fail and then the next all recovery fail,
-@@ -2258,7 +3021,7 @@ static void ath12k_core_reset(struct wor
+@@ -2258,7 +3002,7 @@ static void ath12k_core_reset(struct wor
  		 */
  		ath12k_warn(ab, "already resetting count %d\n", reset_count);
  
@@ -979,7 +975,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  			BUG_ON(1);
  
  		reinit_completion(&ab->reset_complete);
-@@ -2286,6 +3049,71 @@ static void ath12k_core_reset(struct wor
+@@ -2286,6 +3030,73 @@ static void ath12k_core_reset(struct wor
  	ab->is_reset = true;
  	atomic_set(&ab->recovery_count, 0);
  
@@ -988,7 +984,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
 +		ag->num_started--;
 +
 +	if (!ag->hw_queues_stopped)
-+		ath12k_core_mlo_hw_queues_stop(ag, ab);
++		ath12k_core_mlo_hw_queues_stop(ag);
 +
 +	for (i = 0; i < ag->num_chip; i++) {
 +		partner_ab = ag->ab[i];
@@ -1048,10 +1044,12 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
 +		}
 +	}
 +
++	ab->qmi.num_radios = ATH12K_QMI_INVALID_RADIO;
++
  	for (i = 0; i < ag->num_chip; i++) {
  		partner_ab = ag->ab[i];
  		if (ab == partner_ab)
-@@ -2295,16 +3123,19 @@ static void ath12k_core_reset(struct wor
+@@ -2295,16 +3106,19 @@ static void ath12k_core_reset(struct wor
  		 * method to ensure recovery of all partner chips in MODE0 instead of
  		 * relying on firmware to crash partner chips
  		 */
@@ -1076,7 +1074,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	ath12k_core_pre_reconfigure_recovery(ab);
  
  	ath12k_core_post_reconfigure_recovery(ab);
-@@ -2323,10 +3154,6 @@ static void ath12k_core_reset(struct wor
+@@ -2323,10 +3137,6 @@ static void ath12k_core_reset(struct wor
  	if (ab->is_qdss_tracing)
  		ab->is_qdss_tracing = false;
  
@@ -1087,7 +1085,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	if (ab->fw_recovery_support) {
  		if (ab->hif.bus == ATH12K_BUS_PCI) {
  			ath12k_hif_power_down(ab);
-@@ -2339,6 +3166,12 @@ static void ath12k_core_reset(struct wor
+@@ -2339,6 +3149,12 @@ static void ath12k_core_reset(struct wor
  		}
  		ath12k_dbg(ab, ATH12K_DBG_BOOT, "reset started\n");
  	}
@@ -1100,7 +1098,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	mutex_unlock(&ag->mutex_lock);
  }
  
-@@ -2654,6 +3487,7 @@ struct ath12k_base *ath12k_core_alloc(st
+@@ -2654,6 +3470,7 @@ struct ath12k_base *ath12k_core_alloc(st
  	init_waitqueue_head(&ab->ssr_dump_wq);
  	INIT_WORK(&ab->restart_work, ath12k_core_restart);
  	INIT_WORK(&ab->reset_work, ath12k_core_reset);
@@ -1144,15 +1142,15 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  };
  
  struct ath12k_sta {
-@@ -1016,6 +1022,7 @@ struct ath12k_hw {
- 
+@@ -1017,6 +1023,7 @@ struct ath12k_hw {
  	/* protected by ah->data_lock */
  	struct list_head ml_peers;
+ 	u16 last_ml_peer_id;
 +	bool in_recovery;
  	struct ath12k radio[0] __aligned(sizeof(void *));
  };
  
-@@ -1223,7 +1230,8 @@ struct vendor_info {
+@@ -1224,7 +1231,8 @@ struct vendor_info {
  };
  
  enum ath12k_mlo_recovery_mode {
@@ -1162,7 +1160,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  };
  
  struct ath12k_mlo_dp_umac_reset {
-@@ -1395,6 +1403,7 @@ struct ath12k_base {
+@@ -1396,6 +1404,7 @@ struct ath12k_base {
  	struct work_struct restart_work;
  	struct workqueue_struct *workqueue_aux;
  	struct work_struct reset_work;
@@ -1170,7 +1168,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	atomic_t recovery_count;
  	atomic_t reset_count;
  	bool is_reset;
-@@ -1469,6 +1478,8 @@ struct ath12k_base {
+@@ -1470,6 +1479,8 @@ struct ath12k_base {
  	u32 *recovery_mode_address;
  
  	bool mlo_complete_event;
@@ -1331,7 +1329,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	struct ath12k_pdev *pdev = ar->pdev;
  	struct ath12k_wmi_vdev_create_arg arg = {};
-@@ -1404,7 +1500,7 @@ static int ath12k_mac_monitor_vdev_creat
+@@ -1408,7 +1504,7 @@ static int ath12k_mac_monitor_vdev_creat
  	return 0;
  }
  
@@ -1340,7 +1338,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	int ret;
  	unsigned long time_left;
-@@ -1457,7 +1553,7 @@ ath12k_mac_get_any_chandef_iter(struct i
+@@ -1461,7 +1557,7 @@ ath12k_mac_get_any_chandef_iter(struct i
  		arg->def = &conf->def;
  }
  
@@ -1349,7 +1347,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	struct cfg80211_chan_def *chandef;
  	struct ath12k_mac_any_chandef_arg arg = { .ar = ar, .def = NULL};
-@@ -1501,7 +1597,7 @@ static int ath12k_mac_monitor_start(stru
+@@ -1505,7 +1601,7 @@ static int ath12k_mac_monitor_start(stru
  	return ret;
  }
  
@@ -1358,7 +1356,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	int ret;
  
-@@ -4378,10 +4474,10 @@ static int ath12k_mac_config_obss_pd(str
+@@ -4382,10 +4478,10 @@ static int ath12k_mac_config_obss_pd(str
  	return 0;
  }
  
@@ -1373,7 +1371,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	struct ath12k_vif *ahvif = arvif->ahvif, *tx_ahvif;
  	struct ath12k_link_vif *tx_arvif;
-@@ -4548,7 +4644,8 @@ skip_pending_cs_up:
+@@ -4552,7 +4648,8 @@ skip_pending_cs_up:
  	if (changed & BSS_CHANGED_BSSID && info->bssid && !is_zero_ether_addr(info->bssid))
  		ether_addr_copy(arvif->bssid, info->bssid);
  
@@ -1767,7 +1765,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	struct ieee80211_vif *vif = arvif->ahvif->vif;
  	struct ath12k_base *ab = ar->ab;
-@@ -10441,7 +10594,14 @@ static int ath12k_mac_vdev_create(struct
+@@ -10444,7 +10597,14 @@ static int ath12k_mac_vdev_create(struct
  	ar->allocated_vdev_map |= 1LL << arvif->vdev_id;
  
  	spin_lock_bh(&ar->data_lock);
@@ -1783,7 +1781,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	spin_unlock_bh(&ar->data_lock);
  
  	ath12k_mac_update_vif_offload(ar, arvif);
-@@ -10603,8 +10763,8 @@ err:
+@@ -10606,8 +10766,8 @@ err:
  	return ret;
  }
  
@@ -1794,7 +1792,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	struct ath12k_hw *ah = ar->ah;
  	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
-@@ -11050,6 +11210,10 @@ static int ath12k_mac_ampdu_action(struc
+@@ -11053,6 +11213,10 @@ static int ath12k_mac_ampdu_action(struc
  	if (unlikely(test_bit(ATH12K_FLAG_CRASH_FLUSH, &ar->ab->dev_flags)))
  		return -ESHUTDOWN;
  
@@ -1805,7 +1803,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	mutex_lock(&ar->conf_mutex);
  
  	switch (params->action) {
-@@ -11485,7 +11649,7 @@ err:
+@@ -11488,7 +11652,7 @@ err:
  	return ret;
  }
  
@@ -1814,7 +1812,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  				 const struct cfg80211_chan_def *chandef,
  				 bool radar_enabled)
  {
-@@ -11599,7 +11763,7 @@ beacon_tmpl_setup:
+@@ -11602,7 +11766,7 @@ beacon_tmpl_setup:
  	return ret;
  }
  
@@ -1823,7 +1821,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
  	struct ath12k_vif *ahvif = arvif->ahvif;
  	struct ath12k *ar = arvif->ar;
-@@ -11661,7 +11825,12 @@ static int ath12k_mac_mlo_vdev_start(str
+@@ -11664,7 +11828,12 @@ static int ath12k_mac_mlo_vdev_start(str
  
  		arvif->is_started = true;
  		mutex_unlock(&ar->conf_mutex);
@@ -1837,7 +1835,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  		/* Beaconing not required in DFS channel assignment for CAC */
  		return ret;
  	}
-@@ -11685,6 +11854,9 @@ static int ath12k_mac_mlo_vdev_start(str
+@@ -11688,6 +11857,9 @@ static int ath12k_mac_mlo_vdev_start(str
  
  		ar = arvif_p->ar;
  
@@ -1847,7 +1845,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  		/* TODO cant hold rcu lock due to call of ath12k_mac_bss_info_changed
  		 * option is to take a backup if link info, anyways this function would
  		 * change after FW support for dynamic add
-@@ -11716,7 +11888,12 @@ static int ath12k_mac_mlo_vdev_start(str
+@@ -11719,7 +11891,12 @@ static int ath12k_mac_mlo_vdev_start(str
  			arvif_p->pending_up = false;
  		}
  		mutex_unlock(&ar->conf_mutex);
@@ -1861,7 +1859,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	}
  out:
  	return ret;
-@@ -12783,9 +12960,9 @@ void ath12k_mac_fill_reg_tpc_info(struct
+@@ -12786,9 +12963,9 @@ void ath12k_mac_fill_reg_tpc_info(struct
                  ath12k_ieee80211_ap_pwr_type_convert(reg_6g_power_mode);
  }
  
@@ -1874,7 +1872,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  {
          struct ath12k_base *ab = ar->ab;
  	struct ath12k_vif *ahvif = arvif->ahvif;
-@@ -13066,11 +13243,11 @@ ath12k_mac_op_assign_vif_chanctx(struct
+@@ -13069,11 +13246,11 @@ ath12k_mac_op_assign_vif_chanctx(struct
  		goto out;
  	}
  
@@ -1888,7 +1886,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  		mutex_unlock(&ah->conf_mutex);
  		return ret;
  	}
-@@ -13262,7 +13439,7 @@ ath12k_mac_op_switch_vif_chanctx(struct
+@@ -13265,7 +13442,7 @@ ath12k_mac_op_switch_vif_chanctx(struct
  	return 0;
  }
  
@@ -1897,7 +1895,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  ath12k_set_vdev_param_to_all_vifs(struct ath12k *ar, int param, u32 value)
  {
  	struct ath12k_link_vif *arvif;
-@@ -14370,14 +14547,68 @@ out:
+@@ -14373,14 +14550,68 @@ out:
  	return ret;
  }
  
@@ -1971,7 +1969,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	int i;
  
  
-@@ -14388,60 +14619,21 @@ ath12k_mac_op_reconfig_complete(struct i
+@@ -14391,60 +14622,21 @@ ath12k_mac_op_reconfig_complete(struct i
  
  	ar = ah->radio;
  
@@ -2044,7 +2042,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	if (restart_count == ah->num_radio)
  		ieee80211_wake_queues(ah->hw);
  
-@@ -14449,6 +14641,12 @@ ath12k_mac_op_reconfig_complete(struct i
+@@ -14452,6 +14644,12 @@ ath12k_mac_op_reconfig_complete(struct i
  	ah->ag->hw_queues_stopped = false;
  }
  
@@ -2067,7 +2065,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  
  struct ath12k_generic_iter {
  	struct ath12k *ar;
-@@ -173,4 +174,43 @@ void ath12k_mac_background_dfs_event(str
+@@ -174,4 +175,43 @@ void ath12k_mac_background_dfs_event(str
  				     enum ath12k_background_dfs_events ev);
  bool ath12k_mac_tx_check_max_limit(struct ath12k *ar, struct sk_buff *skb);
  int ath12k_mac_mlo_teardown_with_umac_reset(struct ath12k_base *ab);
@@ -2194,7 +2192,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	default:
  		return "unknown";
  	}
-@@ -14365,7 +14370,6 @@ int ath12k_wmi_mlo_ready(struct ath12k *
+@@ -14370,7 +14375,6 @@ int ath12k_wmi_mlo_ready(struct ath12k *
  		dev_kfree_skb(skb);
  	}
  
@@ -2202,7 +2200,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	return ret;
  }
  
-@@ -14395,6 +14399,7 @@ int ath12k_wmi_mlo_teardown(struct ath12
+@@ -14400,6 +14404,7 @@ int ath12k_wmi_mlo_teardown(struct ath12
  		dev_kfree_skb(skb);
  	}
  

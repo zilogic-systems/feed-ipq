@@ -78,10 +78,14 @@ Signed-off-by: Tamizh Chelvam <tamizhr@codeaurora.org>
  
  	if (address == 0UL)
  		return VM_FAULT_NOPAGE;
-@@ -167,7 +171,11 @@ static int  pktlog_pgfault(struct vm_are
+@@ -165,9 +169,13 @@ static int  pktlog_pgfault(struct vm_are
+ 	if (vmf->pgoff > vma->vm_end)
+ 		return VM_FAULT_SIGBUS;
  
- 	get_page(virt_to_page(address));
- 	vmf->page = virt_to_page(address);
+-	get_page(virt_to_page(address));
+-	vmf->page = virt_to_page(address);
++	get_page(virt_to_page((void *)address));
++	vmf->page = virt_to_page((void *)address);
 +#if LINUX_VERSION_IS_LESS(5,4,0)
  	return VM_FAULT_MINOR;
 +#elif LINUX_VERSION_IS_GEQ(5,4,0)

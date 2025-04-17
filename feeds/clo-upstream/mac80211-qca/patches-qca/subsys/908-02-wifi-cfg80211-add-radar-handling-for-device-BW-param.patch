@@ -29,7 +29,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
 
 --- a/include/net/cfg80211.h
 +++ b/include/net/cfg80211.h
-@@ -983,6 +983,21 @@ cfg80211_chandef_identical(const struct
+@@ -1035,6 +1035,21 @@ cfg80211_chandef_identical(const struct
  }
  
  /**
@@ -51,7 +51,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
   * cfg80211_chandef_is_edmg - check if chandef represents an EDMG channel
   *
   * @chandef: the channel definition
-@@ -1086,6 +1101,15 @@ bool cfg80211_chandef_dfs_available(stru
+@@ -1150,6 +1165,15 @@ bool cfg80211_chandef_dfs_available(stru
  				    const struct cfg80211_chan_def *chandef);
  
  /**
@@ -115,7 +115,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  					    u32 bandwidth,
 --- a/net/wireless/mlme.c
 +++ b/net/wireless/mlme.c
-@@ -960,6 +960,67 @@ void cfg80211_dfs_channels_update_work(s
+@@ -975,6 +975,70 @@ void cfg80211_dfs_channels_update_work(s
  				   next_time);
  }
  
@@ -133,6 +133,9 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
 +
 +	for (freq = start_freq, i = 0; freq <= end_freq; i++, freq += MHZ_TO_KHZ(20)) {
 +		c = ieee80211_get_channel_khz(wiphy, freq);
++		if (!c)
++			continue;
++
 +		if (c->dfs_state == NL80211_DFS_UNAVAILABLE) {
 +			chandef->radar_bitmap &= ~BIT(i);
 +			nop_in_progress = true;
@@ -183,7 +186,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  
  void __cfg80211_radar_event(struct wiphy *wiphy,
  			    struct cfg80211_chan_def *chandef,
-@@ -967,6 +1028,11 @@ void __cfg80211_radar_event(struct wiphy
+@@ -982,6 +1046,11 @@ void __cfg80211_radar_event(struct wiphy
  {
  	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
  
@@ -197,7 +200,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  	/* only set the chandef supplied channel to unavailable, in
 --- a/net/wireless/nl80211.c
 +++ b/net/wireless/nl80211.c
-@@ -4236,6 +4236,11 @@ int nl80211_send_chandef(struct sk_buff
+@@ -4216,6 +4216,11 @@ int nl80211_send_chandef(struct sk_buff
  	if (nla_put_u16(msg, NL80211_ATTR_RADAR_BITMAP, chandef->radar_bitmap))
  		return -ENOBUFS;
  

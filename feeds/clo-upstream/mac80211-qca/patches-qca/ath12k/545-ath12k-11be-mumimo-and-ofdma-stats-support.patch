@@ -30,7 +30,7 @@ Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -461,7 +461,8 @@ struct ath12k_fw_stats {
+@@ -462,7 +462,8 @@ struct ath12k_fw_stats {
  };
  
  struct ath12k_dbg_htt_stats {
@@ -881,7 +881,7 @@ Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
  	default:
  		break;
  	}
-@@ -4324,12 +5120,23 @@ static ssize_t ath12k_write_htt_stats_ty
+@@ -4324,12 +5120,20 @@ static ssize_t ath12k_write_htt_stats_ty
  					   size_t count, loff_t *ppos)
  {
  	struct ath12k *ar = file->private_data;
@@ -889,28 +889,25 @@ Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
 -	int ret;
 +	u32 type;
 +	unsigned int cfg_param[4] = {0};
++	const int size = 32;
 +	int ret, num_args;
-+	u8 *buf;
 +
-+	buf = vzalloc(count);
++	char *buf __free(kfree) = kzalloc(size, GFP_KERNEL);
 +	if (!buf)
 +		return -ENOMEM;
-+
-+	if (copy_from_user(buf, user_buf, count)) {
-+		vfree(buf);
-+		return -EFAULT;
-+	}
  
 -	ret = kstrtou8_from_user(user_buf, count, 0, &type);
 -	if (ret)
 -		return ret;
++	if (copy_from_user(buf, user_buf, count))
++		return -EFAULT;
++
 +	num_args = sscanf(buf, "%u %u %u %u %u\n", &type, &cfg_param[0],
 +			  &cfg_param[1], &cfg_param[2], &cfg_param[3]);
-+	vfree(buf);
  
  	if (type >= ATH12K_DBG_HTT_NUM_EXT_STATS)
  		return -E2BIG;
-@@ -4339,9 +5146,12 @@ static ssize_t ath12k_write_htt_stats_ty
+@@ -4339,9 +5143,12 @@ static ssize_t ath12k_write_htt_stats_ty
  		return -EPERM;
  
  	ar->debug.htt_stats.type = type;
@@ -924,7 +921,7 @@ Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
  	return ret;
  }
  
-@@ -4403,6 +5213,29 @@ static int ath12k_prep_htt_stats_cfg_par
+@@ -4403,6 +5210,29 @@ static int ath12k_prep_htt_stats_cfg_par
  	return 0;
  }
  
@@ -954,7 +951,7 @@ Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
  int ath12k_debugfs_htt_stats_req(struct ath12k *ar)
  {
  	struct debug_htt_stats_req *stats_req = ar->debug.htt_stats.stats_req;
-@@ -4425,6 +5258,13 @@ int ath12k_debugfs_htt_stats_req(struct
+@@ -4425,6 +5255,13 @@ int ath12k_debugfs_htt_stats_req(struct
  		ath12k_warn(ar->ab, "failed to set htt stats cfg params: %d\n", ret);
  		return ret;
  	}
@@ -968,7 +965,7 @@ Signed-off-by: Balamurugan Mahalingam <quic_bmahalin@quicinc.com>
  
  	ret = ath12k_dp_tx_htt_h2t_ext_stats_req(ar, type, &cfg_params, cookie);
  	if (ret) {
-@@ -4477,6 +5317,14 @@ static int ath12k_open_htt_stats(struct
+@@ -4477,6 +5314,14 @@ static int ath12k_open_htt_stats(struct
  
  	ar->debug.htt_stats.stats_req = stats_req;
  	stats_req->type = type;

@@ -27,7 +27,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
 
 --- a/include/net/cfg80211.h
 +++ b/include/net/cfg80211.h
-@@ -978,8 +978,9 @@ cfg80211_chandef_identical(const struct
+@@ -1030,8 +1030,9 @@ cfg80211_chandef_identical(const struct
  		chandef1->freq1_offset == chandef2->freq1_offset &&
  		chandef1->center_freq2 == chandef2->center_freq2 &&
  		chandef1->ru_punct_bitmap == chandef2->ru_punct_bitmap &&
@@ -39,7 +39,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  }
  
  /**
-@@ -1160,16 +1161,31 @@ bool cfg80211_chandef_dfs_usable(struct
+@@ -1224,16 +1225,31 @@ bool cfg80211_chandef_dfs_usable(struct
  				 const struct cfg80211_chan_def *chandef);
  
  /**
@@ -313,7 +313,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  		return 0;
 --- a/net/wireless/core.h
 +++ b/net/wireless/core.h
-@@ -482,7 +482,8 @@ void cfg80211_sched_dfs_chan_update(stru
+@@ -489,7 +489,8 @@ void cfg80211_sched_dfs_chan_update(stru
  int
  cfg80211_start_background_radar_detection(struct cfg80211_registered_device *rdev,
  					  struct wireless_dev *wdev,
@@ -325,10 +325,10 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  
 --- a/net/wireless/mlme.c
 +++ b/net/wireless/mlme.c
-@@ -974,6 +974,10 @@ bool cfg80211_radar_event_device(struct
+@@ -992,6 +992,10 @@ bool cfg80211_radar_event_device(struct
+ 		if (!c)
+ 			continue;
  
- 	for (freq = start_freq, i = 0; freq <= end_freq; i++, freq += MHZ_TO_KHZ(20)) {
- 		c = ieee80211_get_channel_khz(wiphy, freq);
 +		if (chandef->width_device == NL80211_CHAN_WIDTH_320 &&
 +		    (freq >= MHZ_TO_KHZ(5740) && freq <= MHZ_TO_KHZ(5800)))
 +			continue;
@@ -336,7 +336,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  		if (c->dfs_state == NL80211_DFS_UNAVAILABLE) {
  			chandef->radar_bitmap &= ~BIT(i);
  			nop_in_progress = true;
-@@ -984,6 +988,9 @@ bool cfg80211_radar_event_device(struct
+@@ -1002,6 +1006,9 @@ bool cfg80211_radar_event_device(struct
  
  	for (freq = start_freq, i = 0; freq <= end_freq; i++, freq += MHZ_TO_KHZ(20)) {
  		c = ieee80211_get_channel_khz(wiphy, freq);
@@ -346,7 +346,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  		if (!c || !(c->flags & IEEE80211_CHAN_RADAR))
  			continue;
  
-@@ -1113,6 +1120,7 @@ __cfg80211_background_cac_event(struct c
+@@ -1131,6 +1138,7 @@ __cfg80211_background_cac_event(struct c
  {
  	struct wiphy *wiphy = &rdev->wiphy;
  	struct net_device *netdev;
@@ -354,7 +354,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  
  	lockdep_assert_wiphy(&rdev->wiphy);
  
-@@ -1143,6 +1151,12 @@ __cfg80211_background_cac_event(struct c
+@@ -1161,6 +1169,12 @@ __cfg80211_background_cac_event(struct c
  
  	netdev = wdev ? wdev->netdev : NULL;
  	nl80211_radar_notify(rdev, chandef, event, netdev, GFP_KERNEL);
@@ -367,7 +367,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  }
  
  static void
-@@ -1188,8 +1202,10 @@ EXPORT_SYMBOL(cfg80211_background_cac_ab
+@@ -1206,8 +1220,10 @@ EXPORT_SYMBOL(cfg80211_background_cac_ab
  int
  cfg80211_start_background_radar_detection(struct cfg80211_registered_device *rdev,
  					  struct wireless_dev *wdev,
@@ -379,7 +379,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  	unsigned int cac_time_ms;
  	int err;
  
-@@ -1212,8 +1228,15 @@ cfg80211_start_background_radar_detectio
+@@ -1230,8 +1246,15 @@ cfg80211_start_background_radar_detectio
  	if (err)
  		return err;
  
@@ -399,7 +399,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  
 --- a/net/wireless/nl80211.c
 +++ b/net/wireless/nl80211.c
-@@ -10873,6 +10873,19 @@ static int nl80211_start_radar_detection
+@@ -10863,6 +10863,19 @@ static int nl80211_start_radar_detection
  		goto unlock;
  	}
  
@@ -419,7 +419,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  	if (!cfg80211_chandef_dfs_usable(wiphy, &chandef)) {
  		err = -EINVAL;
  		goto unlock;
-@@ -10880,7 +10893,7 @@ static int nl80211_start_radar_detection
+@@ -10870,7 +10883,7 @@ static int nl80211_start_radar_detection
  
  	if (nla_get_flag(info->attrs[NL80211_ATTR_RADAR_BACKGROUND])) {
  		err = cfg80211_start_background_radar_detection(rdev, wdev,
@@ -428,7 +428,7 @@ Signed-off-by: Shivani Tambatkar <quic_stambatk@quicinc.com>
  		goto unlock;
  	}
  
-@@ -10906,7 +10919,7 @@ static int nl80211_start_radar_detection
+@@ -10896,7 +10909,7 @@ static int nl80211_start_radar_detection
  	}
  
  	cac_time_ms = cfg80211_chandef_dfs_cac_time(&rdev->wiphy, &chandef,

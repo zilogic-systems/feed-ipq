@@ -1,0 +1,454 @@
+From 79461b315fb649533a37282a9c60a29d395e6a12 Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Sat, 26 Oct 2024 15:30:14 +0530
+Subject: [PATCH 6/10] wifi: ath12k: process UMAC migration user request
+
+In order to support pirmary UMAC migration, add the base infrastucture
+to process the incoming request and to form the list which can be later
+used to send command to firmware.
+
+Since in a single shot, multiple peers could be migrated, a linked list
+is being maintained which is ready to be migrated. A subsequent change
+will accept this list and send command to firmware.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |  1 +
+ drivers/net/wireless/ath/ath12k/mac.c  | 90 ++++++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/mac.h  |  9 +++
+ drivers/net/wireless/ath/ath12k/peer.c |  3 +-
+ drivers/net/wireless/ath/ath12k/peer.h |  2 +
+ 5 files changed, 103 insertions(+), 2 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -857,6 +857,7 @@ struct ath12k_sta {
+ #endif
+ 
+ 	enum ieee80211_sta_state state;
++	bool is_migration_in_progress;
+ };
+ 
+ #define ATH12K_HALF_20MHZ_BW 10
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -21226,3 +21226,299 @@ select_pri_link:
+ 	return pri_link_id;
+ }
+ 
++static bool ath12k_mac_ahsta_is_migra_link_valid(struct ath12k_sta *ahsta,
++						 u8 link_id)
++{
++	struct ath12k_vif *ahvif = ahsta->ahvif;
++	struct ath12k_hw *ah = ahvif->ah;
++
++	lockdep_assert_held(&ah->conf_mutex);
++
++	if (!(ahsta->links_map & BIT(link_id)))
++		return false;
++
++	if (ahsta->primary_link_id == link_id)
++		return false;
++
++	return true;
++}
++
++static bool ath12k_mac_ahsta_can_migrate(struct ath12k_sta *ahsta)
++{
++	unsigned long int valid_links = ahsta->links_map;
++	struct ath12k_vif *ahvif = ahsta->ahvif;
++	struct ath12k_hw *ah = ahvif->ah;
++	struct ath12k_link_sta *arsta;
++	u8 link_id;
++
++	lockdep_assert_held(&ah->conf_mutex);
++
++	/* Currently bridge peer is not supprted. */
++	valid_links &= ~ATH12K_IEEE80211_MLD_MAX_LINKS_MASK;
++	for_each_set_bit(link_id, &valid_links, ATH12K_NUM_MAX_LINKS) {
++		arsta = ahsta->link[link_id];
++		if (!arsta)
++			continue;
++
++		if (arsta->is_bridge_peer)
++			return false;
++	}
++
++	if (ahsta->state < IEEE80211_STA_ASSOC)
++		return false;
++
++	if (ahsta->is_migration_in_progress)
++		return false;
++
++	return true;
++}
++
++static int ath12k_mac_get_next_pri_link(struct ath12k_sta *ahsta, u8 *pri_link_id)
++{
++	struct ath12k_vif *ahvif = ahsta->ahvif;
++	struct ath12k_hw *ah = ahvif->ah;
++	struct ieee80211_sta *sta;
++	u16 curr_links = ahsta->links_map;
++	u16 links_map;
++
++	lockdep_assert_held(&ah->conf_mutex);
++
++	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
++
++	ath12k_dbg(NULL, ATH12K_DBG_MAC,
++		   "cur_pri_link %u, valid_links 0x%x for ML sta %pM\n",
++		   ahsta->primary_link_id, curr_links, sta->addr);
++
++	/* exclude the current primary link id from consideration */
++	links_map = curr_links & ~BIT(ahsta->primary_link_id);
++
++	/* if only no link is available then can not really migrate*/
++	if (!links_map)
++		return -EINVAL;
++
++	*pri_link_id = ath12k_mac_ahsta_get_pri_link_id(ahvif, ahsta, links_map);
++	if (*pri_link_id == IEEE80211_MLD_MAX_NUM_LINKS)
++		return -EINVAL;
++
++	ath12k_dbg(NULL, ATH12K_DBG_MAC,
++		   "link %u selected as primary link for ML sta %pM\n",
++		   *pri_link_id, sta->addr);
++
++	return 0;
++}
++
++static void
++ath12k_mac_free_link_migr_peer_list(struct ath12k_hw *ah,
++				    struct list_head *peer_migr_list)
++{
++	struct ath12k_mac_pri_link_migr_peer_node *peer_node, *tmp_peer;
++	struct ath12k_ml_peer *ml_peer;
++
++	lockdep_assert_held(&ah->data_lock);
++
++	/* This list contains only the peers failed to send migration
++	 * request to firmware. No need to take further action here,
++	 * the requester of this migration request will handle these
++	 * peers later as per the requirement
++	 */
++	list_for_each_entry_safe(peer_node, tmp_peer, peer_migr_list, list) {
++		ml_peer = ath12k_ml_peer_find_by_id(ah, peer_node->ml_peer_id);
++		if (ml_peer)
++			ml_peer->ahsta->is_migration_in_progress = false;
++
++		list_del(&peer_node->list);
++		kfree(peer_node);
++	}
++}
++
++static struct ath12k_mac_pri_link_migr_peer_node *
++ath12k_mac_get_link_migr_peer_node(struct ath12k_ml_peer *ml_peer, u8 pri_link_id)
++{
++	struct ath12k_mac_pri_link_migr_peer_node *node;
++	struct ath12k_sta *ahsta = ml_peer->ahsta;
++	struct ath12k_vif *ahvif = ahsta->ahvif;
++	struct ath12k_hw *ah = ahvif->ah;
++	struct ath12k_link_sta *arsta = ahsta->link[pri_link_id];
++	struct ath12k_link_vif *arvif;
++	u8 hw_link_id;
++
++	lockdep_assert_held(&ah->conf_mutex);
++
++	if (!arsta)
++		return NULL;
++
++	arvif = arsta->arvif;
++	if (!arvif || !arvif->ar)
++		return NULL;
++
++	hw_link_id = arvif->ar->pdev->hw_link_id;
++
++	node = kzalloc(sizeof(*node), GFP_ATOMIC);
++	if (!node)
++		return NULL;
++
++	INIT_LIST_HEAD(&node->list);
++	node->ml_peer_id = ml_peer->id;
++	node->hw_link_id = hw_link_id;
++
++	return node;
++}
++
++static int ath12k_mac_handle_sta_migration(struct ath12k_ml_peer *ml_peer,
++					   struct ath12k_sta *ahsta, u8 link_id,
++					   struct list_head *list_head, int *num_peers)
++{
++	struct ath12k_mac_pri_link_migr_peer_node *peer_node;
++	u8 pri_link_id;
++	int ret;
++
++	if (!ath12k_mac_ahsta_can_migrate(ahsta))
++		return -EPERM;
++
++	if (link_id == 0xFF) {
++		ret = ath12k_mac_get_next_pri_link(ahsta, &pri_link_id);
++		if (ret)
++			return ret;
++	} else if (ath12k_mac_ahsta_is_migra_link_valid(ahsta, link_id)) {
++		pri_link_id = link_id;
++	} else {
++		return -EINVAL;
++	}
++
++	peer_node = ath12k_mac_get_link_migr_peer_node(ml_peer, pri_link_id);
++	if (!peer_node)
++		return -ENOMEM;
++
++	ath12k_dbg(NULL, ATH12K_DBG_MAC,
++		   "ML sta %pM will migrate pri link to link_id %u hw_link_id %u\n",
++		   ml_peer->addr, pri_link_id, peer_node->hw_link_id);
++
++	list_add(&peer_node->list, list_head);
++	ahsta->is_migration_in_progress = true;
++	(*num_peers)++;
++
++	return 0;
++}
++
++int
++ath12k_mac_process_link_migrate_req(struct ath12k_vif *ahvif,
++				    struct ath12k_mac_link_migrate_usr_params *params)
++{
++	struct ath12k_link_vif *arvif, *arvif_itr;
++	struct ath12k_hw *ah = ahvif->ah;
++	struct list_head peer_migr_list;
++	struct ath12k_ml_peer *ml_peer;
++	struct ath12k_link_sta *arsta;
++	unsigned long int valid_links;
++	struct ath12k_sta *ahsta;
++	int ret, num_peers = 0;
++	struct ath12k *ar;
++	u8 link_id;
++	bool found;
++
++	INIT_LIST_HEAD(&peer_migr_list);
++
++	lockdep_assert_held(&ah->conf_mutex);
++
++	spin_lock_bh(&ah->data_lock);
++
++	/* Request for single MLD peer */
++	if (!is_zero_ether_addr(params->addr)) {
++		ath12k_dbg(NULL, ATH12K_DBG_MAC,
++			   "pri link migrate: single peer migration\n");
++
++		ml_peer = ath12k_ml_peer_find(ah, params->addr);
++		if (!ml_peer) {
++			ret = -ENODEV;
++			goto exit_link_migrate_req;
++		}
++
++		ahsta = ml_peer->ahsta;
++
++		arvif = ath12k_get_arvif_from_link_id(ahvif, ahsta->primary_link_id);
++		if (!arvif || !arvif->is_up || !arvif->ar) {
++			ret = -ENODEV;
++			goto exit_link_migrate_req;
++		}
++
++		ar = arvif->ar;
++
++		ret = ath12k_mac_handle_sta_migration(ml_peer, ahsta, params->link_id,
++						      &peer_migr_list, &num_peers);
++		if (ret)
++			goto exit_link_migrate_req;
++
++		goto send_link_mig_cmd;
++	}
++
++	/* Request for all MLD peers using given link's SOC as primary SOC */
++	if (params->link_id >= IEEE80211_MLD_MAX_NUM_LINKS) {
++		ret = -EINVAL;
++		goto exit_link_migrate_req;
++	}
++
++	ath12k_dbg(NULL, ATH12K_DBG_MAC, "pri link migrate: link migration\n");
++
++	arvif = ath12k_get_arvif_from_link_id(ahvif, params->link_id);
++	if (!arvif || !arvif->is_up || !arvif->ar) {
++		ret = -EINVAL;
++		goto exit_link_migrate_req;
++	}
++
++	ar = arvif->ar;
++
++	list_for_each_entry(ml_peer, &ah->ml_peers, list) {
++		ahsta = ml_peer->ahsta;
++
++		valid_links = ahsta->links_map;
++		found = false;
++
++		for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
++			arsta = ahsta->link[link_id];
++			if (!arsta)
++				continue;
++
++			arvif_itr = arsta->arvif;
++			if (!arvif_itr || !arvif_itr->ar)
++				continue;
++
++			/* If the link arvif is not the same as requested link vdev,
++			 * do not consider for migration
++			 */
++			if (arvif_itr != arvif)
++				continue;
++
++			/* If current primary is not on the provided link pdev, do not
++			 * consider for migration
++			 */
++			if (ahsta->primary_link_id != arvif_itr->link_id)
++				continue;
++
++			found = true;
++			break;
++		}
++
++		if (!found)
++			continue;
++
++		ret = ath12k_mac_handle_sta_migration(ml_peer, ahsta, 0xFF,
++						      &peer_migr_list, &num_peers);
++		if (ret)
++			goto exit_link_migrate_req;
++	}
++
++send_link_mig_cmd:
++	if (num_peers == 0)
++		ret = -EINVAL;
++	else
++		ret = 0;
++
++	ath12k_dbg(NULL, ATH12K_DBG_MAC,
++		   "pri link migrate: got num peers %d for vdev_id %d\n",
++		   num_peers, arvif->vdev_id);
++
++exit_link_migrate_req:
++	ath12k_mac_free_link_migr_peer_list(ah, &peer_migr_list);
++	spin_unlock_bh(&ah->data_lock);
++	return ret;
++}
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -16,6 +16,7 @@ struct ath12k_base;
+ struct ath12k_hw;
+ struct ath12k_hw_group;
+ struct ath12k_link_sta;
++struct ath12k_vif;
+ 
+ struct ath12k_generic_iter {
+ 	struct ath12k *ar;
+@@ -184,6 +185,17 @@ enum ath12k_background_dfs_events {
+ 
+ extern const struct htt_rx_ring_tlv_filter ath12k_mac_mon_status_filter_default;
+ 
++struct ath12k_mac_link_migrate_usr_params {
++	u8 link_id;
++	u8 addr[ETH_ALEN];
++};
++
++struct ath12k_mac_pri_link_migr_peer_node {
++	struct list_head list;
++	u16 ml_peer_id;
++	u8 hw_link_id;
++};
++
+ void ath12k_mac_set_cw_intf_detect(struct ath12k *ar, u8 intf_detect_param);
+ void ath12k_mac_set_vendor_intf_detect(struct ath12k *ar, u8 intf_detect_bitmap);
+ void ath12k_mac_ap_ps_recalc(struct ath12k *ar);
+@@ -311,5 +323,7 @@ int ath12k_mac_vendor_send_assoc_event(s
+ 				       bool reassoc);
+ int ath12k_mac_vendor_send_disassoc_event(struct ath12k_link_sta *arsta,
+ 					  struct ieee80211_link_sta *link_sta);
+-
++int
++ath12k_mac_process_link_migrate_req(struct ath12k_vif *ahvif,
++				    struct ath12k_mac_link_migrate_usr_params *params);
+ #endif
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -11,8 +11,22 @@
+ #include "ppe.h"
+ #endif
+ 
+-static struct ath12k_ml_peer *ath12k_ml_peer_find(struct ath12k_hw *ah,
+-						  const u8 *addr)
++struct ath12k_ml_peer *ath12k_ml_peer_find_by_id(struct ath12k_hw *ah,
++						 u16 ml_peer_id)
++{
++	struct ath12k_ml_peer *ml_peer;
++
++	lockdep_assert_held(&ah->data_lock);
++
++	list_for_each_entry(ml_peer, &ah->ml_peers, list) {
++		if (ml_peer->id == ml_peer_id)
++			return ml_peer;
++	}
++
++	return NULL;
++}
++
++struct ath12k_ml_peer *ath12k_ml_peer_find(struct ath12k_hw *ah, const u8 *addr)
+ {
+ 	struct ath12k_ml_peer *ml_peer;
+ 
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -147,6 +147,9 @@ struct ath12k_peer *ath12k_peer_find_by_
+ #ifdef CPTCFG_ATH12K_SAWF
+ struct ath12k_peer *ath12k_peer_find_pri_by_id(struct ath12k_base *ab, int peer_id);
+ #endif
++struct ath12k_ml_peer *ath12k_ml_peer_find(struct ath12k_hw *ah, const u8 *addr);
++struct ath12k_ml_peer *ath12k_ml_peer_find_by_id(struct ath12k_hw *ah,
++						 u16 ml_peer_id);
+ void ath12k_peer_cleanup(struct ath12k *ar, u32 vdev_id, bool self_bss_skip);
+ int ath12k_peer_delete(struct ath12k *ar, u32 vdev_id, const u8 *addr);
+ int ath12k_ml_link_peers_delete(struct ath12k_vif *ahvif, struct ath12k_sta *ahsta,
+--- a/drivers/net/wireless/ath/ath12k/vendor.c
++++ b/drivers/net/wireless/ath/ath12k/vendor.c
+@@ -4185,9 +4185,12 @@ int ath12k_vendor_trigg_pri_link_migrate
+ 					 struct wireless_dev *wdev,
+ 					 const void *data, int data_len)
+ {
++	struct ath12k_mac_link_migrate_usr_params arg;
+ 	struct ieee80211_vif *vif = wdev_to_ieee80211_vif(wdev);
++	struct ath12k_vif *ahvif;
+ 	u8 mac_addr[ETH_ALEN] = {0};
+ 	u8 link_id;
++	int ret;
+ 
+ 	if (WARN_ON(!vif))
+ 		return -EINVAL;
+@@ -4209,11 +4212,26 @@ int ath12k_vendor_trigg_pri_link_migrate
+ 		memcpy(mac_addr, data, ETH_ALEN);
+ 	}
+ 
++	ahvif = (struct ath12k_vif *)vif->drv_priv;
++	if (!ahvif)
++		return -EINVAL;
++
+ 	ath12k_dbg(NULL, ATH12K_DBG_MAC,
+-		   "primary link migration command received link_id %u, mac_addr %pM",
++		   "primary link migration command received link_id %u, mac_addr %pM\n",
+ 		   link_id, mac_addr);
+ 
+-	return 0;
++	arg.link_id = link_id;
++	memcpy(arg.addr, mac_addr, ETH_ALEN);
++
++	mutex_lock(&ahvif->ah->conf_mutex);
++	ret = ath12k_mac_process_link_migrate_req(ahvif, &arg);
++	mutex_unlock(&ahvif->ah->conf_mutex);
++
++	if (ret)
++		ath12k_info(NULL,
++			    "Failed to trigger primary link migration command\n");
++
++	return ret;
+ }
+ 
+ static struct wiphy_vendor_command ath12k_vendor_commands[] = {

@@ -1,0 +1,152 @@
+From d2a1de6b932a37f72fb6b45488f4f981cc23b9af Mon Sep 17 00:00:00 2001
+From: Harshitha Prem <quic_hprem@quicinc.com>
+Date: Mon, 16 Dec 2024 22:06:51 +0530
+Subject: [PATCH] QSDK:CP: wifi: ath12k: Improve peer delete debuggability
+
+Currently, if peer delete is skipped from host driver, warns are
+suppressed if they are flooding the console. Because of this,
+during any differences in host and firmware logs of a peer, it is
+difficult to find out.
+
+Hence, add peer_delete_bitmap to store the links to which peer delete
+was sent from host. Also, move all the warns to errors.
+
+Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |  4 ++++
+ drivers/net/wireless/ath/ath12k/mac.c  | 12 ++++++++----
+ drivers/net/wireless/ath/ath12k/peer.c | 14 +++++++-------
+ 3 files changed, 19 insertions(+), 11 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -878,6 +878,10 @@ struct ath12k_sta {
+ 	struct work_struct migration_wk;
+ 	struct ath12k_sta_migration_data migration_data;
+ 	struct completion dp_migration_event;
++
++	/* indicates bitmap of link peer delete sent in FW */
++	unsigned long peer_delete_bitmap;
++
+ };
+ 
+ #define ATH12K_HALF_20MHZ_BW 10
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -1435,11 +1435,12 @@ int ath12k_mac_partner_peer_cleanup(stru
+ 			if (ret) {
+ 				mutex_unlock(&ar->conf_mutex);
+ 				spin_lock_bh(&partner_ab->base_lock);
+-				ath12k_warn(ar->ab,
++				ath12k_err(ar->ab,
+ 					    "failed to delete peer vdev_id %d addr %pM ret %d\n",
+ 					    arvif->vdev_id, arsta->addr, ret);
+ 				continue;
+ 			}
++			ahsta->peer_delete_bitmap |= BIT(arsta->link_id);
+ 			ret = ath12k_wait_for_peer_delete_done(ar, arvif->vdev_id, arsta->addr);
+ 			if (ret) {
+ 				mutex_unlock(&ar->conf_mutex);
+@@ -8941,12 +8942,12 @@ static int ath12k_mac_station_remove(str
+ 	if (!skip_peer_delete) {
+ 		ret = ath12k_peer_delete(ar, arvif->vdev_id, arsta->addr);
+ 		if (ret)
+-			ath12k_warn(ar->ab, "Failed to delete peer: %pM for VDEV: %d\n",
++			ath12k_err(ar->ab, "Failed to delete peer: %pM for VDEV: %d\n",
+ 				    arsta->addr, arvif->vdev_id);
+ 		else
+ 			ath12k_dbg(ar->ab, ATH12K_DBG_PEER, "Removed peer: %pM for VDEV: %d\n",
+ 				   arsta->addr, arvif->vdev_id);
+-
++		ahsta->peer_delete_bitmap |= BIT(arsta->link_id);
+ 		ath12k_mac_station_post_remove(ar, arvif, arsta);
+ 		arvif->num_peers--;
+ 	}
+@@ -9444,7 +9445,7 @@ int ath12k_mac_update_sta_state(struct i
+ 			mutex_lock(&arvif->ar->conf_mutex);
+ 			ret = ath12k_mac_station_remove(arvif->ar, arvif, arsta);
+ 			if (ret)
+-				ath12k_warn(arvif->ar->ab, "Removed STA %pM for vdev %d with an error: %d.\n",
++				ath12k_err(arvif->ar->ab, "Removed STA %pM for vdev %d with an error: %d.\n",
+ 					    arsta->addr, arvif->vdev_id, ret);
+ 			mutex_unlock(&arvif->ar->conf_mutex);
+ 		} else
+@@ -9490,6 +9491,7 @@ int ath12k_mac_update_sta_state(struct i
+ 			return ret;
+ 		}
+ 
++		ahsta->peer_delete_bitmap = 0;
+ 		ath12k_mac_assign_link_sta(ah, ahsta, &ahsta->deflink,
+ 					   ahvif, link_id);
+ 
+@@ -9525,6 +9527,7 @@ int ath12k_mac_update_sta_state(struct i
+ 	    old_state == IEEE80211_STA_NOTEXIST &&
+ 	    new_state == IEEE80211_STA_NONE) {
+ 		ahsta->num_peer = 0;
++		ahsta->peer_delete_bitmap = 0;
+ 		arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
+ 		arsta = ahsta->link[link_id];
+ 		/* Mode-0 mapping of ahsta links is done below for first
+@@ -16674,7 +16677,7 @@ stop_primary:
+ peer_delete:
+ 			ret = ath12k_peer_delete(ar, arvif->vdev_id, arvif->bssid);
+ 			if (ret) {
+-				ath12k_warn(ar->ab,
++				ath12k_err(ar->ab,
+ 					    "failed to delete peer %pM for vdev %d: %d\n",
+ 					    arvif->bssid, arvif->vdev_id, ret);
+ 			} else {
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -595,8 +595,8 @@ int ath12k_peer_delete_send(struct ath12
+ 	}
+ 
+ 	rcu_assign_pointer(ab->peer_list[peer->peer_id], NULL);
+-	ath12k_dbg(ab, ATH12K_DBG_PEER, "peer: %pM un-assigned from peer list[%d]\n",
+-		   peer->addr, peer->peer_id);
++	ath12k_dbg(ab, ATH12K_DBG_PEER, "peer: %pM un-assigned from peer list[%d] skip_peer_del %d\n",
++		   peer->addr, peer->peer_id, skip_peer_del);
+ 	if (peer->mlo) {
+ 		ml_peer_id = peer->ml_peer_id & ~ATH12K_ML_PEER_ID_VALID;
+ 		rcu_assign_pointer(ab->ml_peer_list[ml_peer_id][peer->pdev_idx],
+@@ -627,7 +627,7 @@ int ath12k_peer_delete_send(struct ath12
+ 	reinit_completion(&ar->peer_delete_done);
+ 
+ 	if (test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags)) {
+-		ath12k_warn(ab, "skipped peer delete cmd for vdev_id %d addr %pM during recovery ret:%d\n",
++		ath12k_err(ab, "skipped peer delete cmd for vdev_id %d addr %pM during recovery ret:%d\n",
+ 			    vdev_id, addr, -EHOSTDOWN);
+ 
+ 		return -EHOSTDOWN;
+@@ -635,7 +635,7 @@ int ath12k_peer_delete_send(struct ath12
+ 
+ 	ret = ath12k_wmi_send_peer_delete_cmd(ar, addr, vdev_id);
+ 	if (ret) {
+-		ath12k_warn(ab,
++		ath12k_err(ab,
+ 			    "failed to delete peer vdev_id %d addr %pM ret %d\n",
+ 			    vdev_id, addr, ret);
+ 		return ret;
+@@ -790,14 +790,18 @@ int ath12k_ml_link_peers_delete(struct a
+ 		ret = ath12k_peer_delete_send(ar, arvif->vdev_id, arsta->addr, skip_send_peer_del);
+ 		if (ret) {
+ 			mutex_unlock(&ar->conf_mutex);
+-			ath12k_warn(ar->ab,
+-				    "failed to delete peer vdev_id %d addr %pM ret %d\n",
+-				    arvif->vdev_id, arsta->addr, ret);
++			ath12k_err(ar->ab,
++				    "failed to delete peer vdev_id %d addr %pM ret %d skip_peer_del %d\n",
++				    arvif->vdev_id, arsta->addr, ret, skip_send_peer_del);
+ 			err_ret = ret;
+ 			continue;
+ 		}
+-		if (!skip_send_peer_del)
++
++		if (!skip_send_peer_del) {
++			ahsta->peer_delete_bitmap |= BIT(arsta->link_id);
+ 			arvif->num_peers--;
++		}
++
+ 		mutex_unlock(&ar->conf_mutex);
+ 	}
+ 

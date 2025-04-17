@@ -1,0 +1,43 @@
+From f5ab102e3f86bd1e127c52eeefa9e7f909b12190 Mon Sep 17 00:00:00 2001
+From: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
+Date: Thu, 12 Dec 2024 11:01:10 +0530
+Subject: [PATCH] UPSTREAM:DP: wifi: ath12k: Adjusted RCU Lock in PPDU stats
+
+Refactor the handling of rcu_lock for ar during PPDU stats collection.
+Move the spinlock_bh outside the RCU lock to prevent RCU stalls
+during stats collection, as ar is not an RCU-protected variable and
+unlocking the RCU at the end of stats collection is unnecessary.
+    
+Patch-dependency: None
+patch-work: None
+
+Signed-off-by: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index 9a94056..d7fe9d4 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -2122,6 +2122,8 @@ static int ath12k_htt_pull_ppdu_stats(struct ath12k_base *ab,
+ 
+ 	rcu_read_lock();
+ 	ar = ath12k_mac_get_ar_by_pdev_id(ab, pdev_id);
++	rcu_read_unlock();
++
+ 	if (!ar) {
+ 		ret = -EINVAL;
+ 		goto exit;
+@@ -2208,8 +2210,6 @@ static int ath12k_htt_pull_ppdu_stats(struct ath12k_base *ab,
+ 	spin_unlock_bh(&ar->data_lock);
+ 
+ exit:
+-	rcu_read_unlock();
+-
+ 	return ret;
+ }
+ 
+-- 
+2.34.1
+

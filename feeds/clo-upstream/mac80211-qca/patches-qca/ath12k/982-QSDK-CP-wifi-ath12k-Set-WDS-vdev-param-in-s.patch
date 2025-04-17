@@ -22,7 +22,30 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -12396,6 +12396,7 @@ int ath12k_mac_vdev_create(struct ath12k
+@@ -9326,8 +9326,10 @@ int ath12k_mac_update_sta_state(struct i
+ 
+ 		ahsta->deflink.is_assoc_link = true;
+ 
+-		if (ahsta->use_4addr_set)
+-			ieee80211_queue_work(ah->hw, &ahsta->set_4addr_wk);
++		if (ahsta->use_4addr_set) {
++			if (vif->type != NL80211_IFTYPE_STATION)
++				ieee80211_queue_work(ah->hw, &ahsta->set_4addr_wk);
++		}
+ 
+ 	}
+ 
+@@ -9658,7 +9660,8 @@ static void ath12k_mac_op_sta_set_4addr(
+ 	if (enabled && !ahsta->use_4addr_set) {
+ 		ahsta->ppe_vp_num = ahvif->ppe_vp_num;
+ 		ahsta->vlan_iface = ahvif->vlan_iface;
+-		ieee80211_queue_work(ah->hw, &ahsta->set_4addr_wk);
++		if (vif->type != NL80211_IFTYPE_STATION)
++			ieee80211_queue_work(ah->hw, &ahsta->set_4addr_wk);
+ 		ahsta->use_4addr_set = true;
+ 	}
+ }
+@@ -12668,6 +12671,7 @@ int ath12k_mac_vdev_create(struct ath12k
  	struct ath12k_wmi_vdev_create_arg vdev_arg = {0};
  	struct ath12k_wmi_peer_create_arg peer_param = {0};
  	struct ieee80211_bss_conf *link_conf = NULL;
@@ -30,7 +53,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  	u32 param_id, param_value;
  	u16 nss;
  	int i;
-@@ -12668,6 +12669,11 @@ int ath12k_mac_vdev_create(struct ath12k
+@@ -12940,6 +12944,11 @@ int ath12k_mac_vdev_create(struct ath12k
  
  	ath12k_debugfs_add_interface(arvif);
  

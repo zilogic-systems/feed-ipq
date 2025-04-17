@@ -1,0 +1,3113 @@
+From 645983cf23b0baa0cff4e0cfc7f54042d5236204 Mon Sep 17 00:00:00 2001
+From: Sidhanta Sahu <quic_sidhanta@quicinc.com>
+Date: Tue, 5 Nov 2024 05:04:04 -0800
+Subject: [PATCH 4/5] QSDK CP: wifi: ath12k: Add support for QCA Energy Service
+
+Parse and enable RM-specific services via vendor commands.
+Parse RM generic commands to complete the handshake for energy services.
+Respond to the successful completion of the RM QCA Energy Service handshake.
+Parse vendor NSS adjustment commands from the vendor WiFi configuration command.
+Send association and disassociation responses to the RM app for the energy
+service algorithm.
+
+Patch-dependency: 982-03-QSDK-CP-wifi-Implement-telemetry-agent-interface.patch
+Patch-work: None
+
+Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c    | 224 +++++++-
+ drivers/net/wireless/ath/ath12k/mac.h    |   4 +
+ drivers/net/wireless/ath/ath12k/rm.c     | 674 +++++++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/rm.h     | 116 ++++
+ drivers/net/wireless/ath/ath12k/vendor.c | 371 ++++++++++++-
+ drivers/net/wireless/ath/ath12k/vendor.h | 339 ++++++++++++
+ 6 files changed, 1708 insertions(+), 20 deletions(-)
+ create mode 100644 drivers/net/wireless/ath/ath12k/rm.c
+ create mode 100644 drivers/net/wireless/ath/ath12k/rm.h
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -25,6 +25,7 @@
+ #include "peer.h"
+ #include "debugfs_sta.h"
+ #include "ppe.h"
++#include "vendor_services.h"
+ 
+ #define IEEE80211_EHT_PPE_THRES_NSS_POS                        0
+ #define IEEE80211_EHT_PPE_THRES_NSS_MASK               0xf
+@@ -887,7 +888,7 @@ ieee80211_bss_conf *ath12k_get_link_bss_
+ 	return link_conf;
+ }
+ 
+-static struct
++struct
+ ieee80211_link_sta *ath12k_get_link_sta(struct ath12k_link_sta *arsta)
+ {
+ 	struct ieee80211_sta *sta;
+@@ -906,23 +907,25 @@ ieee80211_link_sta *ath12k_get_link_sta(
+ 	return link_sta;
+ }
+ 
+-static void ath12k_get_active_arvif_iter_rcu(void *data, u8 *mac,
++static void ath12k_get_active_arvif_chanctx_iter_rcu(void *data, u8 *mac,
+ 					     struct ieee80211_vif *vif)
+ {
+ 	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
+-	struct ath12k_vif_iter *arvif_iter = data;
++	struct ath12k_vif_chanctx_iter *arvif_iter = data;
+ 	struct ath12k_link_vif *arvif = NULL;
+ 	struct ieee80211_bss_conf* link_conf;
+ 	u8 link_id;
+ 
+ 	for_each_vif_active_link(vif, link_conf, link_id) {
+ 		arvif = rcu_dereference(ahvif->link[link_id]);
+-		if (arvif) {
+-			if ((arvif->vdev_id == arvif_iter->vdev_id) &&
+-			    (arvif->ar == arvif_iter->ar)) {
+-				arvif_iter->arvif = arvif;
++		if (arvif && arvif->ar == arvif_iter->ar) {
++				if (arvif->link_id != ATH12K_DEFAULT_SCAN_LINK &&
++				    arvif->chanctx.def.chan)
++					arvif_iter->chanctx = &arvif->chanctx;
++				else
++					arvif_iter->chanctx = NULL;
++
+ 				break;
+-			}
+ 		}
+ 	}
+ }
+@@ -948,20 +951,20 @@ static void ath12k_get_arvif_iter(void *
+ 	}
+ }
+ 
+-struct ath12k_link_vif *ath12k_mac_get_active_arvif(struct ath12k *ar, u32 vdev_id)
++struct ieee80211_chanctx_conf *ath12k_mac_get_first_active_arvif_chanctx(struct ath12k *ar)
+ {
+-	struct ath12k_vif_iter arvif_iter = {};
++	struct ath12k_vif_chanctx_iter arvif_iter = {};
+ 	u32 flags;
+ 
+-	arvif_iter.vdev_id = vdev_id;
+ 	arvif_iter.ar = ar;
++	arvif_iter.chanctx = NULL;
+ 
+ 	flags = IEEE80211_IFACE_ITER_RESUME_ALL;
+ 	ieee80211_iterate_active_interfaces_atomic(ar->ah->hw,
+ 						   flags,
+-						   ath12k_get_active_arvif_iter_rcu,
++						   ath12k_get_active_arvif_chanctx_iter_rcu,
+ 						   &arvif_iter);
+-	return arvif_iter.arvif;
++	return arvif_iter.chanctx;
+ }
+ 
+ struct ath12k_link_vif *ath12k_mac_get_arvif(struct ath12k *ar, u32 vdev_id)
+@@ -3529,6 +3532,56 @@ static void ath12k_peer_assoc_h_mlo(stru
+ 	}
+ }
+ 
++static void ath12k_peer_assoc_build_vendor_event(struct ath12k_sta *ahsta,
++						 struct ieee80211_link_sta *link_sta,
++						 bool reassoc,
++						 struct ath12k_vendor_generic_peer_assoc_event *event_out)
++{
++	struct ath12k_link_sta *arsta;
++	struct ath12k_link_vif *arvif;
++	struct ieee80211_sta *sta;
++	unsigned long links;
++	struct ath12k_vendor_generic_peer_assoc_event *assoc_ev = event_out;
++	struct ath12k_vendor_mld_peer_link_entry *link_entry;
++	u8 i = 0, link_id;
++
++	reassoc = reassoc;
++	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
++
++	links = ahsta->links_map;
++
++	for_each_set_bit(link_id, &links, ATH12K_NUM_MAX_LINKS) {
++		if (i >= ATH12K_WMI_MLO_MAX_LINKS)
++			break;
++		arsta = ahsta->link[link_id];
++		arvif = ath12k_get_arvif_from_link_id(ahsta->ahvif, link_id);
++		if (!(arvif && arvif->ar))
++			continue;
++
++		if (!arvif->is_started)
++			continue;
++
++		link_entry = &assoc_ev->link_entry[i];
++		link_entry->hw_link_id = arvif->ar->pdev->hw_link_id;
++		link_entry->link_id = arvif->link_id;
++		link_entry->vdev_id = arvif->vdev_id;
++		link_entry->chip_id = arvif->ar->ab->chip_id;
++		link_entry->is_assoc_link = arsta->is_assoc_link;
++		link_entry->link_rssi = arsta->rssi_comb;
++		link_entry->chan_bw = link_sta->bandwidth;
++		// To-Do: Get vif's mld mac addr
++		//ether_addr_copy(link_entry->ap_mld_mac_addr, sta->ml_addr);
++		ether_addr_copy(link_entry->link_mac_addr, arsta->addr);
++
++		assoc_ev->num_links++;
++
++		i++;
++	}
++
++	if (sta->mlo)
++		ether_addr_copy(assoc_ev->mld_mac_addr, sta->addr);
++}
++
+ static int ath12k_peer_assoc_qos_ap(struct ath12k *ar,
+ 				    struct ath12k_link_vif *arvif,
+ 				    struct ath12k_link_sta *arsta)
+@@ -5650,6 +5703,8 @@ static int ath12k_mac_vdev_delete(struct
+ 
+ 	reinit_completion(&ar->vdev_delete_done);
+ 
++	ath12k_vendor_link_state_update(ar->pdev_idx, ar->ab, arvif,
++				    ATH12K_VENDOR_LINK_STATE_REMOVED);
+ 	if (unlikely(test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags)))
+ 		goto vdev_clean_up;
+ 
+@@ -7188,6 +7243,51 @@ ath12k_mac_set_peer_eht_fixed_rate(struc
+ 	return ret;
+ }
+ 
++int ath12k_mac_vendor_send_disassoc_event(struct ath12k_link_sta *arsta,
++					  struct ieee80211_link_sta *link_sta)
++{
++	struct ath12k_vendor_generic_peer_assoc_event vend_event = {0};
++	struct ath12k_sta *ahsta = arsta->ahsta;
++
++	if (!link_sta || !arsta)
++		return -EINVAL;
++
++	vend_event.category = QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_DISASSOC;
++
++	rcu_read_lock();
++	ath12k_peer_assoc_build_vendor_event(ahsta, link_sta,
++					     false, &vend_event);
++	rcu_read_unlock();
++
++	if (ath12k_vendor_send_assoc_event(&vend_event, vend_event.category, 0))
++		return -EINVAL;
++
++	return 0;
++}
++
++int ath12k_mac_vendor_send_assoc_event(struct ath12k_link_sta *arsta,
++				       struct ieee80211_link_sta *link_sta,
++				       bool reassoc)
++{
++	struct ath12k_vendor_generic_peer_assoc_event vend_event = {0};
++	struct ath12k_sta *ahsta = arsta->ahsta;
++
++	if (!link_sta || !arsta)
++		return -EINVAL;
++
++	vend_event.category = QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO;
++
++	rcu_read_lock();
++	ath12k_peer_assoc_build_vendor_event(ahsta, link_sta,
++					     reassoc, &vend_event);
++	rcu_read_unlock();
++
++	if (ath12k_vendor_send_assoc_event(&vend_event, vend_event.category, 0))
++		return -EINVAL;
++
++	return 0;
++}
++
+ static int ath12k_station_assoc(struct ath12k *ar,
+ 				struct ath12k_link_vif *arvif,
+ 				struct ath12k_link_sta *arsta,
+@@ -7379,6 +7479,8 @@ static int ath12k_station_assoc(struct a
+ 
+ 	spin_unlock_bh(&ar->data_lock);
+ 
++	ath12k_mac_vendor_send_assoc_event(arsta, link_sta, reassoc);
++
+ 	/* Trigger AP powersave recal for first peer create */
+ 	if (ar->ap_ps_enabled) {
+ 		ath12k_mac_ap_ps_recalc(ar);
+@@ -7392,6 +7494,7 @@ static int ath12k_station_disassoc(struc
+ 				   struct ath12k_link_sta *arsta)
+ {
+ 	struct ath12k_sta *ahsta = arsta->ahsta;
++	struct ieee80211_link_sta *link_sta;
+ 	struct ieee80211_sta *sta;
+ 	int ret;
+ 
+@@ -7402,6 +7505,12 @@ static int ath12k_station_disassoc(struc
+ 
+ 	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
+ 
++	rcu_read_lock();
++
++	link_sta = arsta->is_bridge_peer ? ath12k_mac_inherit_radio_cap(ar, arsta) :
++					   ath12k_get_link_sta(arsta);
++	rcu_read_unlock();
++
+ 	spin_lock_bh(&arvif->ar->data_lock);
+ 
+ 	if (!arvif->num_stations) {
+@@ -7417,6 +7526,8 @@ static int ath12k_station_disassoc(struc
+ 
+ 	spin_unlock_bh(&arvif->ar->data_lock);
+ 
++	if (link_sta)
++		ath12k_mac_vendor_send_disassoc_event(arsta, link_sta);
+ 	if (!sta->wme) {
+ 		arvif->num_legacy_stations--;
+ 		ret = ath12k_recalc_rtscts_prot(arvif);
+@@ -10438,6 +10549,85 @@ static void ath12k_mac_setup_sband_iftyp
+ 
+ }
+ 
++int ath12k_mac_set_tx_antenna(struct ath12k *ar, u32 tx_ant)
++{
++	int ret;
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	/* Since we advertised the max cap of all radios combined during wiphy
++	 * registration, ensure we dont set the antenna config higher than our
++	 * limits
++	 */
++
++	tx_ant = min_t(u32, tx_ant, ar->pdev->cap.tx_chain_mask);
++
++	ar->cfg_tx_chainmask = tx_ant;
++
++	ar->num_tx_chains = hweight32(tx_ant);
++
++	/* Reload HT/VHT/HE capability */
++	ath12k_mac_setup_ht_vht_cap(ar, &ar->pdev->cap, NULL);
++	ath12k_mac_setup_sband_iftype_data(ar, &ar->pdev->cap);
++
++	if (ar->state != ATH12K_STATE_ON &&
++	    ar->state != ATH12K_STATE_RESTARTED)
++		return 0;
++
++	ret = ath12k_wmi_pdev_set_param(ar, WMI_PDEV_PARAM_TX_CHAIN_MASK,
++					tx_ant, ar->pdev->pdev_id);
++	if (ret) {
++		ath12k_err(ar->ab, "failed to set tx-chainmask: %d, req 0x%x\n",
++			   ret, tx_ant);
++		return ret;
++	}
++
++	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "ar->cfg_tx_chainmask: %d (%x) ar->cfg_rx_chainmask: %d (%x)\n",
++		   ar->cfg_tx_chainmask, ar->num_tx_chains,
++		   ar->cfg_rx_chainmask, ar->num_rx_chains);
++
++	return 0;
++}
++
++int ath12k_mac_set_rx_antenna(struct ath12k *ar, u32 rx_ant)
++{
++	int ret;
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	/* Since we advertised the max cap of all radios combined during wiphy
++	 * registration, ensure we dont set the antenna config higher than our
++	 * limits
++	 */
++	rx_ant = min_t(u32, rx_ant, ar->pdev->cap.rx_chain_mask);
++
++	ar->cfg_rx_chainmask = rx_ant;
++
++	ar->num_rx_chains = hweight32(rx_ant);
++
++	/* Reload HT/VHT/HE capability */
++	ath12k_mac_setup_ht_vht_cap(ar, &ar->pdev->cap, NULL);
++	ath12k_mac_setup_sband_iftype_data(ar, &ar->pdev->cap);
++
++	if (ar->state != ATH12K_STATE_ON &&
++	    ar->state != ATH12K_STATE_RESTARTED)
++		return 0;
++
++	ret = ath12k_wmi_pdev_set_param(ar, WMI_PDEV_PARAM_RX_CHAIN_MASK,
++					rx_ant, ar->pdev->pdev_id);
++	if (ret) {
++		ath12k_err(ar->ab, "failed to set rx-chainmask: %d, req 0x%x\n",
++			   ret, rx_ant);
++		return ret;
++	}
++
++	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "ar->cfg_tx_chainmask: %d (%x) ar->cfg_rx_chainmask: %d (%x)\n",
++		   ar->cfg_tx_chainmask, ar->num_tx_chains,
++		   ar->cfg_rx_chainmask, ar->num_rx_chains);
++
++	return 0;
++}
++
+ static int __ath12k_set_antenna(struct ath12k *ar, u32 tx_ant, u32 rx_ant)
+ {
+ 	int ret;
+@@ -10481,6 +10671,10 @@ static int __ath12k_set_antenna(struct a
+ 		return ret;
+ 	}
+ 
++	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "ar->cfg_tx_chainmask: %d (%x) ar->cfg_rx_chainmask: %d (%x)\n",
++		   ar->cfg_tx_chainmask, ar->num_tx_chains,
++		   ar->cfg_rx_chainmask, ar->num_rx_chains);
++
+ 	return 0;
+ }
+ 
+@@ -11476,13 +11670,10 @@ static int ath12k_mac_config_mon_status_
+ 		if (ath12k_debugfs_rx_filter(ar))
+ 			tlv_filter.rx_filter = ath12k_debugfs_rx_filter(ar);
+ 
+-#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+-		if (test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ar->ab->dev_flags))
+-			tlv_filter.rx_filter |= (HTT_RX_FILTER_TLV_FLAGS_PPDU_START |
+-						 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS |
+-						 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS_EXT |
+-						 HTT_RX_FILTER_TLV_FLAGS_PPDU_START_USER_INFO);
+-#endif /* CPTCFG_ATH12K_PPE_DS_SUPPORT */
++		tlv_filter.rx_filter |= (HTT_RX_FILTER_TLV_FLAGS_PPDU_START |
++					 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS |
++					 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS_EXT |
++					 HTT_RX_FILTER_TLV_FLAGS_PPDU_START_USER_INFO);
+ 
+ 	} else {
+ 		tlv_filter.rxmon_disable = true;
+@@ -12060,6 +12251,9 @@ static int ath12k_mac_op_start(struct ie
+ 		ar++;
+ 	}
+ 
++	if (ag->mlo_capable && !ath12k_hw_group_recovery_in_progress(ag))
++		ath12k_vendor_services_init();
++
+ 	mutex_unlock(&ah->conf_mutex);
+ 	return 0;
+ 
+@@ -12093,6 +12287,9 @@ static void ath12k_mac_op_stop(struct ie
+ 		ar--;
+ 	}
+ 
++	if (ag->mlo_capable)
++		ath12k_vendor_services_deinit();
++
+ 	mutex_unlock(&ah->conf_mutex);
+ }
+ 
+@@ -15769,6 +15966,10 @@ ath12k_mac_assign_vif_chanctx_handle(str
+ 						   bridge_ar_link_idx);
+ 		if (!ar)
+ 			return -EINVAL;
++
++		ath12k_vendor_link_state_update(ar->pdev_idx,
++					    ar->ab, arvif,
++					    ATH12K_VENDOR_LINK_STATE_ADDED);
+  	}  else {
+ 		if (vif->valid_links) {
+ 			ret = ath12k_validate_arvif(arvif);
+@@ -15918,6 +16119,11 @@ ath12k_mac_assign_vif_chanctx_handle(str
+ 
+ 	if (ctx) {
+ 		memcpy(&arvif->chanctx, ctx, sizeof(*ctx));
++		if (ahvif->vdev_type == WMI_VDEV_TYPE_AP) {
++			ath12k_vendor_link_state_update(ar->pdev_idx,
++						    ab, arvif,
++						    ATH12K_VENDOR_LINK_STATE_ASSIGNED);
++		}
+ 		ret = ath12k_mac_vdev_start(arvif, &ctx->def, ctx->radar_enabled);
+ 		if (ret) {
+ 			ath12k_warn(ab, "failed to start vdev %i addr %pM on freq %d: vdev_subtype=%0x %d\n",
+@@ -16042,6 +16248,8 @@ ath12k_mac_unassign_vif_chanctx_handle(s
+ 
+ 	mutex_lock(&ar->conf_mutex);
+ 
++	ath12k_vendor_link_state_update(ar->pdev_idx, ab, arvif,
++				    ATH12K_VENDOR_LINK_STATE_UNASSIGNED);
+ 	if (unlikely(test_bit(ATH12K_FLAG_CRASH_FLUSH, &ar->ab->dev_flags)))
+ 		goto out;
+ 
+@@ -18142,6 +18350,9 @@ void ath12k_mac_ap_ps_recalc(struct ath1
+ 		}
+ 	}
+ 
++	if (ath12k_vendor_is_energysvc_enabled())
++		allow_ap_ps = false;
++
+ 	if (!allow_ap_ps)
+ 		ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "ap ps is not"
+ 			   "allowed\n");
+@@ -20572,3 +20783,12 @@ void ath12k_mac_background_dfs_event(str
+ 		ar->agile_chandef.chan = NULL;
+ 	}
+ }
++
++struct ieee80211_chanctx_conf *ath12k_mac_get_chan_ctx(struct ath12k *ar)
++{
++	if (!ar)
++		return NULL;
++
++	return ath12k_mac_get_first_active_arvif_chanctx(ar);
++}
++
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -281,4 +281,16 @@ int ath12k_mac_op_set_scs(struct wireles
+ void ath12k_agile_cac_abort_work(struct work_struct *work);
+ bool ath12k_mac_is_bridge_vdev(struct ath12k_link_vif *arvif);
+ void ath12k_mac_bridge_vdev_up(struct ath12k_link_vif *arvif);
++
++int ath12k_mac_set_tx_antenna(struct ath12k *ar, u32 tx_ant);
++int ath12k_mac_set_rx_antenna(struct ath12k *ar, u32 rx_ant);
++
++struct ieee80211_chanctx_conf *ath12k_mac_get_chan_ctx(struct ath12k *ar);
++struct ieee80211_link_sta *ath12k_get_link_sta(struct ath12k_link_sta *arsta);
++int ath12k_mac_vendor_send_assoc_event(struct ath12k_link_sta *arsta,
++				       struct ieee80211_link_sta *link_sta,
++				       bool reassoc);
++int ath12k_mac_vendor_send_disassoc_event(struct ath12k_link_sta *arsta,
++					  struct ieee80211_link_sta *link_sta);
++
+ #endif
+--- a/drivers/net/wireless/ath/ath12k/vendor.c
++++ b/drivers/net/wireless/ath/ath12k/vendor.c
+@@ -16,6 +16,7 @@
+ #include "debugfs_htt_stats.h"
+ #include "pci.h"
+ #include "power_boost.h"
++#include "vendor_services.h"
+ 
+ #ifdef CPTCFG_ATH12K_POWER_BOOST
+ static const struct nla_policy
+@@ -168,6 +169,13 @@ ath12k_vendor_scs_config_policy[QCA_WLAN
+ 
+ static const struct nla_policy
+ ath12k_wifi_config_policy[QCA_WLAN_VENDOR_ATTR_CONFIG_MAX + 1] = {
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_COMMAND] = {.type = NLA_U32 },
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_VALUE] = {.type = NLA_U32 },
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA] = {.type = NLA_BINARY },
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_LENGTH] = {.type = NLA_U32 },
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_FLAGS] = {.type = NLA_U32 },
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_IFINDEX] = {.type = NLA_U32 },
++	[QCA_WLAN_VENDOR_ATTR_CONFIG_MLO_LINK_ID] = {.type = NLA_U8 },
+ 	[QCA_WLAN_VENDOR_ATTR_IF_OFFLOAD_TYPE] = {.type = NLA_U8},
+ };
+ 
+@@ -270,6 +278,82 @@ struct ath12k_erp_state_machine {
+ 
+ static struct ath12k_erp_state_machine erp_sm = {};
+ 
++struct ath12k_wifi_generic_params {
++	u32 command;
++	u32 value;
++	void *data;
++	u32 data_len;
++	u32 length;
++	u32 flags;
++	u32 ifindex;
++	u8 link_id;
++};
++
++static int ath12k_vendor_set_wifi_params(struct wiphy *wiphy,
++					 struct wireless_dev *wdev,
++					 struct ath12k_wifi_generic_params *params)
++{
++	struct ieee80211_vif *vif = NULL;
++	struct ath12k_vif *ahvif;
++	struct ath12k_link_vif *arvif;
++	struct ath12k_hw *ah = NULL;
++	struct ath12k *ar = NULL;
++	int param = params->value;
++	u32 *data = (u32 *)params->data;
++	int value = *data;
++	int ret = -1;
++
++	vif = wdev_to_ieee80211_vif(wdev);
++	if (!vif || !data)
++		return -EINVAL;
++
++	ahvif = ath12k_vif_to_ahvif(vif);
++	if (!ahvif || params->ifindex == -1) {
++		return -EINVAL;
++	}
++
++	ah = ahvif->ah;
++
++	if (ah && params->link_id == INVALID_LINK_ID) {
++		mutex_lock(&ah->conf_mutex);
++		arvif = &ahvif->deflink;
++		if (arvif && arvif->ar)
++			ar = arvif->ar;
++		mutex_unlock(&ah->conf_mutex);
++	} else {
++		rcu_read_lock();
++		arvif = ath12k_rcu_get_arvif_from_link_id(ahvif, params->link_id);
++		if (arvif && arvif->ar)
++			ar = arvif->ar;
++		rcu_read_unlock();
++	}
++
++	if (!arvif || !ar)
++		return -EINVAL;
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM, "vif: %p param: %d value: %d if: %d link: %d\n",
++		   vif, param, value,
++		   params->ifindex, params->link_id);
++
++	switch (param) {
++	case PARAM_RADIO_TXCHAINSOFT:
++		mutex_lock(&ar->conf_mutex);
++		ret = ath12k_mac_set_tx_antenna(ar, value);
++		mutex_unlock(&ar->conf_mutex);
++		break;
++	case ACFG_PARAM_RADIO_RXCHAINMASK:
++		mutex_lock(&ar->conf_mutex);
++		ret = ath12k_mac_set_rx_antenna(ar, value);
++		mutex_unlock(&ar->conf_mutex);
++		break;
++	default:
++		ath12k_dbg(NULL, ATH12K_DBG_RM, "Un-supported param: %d\n",
++			   param);
++	}
++
++	return ret;
++}
++
+ void ath12k_vendor_wlan_intf_stats(struct work_struct *work)
+ {
+ 	struct ath12k *ar = container_of(work, struct ath12k, wlan_intf_work);
+@@ -1714,26 +1798,87 @@ end_stats:
+ 	return ret;
+ }
+ 
+-static int ath12k_vendor_wifi_config_handler(struct wiphy *wihpy,
++static void ath12k_vendor_wifi_extract_generic_command_params(struct nlattr **tb,
++							      struct ath12k_wifi_generic_params *params)
++{
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_COMMAND])
++		params->command = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_COMMAND]);
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_VALUE])
++		params->value = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_VALUE]);
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA]) {
++		params->data = nla_data(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA]);
++		params->data_len = nla_len(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA]);
++	}
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_LENGTH])
++		params->length = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_LENGTH]);
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_FLAGS])
++		params->flags = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_FLAGS]);
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_IFINDEX])
++		params->ifindex = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_IFINDEX]);
++	else
++		params->ifindex = 0xFFFFFFFF;
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_MLO_LINK_ID])
++		params->link_id = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_CONFIG_MLO_LINK_ID]);
++	else
++		params->link_id = INVALID_LINK_ID;
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM, "wifi param: %d data: %p data len: %d ifindex: %d link id: %d\n",
++		   params->value, params->data, params->data_len,
++		   params->ifindex, params->link_id);
++}
++
++static int ath12k_vendor_wifi_config_handler(struct wiphy *wiphy,
+ 					     struct wireless_dev *wdev,
+ 					     const void *data, int data_len)
+ {
+ 	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_CONFIG_MAX + 1];
+-	int ret = 0;
+-	int ppe_vp_type = 0;
+-	char *type = NULL;
++	struct ath12k_wifi_generic_params wifi_params;
+ 	struct ieee80211_vif *vif = NULL;
+ 	struct ath12k_vif *ahvif = NULL;
++	int ppe_vp_type = 0;
++	char *type = NULL;
++	int ret = 0;
+ 
+ 	ret = nla_parse(tb, QCA_WLAN_VENDOR_ATTR_CONFIG_MAX, data, data_len,
+ 			ath12k_wifi_config_policy, NULL);
+ 
+ 	if (ret) {
+-		ath12k_err(NULL, "Invalid attribute with ds %d\n", ret);
++		ath12k_err(NULL, "Invalid attribute with vendor wifi config %d\n", ret);
+ 		return ret;
+ 	}
+ 
+-	if (tb[QCA_WLAN_VENDOR_ATTR_IF_OFFLOAD_TYPE])
++	if (tb[QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_COMMAND]) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM, "wiphy:%p wdev: %p Extract wifi params\n",
++			   wiphy, wdev);
++		memset(&wifi_params, 0, sizeof(struct ath12k_wifi_generic_params));
++		ath12k_vendor_wifi_extract_generic_command_params(tb, &wifi_params);
++		switch (wifi_params.command) {
++		case QCA_NL80211_VENDOR_SUBCMD_WIFI_PARAMS:
++			if (!wifi_params.data) {
++				ath12k_dbg(NULL, ATH12K_DBG_RM, "Invalid param command received\n");
++				return -EINVAL;
++			}
++			ret = ath12k_vendor_set_wifi_params(wiphy, wdev,
++							    &wifi_params);
++			if (ret) {
++				ath12k_dbg(NULL, ATH12K_DBG_RM,
++					   "Failed to set wifi params \n");
++				return -EINVAL;
++			}
++			break;
++		default:
++			ath12k_dbg(NULL, ATH12K_DBG_RM, "Un-supported generic command\n");
++			return -EOPNOTSUPP;
++		}
++	}
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_IF_OFFLOAD_TYPE]) {
+ 		ppe_vp_type = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_IF_OFFLOAD_TYPE]);
+ 
+ 	if (ppe_vp_type > PPE_VP_USER_TYPE_DS) {
+@@ -1817,6 +1962,7 @@ static int ath12k_vendor_wifi_config_han
+ 	ath12k_info(NULL, "[%s] vendor cmd type [%s] %d (%s) state %d\n",
+ 		    current->comm,  wdev->netdev->name, wdev->ppe_vp_type,
+ 		    type, netif_running(wdev->netdev));
++	}
+ 
+ 	return 0;
+ }
+@@ -2749,8 +2895,10 @@ static int ath12k_vendor_parse_rm(struct
+ 				  int data_len)
+ {
+ 	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MAX + 1];
++	struct ath12k_vendor_service_info info;
+ 	int ret;
+ 
++	memset(&info, 0, sizeof(info));
+ 	ret = nla_parse(tb, QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MAX,
+ 			data, data_len, ath12k_vendor_rm_generic_policy, NULL);
+ 	if (ret) {
+@@ -2758,6 +2906,15 @@ static int ath12k_vendor_parse_rm(struct
+ 		return ret;
+ 	}
+ 
++	if (tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION]) {
++		info.app_info.app_version = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION]);
++
++		ath12k_dbg(NULL, ATH12K_DBG_RM, "APP Version:%d\n",
++			   info.app_info.app_version);
++	}
++
++	info.app_info.driver_version = 0x1;
++
+ 	if (tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP]) {
+ 		return ath12k_vendor_parse_rm_erp(wiphy, wdev,
+ 						  tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ERP]);
+@@ -2765,8 +2922,32 @@ static int ath12k_vendor_parse_rm(struct
+ 		if (nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID]) ==
+ 		    QCA_WLAN_VENDOR_RM_POWER_BOOST_SERVICE)
+ 			return ath12k_vendor_process_rm_power_boost(wiphy, wdev);
++
++		info.id = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID]);
++		info.service_data = -EINVAL;
++		if (tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_DATA])
++			info.service_data = nla_get_u64(tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_DATA]);
++
++		ath12k_dbg(NULL, ATH12K_DBG_RM, "service id:%d data:%lld\n",
++			   info.id, info.service_data);
+ 	} else {
+-		ath12k_err(NULL, "QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC is empty\n");
++		ath12k_err(NULL, "invalid service id attributes provided for QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC\n");
++		return -EINVAL;
++	}
++
++	if (tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_DYNAMIC_INIT_CONF])
++		info.init_config_type = nla_get_u8(tb[QCA_WLAN_VENDOR_ATTR_RM_GENERIC_DYNAMIC_INIT_CONF]);
++	else
++		ath12k_err(NULL, "invalid attributes provided for QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC\n");
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "RM Init started for service id:%d data:%lld\n",
++		   info.id, info.service_data);
++	ret = ath12k_vendor_initialize_service(wiphy, wdev, &info);
++	if (ret) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "RM Init failed for service id:%d data:%lld\n",
++			   info.id, info.service_data);
+ 	}
+ 
+ 	return ret;
+@@ -3831,6 +4012,169 @@ static int ath12k_vendor_dcs_handler(str
+ 	return 0;
+ }
+ 
++static struct ath12k_link_vif *
++ath12k_vendor_get_non_scan_arvif(struct ath12k *ar)
++{
++	struct ath12k_link_vif *arvif;
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	if (list_empty(&ar->arvifs))
++		return NULL;
++
++	list_for_each_entry(arvif, &ar->arvifs, list)
++		if (!arvif->is_scan_vif && arvif->is_started)
++			return arvif;
++
++	return list_first_entry(&ar->arvifs, typeof(*arvif), list);
++}
++
++int ath12k_vendor_put_ar_hw_link_id(struct sk_buff *vendor_event,
++				    struct ath12k *ar)
++{
++	if (nla_put_u16(vendor_event,
++			QCA_WLAN_VENDOR_ATTR_LINK_INFO_HW_LINK_ID,
++			ar->pdev->hw_link_id)) {
++		ath12k_err(ar->ab, "Fails to put hw link id :%d for soc:%d",
++			   ar->pdev->hw_link_id, ar->ab->chip_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++int ath12k_vendor_put_ar_link_mac_addr(struct sk_buff *vendor_event,
++				       struct ath12k *ar)
++{
++	struct ath12k_link_vif *arvif = ath12k_vendor_get_non_scan_arvif(ar);
++
++	if (nla_put(vendor_event,
++		    QCA_WLAN_VENDOR_ATTR_LINK_MAC,
++		    6, (void *)arvif->addr)) {
++		ath12k_err(ar->ab, "Fails to put mac addr for hw link id :%d soc:%d",
++			   ar->pdev->hw_link_id, ar->ab->chip_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++enum qca_wlan_vendor_channel_width
++ath12k_nl_chan_bw_to_qca_vendor_chan_bw(enum nl80211_chan_width chan_bw)
++{
++	switch (chan_bw) {
++	case NL80211_CHAN_WIDTH_20:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_20MHZ;
++	case NL80211_CHAN_WIDTH_40:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_40MHZ;
++	case NL80211_CHAN_WIDTH_80:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_80MHZ;
++	case NL80211_CHAN_WIDTH_160:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_160MZ;
++	case NL80211_CHAN_WIDTH_80P80:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_80_80MHZ;
++	case NL80211_CHAN_WIDTH_320:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_320MHZ;
++	default:
++		return QCA_WLAN_VENDOR_CHAN_WIDTH_INVALID;
++	}
++
++	return QCA_WLAN_VENDOR_CHAN_WIDTH_INVALID;
++}
++
++int ath12k_vendor_put_ar_chan_info(struct sk_buff *vendor_event,
++				   struct ath12k *ar)
++{
++	struct ieee80211_chanctx_conf *ctx = NULL;
++
++	ctx = ath12k_mac_get_chan_ctx(ar);
++
++	if (!ctx)
++		return -1;
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "chan width:%d freq:%d\n",
++		   ctx->def.width, ctx->def.chan->center_freq);
++	if (nla_put_u8(vendor_event, QCA_WLAN_VENDOR_ATTR_LINK_CHAN_BW,
++		       ath12k_nl_chan_bw_to_qca_vendor_chan_bw(ctx->def.width))) {
++		ath12k_err(ar->ab, "Fails to put chan bw for hw link id :%d soc:%d",
++			   ar->pdev->hw_link_id, ar->ab->chip_id);
++		return -1;
++	}
++
++	if (nla_put_u16(vendor_event, QCA_WLAN_VENDOR_ATTR_LINK_CHAN_FREQ,
++			ctx->def.chan->center_freq)) {
++		ath12k_err(ar->ab, "Fails to put chan center freq for hw link id :%d soc:%d",
++			   ar->pdev->hw_link_id, ar->ab->chip_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++int ath12k_vendor_put_ar_nss_chains(struct sk_buff *vendor_event,
++				    struct ath12k *ar)
++{
++	if (nla_put_u8(vendor_event, QCA_WLAN_VENDOR_ATTR_LINK_TX_CHAIN_MASK,
++		       ar->pdev->cap.tx_chain_mask)) {
++		ath12k_err(ar->ab, "Fails to put tx chain mask for hw link id :%d soc:%d",
++			   ar->pdev->hw_link_id, ar->ab->chip_id);
++		return -1;
++	}
++
++	if (nla_put_u8(vendor_event, QCA_WLAN_VENDOR_ATTR_LINK_RX_CHAIN_MASK,
++		       ar->pdev->cap.rx_chain_mask)) {
++		ath12k_err(ar->ab, "Fails to put rx chain mask for hw link id :%d soc:%d",
++			   ar->pdev->hw_link_id, ar->ab->chip_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++int ath12k_vendor_put_ab_soc_id(struct sk_buff *vendor_event,
++				struct ath12k_base *ab)
++{
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_SOC_ID,
++		       ab->chip_id)) {
++		ath12k_err(ab, "Fails to put soc device id for soc:%d",
++			   ab->chip_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++int ath12k_vendor_put_ab_num_links(struct sk_buff *vendor_event,
++				   struct ath12k_base *ab,
++				   const int num_active_links)
++{
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_NUM_LINKS,
++		       num_active_links)) {
++		ath12k_err(ab, "Fails to put number of hw links for soc:%d",
++			   ab->chip_id);
++		return -1;
++	}
++
++	return 0;
++}
++
++int ath12k_vendor_put_ag_num_socs(struct sk_buff *vendor_event,
++				  struct ath12k_hw_group *ag)
++{
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_NUM_SOC_DEVICES,
++		       ag->num_chip)) {
++		ath12k_err(NULL, "Fails to put num socs for group id :%d",
++			   ag->id);
++		return -1;
++	}
++
++	return 0;
++}
++
+ static struct wiphy_vendor_command ath12k_vendor_commands[] = {
+ 	{
+ 		.info.vendor_id = QCA_NL80211_VENDOR_ID,
+--- a/drivers/net/wireless/ath/ath12k/vendor.h
++++ b/drivers/net/wireless/ath/ath12k/vendor.h
+@@ -10,12 +10,16 @@
+ #define QCA_WLAN_AFC_RESP_DESC_FIELD_START_OCTET	14
+ #define QCA_WLAN_AFC_RESP_DESC_FIELD_END_OCTET		30
+ 
++#define INVALID_LINK_ID 0xFF
++#define is_valid_link_id(X) !((X) >= INVALID_LINK_ID)
++
+ extern unsigned int ath12k_ppe_ds_enabled;
+ 
+ enum qca_nl80211_vendor_subcmds {
+ 	/* Wi-Fi configuration subcommand */
+ 	QCA_NL80211_VENDOR_SUBCMD_SET_WIFI_CONFIGURATION = 74,
+ 	QCA_NL80211_VENDOR_SUBCMD_GET_WIFI_CONFIGURATION = 75,
++	QCA_NL80211_VENDOR_SUBCMD_WIFI_PARAMS = 200,
+ 	QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC = 206,
+ 	QCA_NL80211_VENDOR_SUBCMD_SCS_RULE_CONFIG = 218,
+ 	QCA_NL80211_VENDOR_SUBCMD_AFC_EVENT = 222,
+@@ -694,6 +698,33 @@ struct unified_stats {
+ 
+ enum qca_wlan_vendor_attr_config {
+ 	QCA_WLAN_VENDOR_ATTR_CONFIG_INVALID = 0,
++	/* Unsigned 32-bit attribute for generic commands */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_COMMAND = 17,
++	/* Unsigned 32-bit value attribute for generic commands */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_VALUE = 18,
++	/* Unsigned 32-bit data attribute for generic command response */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA = 19,
++	/* Unsigned 32-bit length attribute for
++	 * QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA
++	 */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_LENGTH = 20,
++	/* Unsigned 32-bit flags attribute for
++	 * QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_DATA
++	 */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_GENERIC_FLAGS = 21,
++	/* Unsigned 32-bit, specifies the interface index (netdev) for which the
++	 * corresponding configurations are applied. If the interface index is
++	 * not specified, the configurations are attributed to the respective
++	 * wiphy.
++	 */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_IFINDEX = 24,
++	/* 8-bit unsigned value. Used to specify the MLO link ID of a link
++	 * that is being configured. This attribute must be included in each
++	 * record nested inside %QCA_WLAN_VENDOR_ATTR_CONFIG_MLO_LINKS, and
++	 * may be included without nesting to indicate the link that is the
++	 * target of other configuration attributes.
++	 */
++	QCA_WLAN_VENDOR_ATTR_CONFIG_MLO_LINK_ID = 99,
+ 	/* 8-bit unsigned value to configure the interface offload type
+ 	 *
+ 	 * This attribute is used to configure the interface offload capability.
+@@ -760,11 +791,6 @@ enum qca_wlan_vendor_rm_services {
+ 	QCA_WLAN_VENDOR_RM_MAX_SERVICE,
+ };
+ 
+-enum qca_wlan_vendor_attr_app_generic_category {
+-    QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_INVALID = 0,
+-    QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_APP_INIT = 1,
+-};
+-
+ /**
+  * enum qca_wlan_vendor_attr_rm_generic - Attributes required for vendor
+  * command %QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC to register a Resource Manager
+@@ -1495,4 +1521,325 @@ enum qca_wlan_vendor_wlan_interference_a
+ 	QCA_WLAN_VENDOR_ATTR_WLAN_INTERFERENCE_PARAM_MAX =
+ 		QCA_WLAN_VENDOR_ATTR_WLAN_INTERFERENCE_PARAM_LAST - 1,
+ };
++
++/**
++ * enum qca_wlan_vendor_dynamic_init_conf - This enum defines the different
++ * dynamic app init/deinit configurations.
++ *
++ * @QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_RM_APP_START: Indicates to driver this
++ * is the initial app init and not an individual service dynamic init/de-init.
++ *
++ * @QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_SERVICE_START: Indicates to driver this
++ * is dynamic service init/start.
++ *
++ * @QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_SERVICE_STOP: Indicates to driver this
++ * is dynamic service de-init/stop.
++ */
++enum qca_wlan_vendor_dynamic_init_conf {
++	QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_RM_APP_START = 0,
++	QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_SERVICE_START = 1,
++	QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_SERVICE_STOP = 2,
++};
++
++/**
++ * enum qca_wlan_vendor_attr_soc_device_info - Represents the SOC device
++ * information available in the driver. The driver will send this information
++ * to the userspace as part of the registration event.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_SOC_ID: u8, represents the SOC device ID.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_NUM_LINKS: u8, represents the number of
++ * links present in the SOC device.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_LINK_INFO: represents the link level
++ * information. Array of nested attributes are defined in enum
++ * qca_wlan_vendor_attr_link_info
++ */
++enum qca_wlan_vendor_attr_soc_device_info {
++	QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_SOC_ID = 1,
++	QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_NUM_LINKS = 2,
++	QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_LINK_INFO = 3,
++
++	/* keep last */
++	QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_INFO_AFTER_LAST,
++	QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_INFO_MAX =
++		QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_INFO_AFTER_LAST - 1,
++};
++
++/**
++ * enum qca_wlan_vendor_attr_link_info - Represents the link level information
++ * available in the driver. The driver will send this information to the
++ * userspace as part of the registration event.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_INFO_HW_LINK_ID: u16, represents the hardware link
++ * ID.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_MAC: 6 byte MAC address represents the Link
++ * MAC address.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_CHAN_BW: u8, represents the channel bandwidth,
++ * values are defined in enum qca_wlan_vendor_channel_width
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_CHAN_FREQ: u16, represents the channel frequency
++ * in MHz.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_BAND_CAP: Channel band capability, values are
++ * defined in enum qca_wlan_vendor_link_band_caps
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_TX_CHAIN_MASK: u8, represents the max tx chainmask
++ * value.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_LINK_RX_CHAIN_MASK: u8, represents the max rx chainmask
++ * value.
++ */
++enum qca_wlan_vendor_attr_link_info {
++	QCA_WLAN_VENDOR_ATTR_LINK_INFO_HW_LINK_ID = 1,
++	QCA_WLAN_VENDOR_ATTR_LINK_MAC = 2,
++	QCA_WLAN_VENDOR_ATTR_LINK_CHAN_BW = 3,
++	QCA_WLAN_VENDOR_ATTR_LINK_CHAN_FREQ = 4,
++	QCA_WLAN_VENDOR_ATTR_LINK_BAND_CAP = 5,
++	QCA_WLAN_VENDOR_ATTR_LINK_TX_CHAIN_MASK = 6,
++	QCA_WLAN_VENDOR_ATTR_LINK_RX_CHAIN_MASK = 7,
++
++	/* keep last */
++	QCA_WLAN_VENDOR_ATTR_LINK_AFTER_LAST,
++	QCA_WLAN_VENDOR_ATTR_LINK_MAX =
++	QCA_WLAN_VENDOR_ATTR_LINK_AFTER_LAST - 1,
++};
++
++/**
++ * enum qca_wlan_vendor_attr_app_generic_category: Represents the Generic
++ * mapping frame category value.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_INVALID: Generic mapping catefory
++ * invalid.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_APP_INIT: The driver includes this
++ * category in the event  sent to the userspace when it receives a APP INIT
++ * request frame.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_LINK_BW_NSS_CHANGE: Represents the
++ * notification message that will be sent to the RM APP for changes observed
++ * in the BW and NSS values at AP side. Array of nested attributes are defined
++ * in enum qca_wlan_vendor_attr_link_bw_nss_change_info
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO: The driver
++ * includes this category in the event sent to the userspace when it receives a
++ * Assoc request frame from the STA without T2LM IE.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_WITH_T2LM_INFO: The driver
++ * includes this category in the event sent to the userspace when it receives a
++ * Assoc request frame from the STA with T2LM IE.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO: The driver includes
++ * this category in the event sent to the userspace when it receives a Operatin
++ * mode change notification from the STA.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_DISASSOC: The driver includes this
++ * category in the event sent to the userspace when it receives a disassoc from
++ * the connected STA.
++ *
++ */
++enum qca_wlan_vendor_attr_app_generic_category {
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_INVALID = 0,
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_APP_INIT = 1,
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_LINK_BW_NSS_CHANGE = 2,
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO = 3,
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_WITH_T2LM_INFO = 4,
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO = 5,
++	QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_DISASSOC = 6,
++};
++
++/**
++ * enum qca_wlan_vendor_attr_t2lm_mlo_peer_link_info - Represents the MLO peer
++ * link inforamtion.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_HW_LINK_ID: u16, represents the hardware
++ * link id of the MLO peer link. This is included in the commands sent from the
++ * userspace to the driver and used in the events sent from the driver to the
++ * userspace.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_PEER_MAC: 6 byte MAC address represents
++ * the MLO peer mac address. This is included in the commands sent from the
++ * userspace to the driver and used in the events sent from the driver to the
++ * userspace.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_MLO_LINK_ID: u8, represents the mlo peer
++ * link index. This is included in the commands sent from the userspace to the
++ * driver and used in the events sent from the driver to the userspace.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_IS_ASSOC_LINK: u8, this is included in
++ * the event sent from the driver to the userspace to identify the Assoc request
++ * received link. Userspace includes this in all the commands sent to the driver
++ * to identify the Assoc request received list.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CHAN_BW: u8, this is included in the
++ * event sent from the driver to the userspace to indicate the STA's channel
++ * bandwidth. The values are defined in enum qca_wlan_vendor_channel_width.
++ * The driver includes this attribute in the event sent for
++ * QCA_WLAN_VENDOR_T2LM_CATEGORY_REQUEST,
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO and
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CHAN_FREQ: u16, this is included in the
++ * event sent from the driver to the userspace to indicate the STA's channel
++ * frequency in MHz. The driver includes this attribute in the event sent for
++ * QCA_WLAN_VENDOR_T2LM_CATEGORY_REQUEST,
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO and
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AVAILABLE_AIRTIME: u16, this is included
++ * in the event sent from the driver to the userspace to indicate MLO peer
++ * link's available airtime value (unit is percentage). The driver includes this
++ * attribute in the event sent for QCA_WLAN_VENDOR_T2LM_CATEGORY_REQUEST,
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO and
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_RSSI: s8, this is included in the event
++ * sent from the driver to the userspace to indicate MLO peer link's (Assoc
++ * request received link) RSSI value in dBm. The driver includes this attribute
++ * in the event sent for
++ * QCA_WLAN_VENDOR_T2LM_CATEGORY_REQUEST,
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO and
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_EHT_CAPS: This is included in the event
++ * sent from the driver to the userspace to indicate MLO peer link's EHT
++ * capabilities. Values are defined in enum
++ * qca_wlan_vendor_attr_eht_peer_capabilities.
++ * The driver includes this attribute in the event sent for
++ * QCA_WLAN_VENDOR_T2LM_CATEGORY_REQUEST,
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO and
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_BAND_CAP: This is included in the event
++ * sent from the driver to the userspace to indicate MLO peer link's band
++ * capabilities. Values are defined in enum qca_wlan_vendor_link_band_caps.
++ * The driver includes this attribute in the event sent for
++ * QCA_WLAN_VENDOR_T2LM_CATEGORY_REQUEST,
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO and
++ * QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_VDEV_ID: u8, represents the vdev id.
++ * This is included in the commands sent from the userspace to the driver
++ * and used in the events sent from the driver to the userspace.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AP_MLD_MAC: 6 byte MAC address represents
++ * the vdev mld mac address.
++ *
++ * @QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CAPS: u16, represents peer capabilities.
++ */
++enum qca_wlan_vendor_attr_t2lm_mlo_peer_link_info {
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_HW_LINK_ID = 1,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_PEER_MAC = 2,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_MLO_LINK_ID = 3,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_IS_ASSOC_LINK = 4,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CHAN_BW = 5,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CHAN_FREQ = 6,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AVAILABLE_AIRTIME = 7,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_RSSI = 8,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_EHT_PEER_CAPS = 9,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_BAND_CAP = 10,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_EFF_CHAN_BW = 11,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_VDEV_ID = 12,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AP_MLD_MAC = 13,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CAPS = 14,
++	/* keep last */
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AFTER_LAST,
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_MAX =
++	QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AFTER_LAST - 1,
++};
++
++/**
++ * enum qca_wlan_vendor_channel_width - Represents the channel bandwidth in MHz
++ * available in the driver. The driver will send this information to the
++ * userspace as part of the registration event.
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_INVALID: Invalid channel bandwidth
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_20MHZ: 20 MHz channel bandwidth
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_40MHZ: 40 MHz channel bandwidth
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_80MHZ: 80 MHz channel bandwidth
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_160MZ: 160 MHz channel bandwidth
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_80_80MHZ: 80+80 MHz channel bandwidth
++ *
++ * @QCA_WLAN_VENDOR_CHAN_WIDTH_320MHZ: 320 MHz channel bandwidth
++ */
++enum qca_wlan_vendor_channel_width {
++	QCA_WLAN_VENDOR_CHAN_WIDTH_INVALID = 0,
++	QCA_WLAN_VENDOR_CHAN_WIDTH_20MHZ = 1,
++	QCA_WLAN_VENDOR_CHAN_WIDTH_40MHZ = 2,
++	QCA_WLAN_VENDOR_CHAN_WIDTH_80MHZ = 3,
++	QCA_WLAN_VENDOR_CHAN_WIDTH_160MZ = 4,
++	QCA_WLAN_VENDOR_CHAN_WIDTH_80_80MHZ = 5,
++	QCA_WLAN_VENDOR_CHAN_WIDTH_320MHZ = 6,
++};
++
++#define ATH12K_VENDOR_PUT(vendor_event, type, attr, param)		\
++	do {								\
++		if (nla_put_##type(vendor_event, attr, param)) {	\
++			ath12k_err(NULL, "Fails to put " #attr "\n");	\
++			return -1;					\
++		}							\
++	} while (0)
++
++#define ATH12K_VENDOR_PUT_AR(vendor_event, type, context, attr, param)		\
++	do {									\
++		if (nla_put_##type(vendor_event, attr, param)) {		\
++			ath12k_err((context)->ab, "Fails to put " #attr "\n");	\
++			return -1;						\
++		}								\
++	} while (0)
++
++#define ATH12K_VENDOR_PUT_AB(vendor_event, type, context, attr, param)		\
++	do {									\
++		if (nla_put_##type(vendor_event, attr, param)) {		\
++			ath12k_err((context), "Fails to put " #attr "\n");	\
++			return -1;						\
++		}								\
++	} while (0)
++
++#define ATH12K_VENDOR_PUT_AG(vendor_event, type, attr, param)		\
++	do {								\
++		if (nla_put_##type(vendor_event, attr, param)) {	\
++			ath12k_err(NULL, "Fails to put " #attr "\n");	\
++			return -1;					\
++		}							\
++	} while (0)
++
++#define ATH_PARAM_MASK     0x1000
++enum ath_cfg_param_radio {
++	ACFG_PARAM_RADIO_TXCHAINMASK          = 1  | ATH_PARAM_MASK,
++	ACFG_PARAM_RADIO_RXCHAINMASK          = 2  | ATH_PARAM_MASK,
++	PARAM_RADIO_TXCHAINSOFT               = 361 | ATH_PARAM_MASK,
++};
++
++enum qca_wlan_vendor_channel_width
++ath12k_nl_chan_bw_to_qca_vendor_chan_bw(enum nl80211_chan_width chan_bw);
++
++int ath12k_vendor_put_ar_hw_link_id(struct sk_buff *vendor_event,
++				    struct ath12k *ar);
++int ath12k_vendor_put_ar_link_mac_addr(struct sk_buff *vendor_event,
++				       struct ath12k *ar);
++int ath12k_vendor_put_ar_chan_info(struct sk_buff *vendor_event,
++				   struct ath12k *ar);
++int ath12k_vendor_put_ar_chan_bw(struct sk_buff *vendor_event,
++				 struct ath12k *ar);
++int ath12k_vendor_put_ar_chan_freq(struct sk_buff *vendor_event,
++				   struct ath12k *ar);
++int ath12k_vendor_put_ar_nss_chains(struct sk_buff *vendor_event,
++				    struct ath12k *ar);
++
++int ath12k_vendor_put_ab_soc_id(struct sk_buff *vendor_event,
++				struct ath12k_base *ab);
++int ath12k_vendor_put_ab_num_links(struct sk_buff *vendor_event,
++				   struct ath12k_base *ab,
++				   const int num_active_links);
++int ath12k_vendor_put_ag_num_socs(struct sk_buff *vendor_event,
++				  struct ath12k_hw_group *ag);
++
+ #endif /* QCA_VENDOR_H */
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -1214,3 +1214,60 @@ void ath12k_peer_rhash_tbl_destroy(struc
+ 	mutex_unlock(&ab->tbl_mtx_lock);
+ }
+ 
++int ath12k_peer_send_assoc_vendor_response(const struct ath12k_peer *peer,
++					   bool is_assoc)
++{
++	struct ieee80211_link_sta *link_sta;
++	struct ath12k_link_sta *arsta;
++	struct ieee80211_sta *sta;
++	struct ath12k_sta *ahsta;
++	struct ath12k *ar;
++
++	if (!peer) {
++		ath12k_dbg(NULL, ATH12K_DBG_PEER,
++			   "Invalid peer skipped assoc vendor response \n");
++		return -EINVAL;
++	}
++
++	sta = peer->sta;
++	if (!sta) {
++		ath12k_dbg(NULL, ATH12K_DBG_PEER,
++			   "Invalid sta skipped assoc vendor response \n");
++		return -EINVAL;
++	}
++
++	if (peer->link_id < 0) {
++		ath12k_dbg(NULL, ATH12K_DBG_PEER,
++			   "Invalid peer link id skipped assoc vendor response \n");
++		return -EINVAL;
++	}
++
++	ahsta = ath12k_sta_to_ahsta(sta);
++	arsta = ahsta->link[peer->link_id];
++	if (!(arsta && arsta->arvif)) {
++		ath12k_dbg(NULL, ATH12K_DBG_PEER,
++			   "invalid arsta for peer: %pM skipped assoc vendor response\n",
++			   peer->addr);
++		return -EINVAL;
++	}
++
++	ar = arsta->arvif->ar;
++
++	rcu_read_lock();
++	link_sta = ath12k_get_link_sta(arsta);
++
++	if (!link_sta) {
++		rcu_read_unlock();
++		ath12k_warn(ar->ab, "unable to access link sta skipped assoc vendor response\n");
++		return -EINVAL;
++	}
++	rcu_read_unlock();
++
++	if (is_assoc)
++		ath12k_mac_vendor_send_assoc_event(arsta, link_sta, true);
++	else
++		ath12k_mac_vendor_send_disassoc_event(arsta, link_sta);
++
++	return 0;
++}
++
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -164,6 +164,9 @@ void ath12k_mac_peer_disassoc(struct ath
+ 			      struct ath12k_sta *ahsta,
+ 			      enum ath12k_debug_mask debug_mask);
+ 
++int ath12k_peer_send_assoc_vendor_response(const struct ath12k_peer *peer,
++					   const bool is_assoc);
++
+ static inline
+ enum nl80211_iftype ath12k_peer_get_peer_type(struct ath12k_peer *peer)
+ {
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
+@@ -6,7 +6,7 @@
+ #include "core.h"
+ #include "debug.h"
+ #include "sawf.h"
+-#include "rm.h"
++#include "vendor_services.h"
+ #include "peer.h"
+ #include "dp.h"
+ #include "dp_mon.h"
+@@ -58,6 +58,8 @@ int register_telemetry_agent_ops(struct
+ 
+ 	g_agent_ops->agent_notify_host_event = ath12k_telemetry_notify_rm;
+ 	ath12k_info(NULL, "registered telemetry agent ops: %p", g_agent_ops);
++	ath12k_telemetry_agent_init();
++	ath12k_info(NULL, "Init telemetry agent resources");
+ 
+ 	return 0;
+ }
+@@ -65,6 +67,7 @@ EXPORT_SYMBOL(register_telemetry_agent_o
+ 
+ int unregister_telemetry_agent_ops(struct telemetry_agent_ops *agent_ops)
+ {
++	ath12k_telemetry_agent_deinit();
+ 	g_agent_ops = NULL;
+ 	ath12k_info(NULL, "unregistered telemetry agent ops: %p", g_agent_ops);
+ 	return 0;
+@@ -79,7 +82,8 @@ bool ath12k_telemetry_is_agent_loaded(vo
+ u32 ath12k_telemetry_agent_init(void)
+ {
+ 	int status = 0;
+-	/* TODO */
++
++	ath12k_telemetry_create_resources();
+ 	ath12k_info(NULL, "telemetry agent init Done\n");
+ 	return status;
+ }
+@@ -87,7 +91,8 @@ u32 ath12k_telemetry_agent_init(void)
+ u32 ath12k_telemetry_agent_deinit(void)
+ {
+ 	int status = 0;
+-	/* TODO */
++
++	ath12k_telemetry_destroy_resources();
+ 	ath12k_info(NULL, "telemetry agent deinit\n");
+ 	return status;
+ }
+@@ -260,7 +265,7 @@ int ath12k_get_peer_stats(void *obj, str
+ 			dp_stats.tx_airtime_consumption[ac];
+ 
+ 		ath12k_dbg(NULL, ATH12K_DBG_RM,
+-			   "TA peer: %pM soc: %d pdev: %d link: %d ac: %d airtime_consumption: %d tx: %d rx: %d\n",
++			   "peer stats peer: %pM soc: %d pdev: %d link: %d ac: %d airtime_consumption: %d tx: %d rx: %d\n",
+ 			   peer->addr, ab->chip_id, pdev->pdev_id, peer->link_id,
+ 			   ac, stats->airtime_consumption[ac],
+ 			   dp_stats.tx_airtime_consumption[ac],
+@@ -537,7 +542,7 @@ void ath12k_sawf_notify_breach(u8 *mac_a
+ 	ath12k_telemetry_breach_indication(mac_addr, svc_id, param, set_clear, tid);
+ }
+ 
+-int ath12k_telemetry_notify_rm_app_event(u8 init, u8 id, u64 service_data)
++int ath12k_telemetry_notify_vendor_app_event(u8 init, u8 id, u64 service_data)
+ {
+ 	enum agent_notification_event event = init;
+ 
+@@ -552,7 +557,8 @@ int ath12k_telemetry_dynamic_app_init_de
+ {
+ 	enum agent_notification_event event = init;
+ 
+-	if (!g_agent_ops)
++	if (!g_agent_ops ||
++	    !g_agent_ops->agent_dynamic_app_init_deinit_notify)
+ 		return -EOPNOTSUPP;
+ 
+ 	g_agent_ops->agent_dynamic_app_init_deinit_notify(event, id, service_data);
+@@ -567,7 +573,7 @@ void ath12k_telemetry_notify_rm(enum age
+ 	ath12k_dbg(NULL, ATH12K_DBG_RM,
+ 		   "Handshake received from telemetry for Event:%d id:%d category:%d\n",
+ 		   event, id, category);
+-	ath12k_telemetry_rm_callback(event, id, category);
++	ath12k_telemetry_vendor_callback(event, id, category);
+ }
+ 
+ int ath12k_telemetry_ab_agent_create_handler(struct ath12k_base *ab)
+@@ -663,11 +669,45 @@ int ath12k_telemetry_pdev_agent_delete_h
+ 	return 0;
+ }
+ 
++static int ath12k_telemetry_create_destroy_peer_agent(struct ath12k_base *ab,
++						      struct ath12k_pdev *pdev,
++						      struct ath12k_peer *peer,
++						      const bool is_create)
++{
++	struct agent_peer_obj peer_obj;
++
++	if (!g_agent_ops ||
++	    !g_agent_ops->agent_peer_create_handler)
++		return -EINVAL;
++	memset(&peer_obj, 0, sizeof(peer_obj));
++	memset(&peer->stats, 0,
++	       sizeof(struct ath12k_dp_mon_peer_stats));
++	peer_obj.peer_back_pointer = peer;
++	peer_obj.psoc_back_pointer = ab;
++	peer_obj.pdev_back_pointer = pdev;
++
++	peer_obj.psoc_id = ath12k_get_ab_chip_id(ab);
++	peer_obj.pdev_id = ath12k_get_pdev_id(pdev);
++	ether_addr_copy(peer_obj.peer_mac_addr, peer->addr);
++	peer_obj.peer_id = peer->peer_id;
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "id: %d peer: %p (ab:%p - pdev:%p) soc id: %d (pdev id: %d)\n",
++		   peer_obj.peer_id,
++		   peer_obj.peer_back_pointer, ab, pdev,
++		   peer_obj.psoc_id, peer_obj.pdev_id);
++
++	if (is_create)
++		g_agent_ops->agent_peer_create_handler(peer, &peer_obj);
++	else
++		g_agent_ops->agent_peer_destroy_handler(peer, &peer_obj);
++
++	return 0;
++}
++
+ int ath12k_telemetry_peer_agent_create_handler(struct ath12k *ar,
+ 					       const int vdev_id,
+ 					       const u8 *addr)
+ {
+-	struct agent_peer_obj peer_obj;
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_pdev *pdev = ar->pdev;
+ 	struct ath12k_peer *peer = NULL;
+@@ -684,22 +724,7 @@ int ath12k_telemetry_peer_agent_create_h
+ 	if (ath12k_peer_get_peer_type(peer) != NL80211_IFTYPE_AP)
+ 		return -ENOTSUPP;
+ 
+-	memset(&peer_obj, 0, sizeof(peer_obj));
+-	memset(&peer->stats, 0,
+-	       sizeof(struct ath12k_dp_mon_peer_stats));
+-	peer_obj.peer_back_pointer = peer;
+-	peer_obj.psoc_back_pointer = ab;
+-	peer_obj.pdev_back_pointer = pdev;
+-
+-	peer_obj.psoc_id = ath12k_get_ab_chip_id(ab);
+-	peer_obj.pdev_id = ath12k_get_pdev_id(pdev);
+-	ether_addr_copy(peer_obj.peer_mac_addr, peer->addr);
+-	ath12k_dbg(NULL, ATH12K_DBG_RM,
+-		   "peer: %p (ab:%p - pdev:%p) soc id: %d (pdev id: %d)\n",
+-		   peer_obj.peer_back_pointer, ab, pdev,
+-		   peer_obj.psoc_id, peer_obj.pdev_id);
+-
+-	g_agent_ops->agent_peer_create_handler(peer, &peer_obj);
++	ath12k_telemetry_create_destroy_peer_agent(ab, pdev, peer, true);
+ 
+ 	return 0;
+ }
+@@ -708,7 +733,6 @@ int ath12k_telemetry_peer_agent_delete_h
+ 					       const int vdev_id,
+ 					       const u8 *addr)
+ {
+-	struct agent_peer_obj peer_obj;
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_pdev *pdev = ar->pdev;
+ 	struct ath12k_peer *peer = NULL;
+@@ -734,21 +758,210 @@ int ath12k_telemetry_peer_agent_delete_h
+ 		return -ENOTSUPP;
+ 	}
+ 
+-	memset(&peer_obj, 0, sizeof(peer_obj));
++	ath12k_telemetry_create_destroy_peer_agent(ab, pdev, peer, false);
+ 
+-	peer_obj.peer_back_pointer = peer;
+-	peer_obj.psoc_back_pointer = ab;
+-	peer_obj.pdev_back_pointer = pdev;
++	return 0;
++}
+ 
+-	peer_obj.psoc_id = ath12k_get_ab_chip_id(ab);
+-	peer_obj.pdev_id = ath12k_get_pdev_id(pdev);
+-	ether_addr_copy(&peer_obj.peer_mac_addr, peer->addr);
+-	ath12k_dbg(NULL, ATH12K_DBG_RM,
+-		   "peer: %p (ab:%p - pdev:%p) soc id: %d (pdev id: %d)\n",
+-		   peer_obj.peer_back_pointer, ab, pdev,
+-		   peer_obj.psoc_id, peer_obj.pdev_id);
+-	g_agent_ops->agent_peer_destroy_handler(peer, &peer_obj);
++static void ath12k_telemetry_send_assoc_event(struct ath12k_peer *peer)
++{
++	if (!peer) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "peer is null, fails to send peer assoc vendor response \n");
++		return;
++	}
++
++	ath12k_peer_send_assoc_vendor_response(peer, true);
++}
++
++static void ath12k_telemetry_send_disassoc_event(struct ath12k_peer *peer)
++{
++	if (!peer) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "peer is null, fails to send peer assoc vendor response \n");
++		return;
++	}
++
++	ath12k_peer_send_assoc_vendor_response(peer, false);
++}
++
++int ath12k_telemetry_create_ab_peer_agent(struct ath12k_base *ab)
++{
++	struct ath12k_pdev *pdev = NULL;
++	struct ath12k_peer *peer, *tmp;
++
++	if (!ab) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "ab is null, fails to create peer agent in TA \n");
++		return -EINVAL;
++	}
++
++	spin_lock_bh(&ab->base_lock);
++	list_for_each_entry_safe(peer, tmp, &ab->peers, list) {
++		if (!peer->vif)
++			continue;
++
++		if (!peer->sta)
++			continue;
++
++		/* Create only for STA type */
++		if (ath12k_peer_get_peer_type(peer) != NL80211_IFTYPE_AP) {
++			ath12k_dbg(NULL, ATH12K_DBG_RM,
++				   "Peer reference for non sta type is not supported \n");
++			continue;
++		}
++
++		if (!peer->assoc_success)
++			continue;
++
++		pdev = &ab->pdevs[peer->pdev_idx];
++		ath12k_telemetry_create_destroy_peer_agent(ab, pdev, peer, true);
++		ath12k_telemetry_send_assoc_event(peer);
++	}
++	spin_unlock_bh(&ab->base_lock);
++
++	return 0;
++}
++
++int ath12k_telemetry_destroy_ab_peer_agent(struct ath12k_base *ab)
++{
++	struct ath12k_pdev *pdev = NULL;
++	struct ath12k_peer *peer, *tmp;
++
++	if (!ab) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "ab is null, fails to create peer agent in TA \n");
++		return -EINVAL;
++	}
++
++	spin_lock_bh(&ab->base_lock);
++	list_for_each_entry_safe(peer, tmp, &ab->peers, list) {
++		if (!peer->vif)
++			continue;
++
++		if (!peer->sta)
++			continue;
++
++		/* Create only for STA type */
++		if (ath12k_peer_get_peer_type(peer) != NL80211_IFTYPE_AP) {
++			ath12k_dbg(NULL, ATH12K_DBG_RM,
++				   "Peer reference for non sta type is not supported \n");
++			continue;
++		}
++
++		pdev = &ab->pdevs[peer->pdev_idx];
++		ath12k_telemetry_create_destroy_peer_agent(ab, pdev, peer, false);
++		ath12k_telemetry_send_disassoc_event(peer);
++	}
++	spin_unlock_bh(&ab->base_lock);
+ 
+ 	return 0;
+ }
+ 
++/* FIXME: The telemetry_agent is not loaded by default. Due to this limitation,
++ * the telemetry agent must be aware of resources created before its module is loaded.
++ * Therefore, this subroutine needs to be called during the RM initialization path.
++ * RM initiates the handshake, and ath12k invokes the corresponding telemetry agent
++ * operations to create and destroy resources within the telemetry agent module
++ * based on the ath12k context.
++ *
++ * Initialization steps:
++ * 1. Create a psoc reference in the telemetry agent (TA).
++ * 2. Create a pdev reference in TA.
++ * 3. Create a peer reference in TA if the peer exists and is in an associated state.
++ *
++ * Destruction steps:
++ * 3. Destroy the peer reference in TA if the peer exists.
++ * 2. Destroy the pdev reference in TA.
++ * 1. Destroy the psoc reference in TA.
++ *
++ * This routine may become unnecessary once the above limitation is resolved.
++ */
++void ath12k_telemetry_create_resources(void)
++{
++	struct ath12k_hw_group *ag;
++	struct ath12k_pdev *pdev;
++	struct ath12k_base *ab;
++	int pdev_idx;
++	int chip;
++	int ret;
++
++	ag = ath12k_core_get_ag();
++	if (!ag) {
++		ath12k_err(NULL, "Fails to get ag, skipped to create telemetry resources\n");
++		return;
++	}
++
++	mutex_lock(&ag->mutex_lock);
++	for (chip = 0; chip < ag->num_chip; chip++) {
++		ab = ag->ab[chip];
++		if (!ab)
++			continue;
++
++		ret = ath12k_telemetry_ab_agent_create_handler(ab);
++		if (ret) {
++			ath12k_err(ab, "Unable to create telemetry psoc agent object: %d\n", ret);
++			continue;
++		}
++
++		for (pdev_idx = 0; pdev_idx < ab->num_radios; pdev_idx++) {
++			pdev = &ab->pdevs[pdev_idx];
++			ret = ath12k_telemetry_pdev_agent_create_handler(pdev);
++			if (ret) {
++				ath12k_err(ab,
++					   "Unable to create telemetry pdev agent object: %d\n", ret);
++				continue;
++			}
++		}
++		ret = ath12k_telemetry_create_ab_peer_agent(ab);
++		if (ret)
++			continue;
++	}
++	mutex_unlock(&ag->mutex_lock);
++}
++
++void ath12k_telemetry_destroy_resources(void)
++{
++	struct ath12k_hw_group *ag;
++	struct ath12k_pdev *pdev;
++	struct ath12k_base *ab;
++	int pdev_idx;
++	int chip;
++	int ret;
++
++	ag = ath12k_core_get_ag();
++	if (!ag) {
++		ath12k_warn(NULL, "Fails to get ag, skipped to destroy telemetry resources, expect unknown behavior\n");
++		return;
++	}
++
++	mutex_lock(&ag->mutex_lock);
++
++	for (chip = 0; chip < ag->num_chip; chip++) {
++		ab = ag->ab[chip];
++		if (!ab)
++			continue;
++
++		ret = ath12k_telemetry_destroy_ab_peer_agent(ab);
++		if (ret)
++			continue;
++
++		for (pdev_idx = 0; pdev_idx < ab->num_radios; pdev_idx++) {
++			pdev = &ab->pdevs[pdev_idx];
++			ret = ath12k_telemetry_pdev_agent_delete_handler(pdev);
++			if (ret) {
++				ath12k_err(ab, "Unable to destroy telemetry pdev agent object: %d\n", ret);
++				continue;
++			}
++		}
++
++		ret = ath12k_telemetry_ab_agent_delete_handler(ab);
++		if (ret) {
++			ath12k_err(ab, "Unable to destroy telemetry psoc agent object: %d\n", ret);
++			continue;
++		}
++	}
++
++	mutex_unlock(&ag->mutex_lock);
++}
++
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
+@@ -68,9 +68,9 @@ bool ath12k_telemetry_get_mov_avg(void *
+ 				  u32 *nwdelay_avg, u32 *swdelay_avg,
+ 				  u32 *hwdelay_avg);
+ int ath12k_telemetry_reset_peer_stats(u8 *peer_mac);
+-int ath12k_telemetry_notify_rm_app_event(u8 init, u8 id, u64 service_data);
++int ath12k_telemetry_notify_vendor_app_event(u8 init, u8 id, u64 service_data);
+ int ath12k_telemetry_dynamic_app_init_deinit_notify(u8 init, u8 id, u64 service_data);
+-void ath12k_telemetry_rm_callback(u8 init, u8 id, u8 category);
++void ath12k_telemetry_vendor_callback(u8 init, u8 id, u8 category);
+ 
+ bool ath12k_telemetry_is_agent_loaded(void);
+ 
+@@ -87,4 +87,9 @@ int ath12k_telemetry_peer_agent_delete_h
+ 					       const int vdev_id,
+ 					       const u8 *addr);
+ 
++int ath12k_telemetry_create_ab_peer_agent(struct ath12k_base *ab);
++int ath12k_telemetry_destroy_ab_peer_agent(struct ath12k_base *ab);
++void ath12k_telemetry_create_resources(void);
++void ath12k_telemetry_destroy_resources(void);
++
+ #endif /* ATH12K_TELEMETRY_AGENT_IF_H */
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -25,7 +25,7 @@
+ #include "ahb.h"
+ #include "telemetry.h"
+ #include "peer.h"
+-#include "rm.h"
++#include "vendor_services.h"
+ #include "telemetry_agent_if.h"
+ 
+ #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
+@@ -2352,6 +2352,7 @@ void ath12k_core_halt(struct ath12k *ar)
+ 	if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0)
+ 		ath12k_mac_peer_ab_disassoc(ab);
+ 
++	ath12k_telemetry_destroy_ab_peer_agent(ab);
+ 	ath12k_mac_peer_cleanup_all(ar);
+ 	ath12k_dcs_wlan_intf_cleanup(ar);
+ 	cancel_work_sync(&ar->regd_update_work);
+@@ -4307,6 +4308,32 @@ struct ath12k_base *ath12k_core_get_ab_b
+ 	return NULL;
+ }
+ 
++struct ath12k_hw_group *ath12k_core_get_ag(void)
++{
++	struct ath12k_hw_group *ag;
++
++	mutex_lock(&ath12k_hw_lock);
++
++	if (list_empty(&ath12k_hw_groups)) {
++		ath12k_warn(NULL, "core hw group list is empty\n");
++		mutex_unlock(&ath12k_hw_lock);
++		return NULL;
++	}
++
++	ag = list_first_entry_or_null(&ath12k_hw_groups,
++				      struct ath12k_hw_group, list);
++
++	if (!ag) {
++		ath12k_warn(NULL, "unable to get core hw group\n");
++		mutex_unlock(&ath12k_hw_lock);
++		return NULL;
++	}
++
++	mutex_unlock(&ath12k_hw_lock);
++
++	return ag;
++}
++
+ int ath12k_wsi_load_info_init(struct ath12k_base *ab)
+ {
+ 	struct ath12k_mlo_wsi_load_info *wsi_load_info = NULL;
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -589,6 +589,11 @@ struct ath12k_vif_iter {
+ 	struct ath12k_link_vif *arvif;
+ };
+ 
++struct ath12k_vif_chanctx_iter {
++	struct ath12k *ar;
++	struct ieee80211_chanctx_conf *chanctx;
++};
++
+ #define HAL_AST_IDX_INVALID	0xFFFF
+ #define HAL_RX_MAX_MCS		12
+ #define HAL_RX_MAX_MCS_HT	31
+@@ -2145,4 +2150,6 @@ void ath12k_wsi_load_info_deinit(struct
+ void ath12k_wsi_load_info_wsiorder_update(struct ath12k_base *ab);
+ int ath12k_core_pdev_enable_telemetry_stats(struct ath12k_base *ab);
+ 
++struct ath12k_hw_group *ath12k_core_get_ag(void);
++
+ #endif /* _CORE_H_ */
+--- /dev/null
++++ b/drivers/net/wireless/ath/ath12k/vendor_services.c
+@@ -0,0 +1,1108 @@
++// SPDX-License-Identifier: BSD-3-Clause-Clear
++/*
++ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved
++ */
++#include "core.h"
++#include "vendor_services.h"
++#include "telemetry_agent_if.h"
++#include "debug.h"
++
++#define AGENT_NOTIFY_EVENT_INIT	0
++#define AGENT_NOTIFY_EVENT_DEINIT 1
++
++static struct ath12k_vendor_service_info vendor_info;
++#define GET_WIPHY(vendor_info) ((vendor_info).wiphy)
++#define GET_WDEV(vendor_info) ((vendor_info).wdev)
++
++struct ath12k_vendor_work {
++	struct work_struct work;
++	struct ath12k_vendor_service_info *vendor_info;
++};
++
++static int
++(*ath12k_vendor_service_init[ATH12K_RM_MAX_SERVICE])(struct ath12k_hw *ah,
++						     struct ath12k_vendor_service_info *info);
++
++static int
++(*ath12k_vendor_service_deinit[ATH12K_RM_MAX_SERVICE])(struct ath12k_hw *ah,
++						       struct ath12k_vendor_service_info *info);
++static void ath12k_vendor_create_soc_agent_resources(const u8 id);
++static void ath12k_vendor_destroy_soc_agent_resources(const u8 id);
++static void ath12k_vendor_create_peer_agent_resources(const u8 id);
++static void ath12k_vendor_destroy_peer_agent_resources(const u8 id);
++
++static int ath12k_vendor_service_common(struct ath12k_hw *ah,
++					struct ath12k_vendor_service_info *info,
++					const u8 event_type, bool enable)
++{
++	if (ath12k_telemetry_notify_vendor_app_event(event_type, info->id, info->service_data))
++		return -EINVAL;
++
++	if (event_type == AGENT_NOTIFY_EVENT_DEINIT)
++		vendor_info.is_vendor_init_done = false;
++
++	vendor_info.service_enabled[info->id] = enable;
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "vendor svc %s id: %d Enable: %d\n",
++		   (event_type == AGENT_NOTIFY_EVENT_INIT) ? "init" : "deinit",
++		   info->id, vendor_info.service_enabled[info->id]);
++
++	return 0;
++}
++
++static int ath12k_vendor_energy_service_init(struct ath12k_hw *ah,
++					     struct ath12k_vendor_service_info *info)
++{
++	if (vendor_info.service_enabled[info->id])
++		if (ath12k_vendor_service_common(ah, info,
++						 AGENT_NOTIFY_EVENT_DEINIT,
++						 false))
++			return -EINVAL;
++
++	return ath12k_vendor_service_common(ah, info, AGENT_NOTIFY_EVENT_INIT,
++					    true);
++}
++
++static int ath12k_vendor_energy_service_deinit(struct ath12k_hw *ah,
++					       struct ath12k_vendor_service_info *info)
++{
++	return ath12k_vendor_service_common(ah, info,
++					    AGENT_NOTIFY_EVENT_DEINIT, false);
++}
++
++
++void ath12k_vendor_create_resources(struct ath12k_vendor_service_info *vendor_info,
++				    const u8 id)
++{
++	ath12k_vendor_create_soc_agent_resources(id);
++	ath12k_vendor_create_peer_agent_resources(id);
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Created ta resources using service id : %d\n", id);
++}
++
++void ath12k_vendor_destroy_resources(struct ath12k_vendor_service_info *vendor_info,
++				     const u8 id)
++{
++	ath12k_vendor_destroy_peer_agent_resources(id);
++	ath12k_vendor_destroy_soc_agent_resources(id);
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Destroyed telemetry resources using id: %d \n", id);
++}
++
++static int ath12k_vendor_main_service_deinit(struct ath12k_hw *ah,
++					     struct ath12k_vendor_service_info *info)
++{
++	struct ath12k_vendor_service_info tmp_info = {0};
++	int id;
++
++	if (!info)
++		return -EINVAL;
++
++	vendor_info.is_vendor_init_done = false;
++	for (id = 0; id < ATH12K_RM_MAX_SERVICE; id++) {
++		tmp_info.id = id;
++		if (ath12k_vendor_service_common(ah, &tmp_info,
++						 AGENT_NOTIFY_EVENT_DEINIT,
++						 false))
++			ath12k_warn(NULL,
++				    "vendor service: %d failed to deinit", id);
++	}
++
++	return 0;
++}
++
++static int ath12k_vendor_main_service_init(struct ath12k_hw *ah,
++					   struct ath12k_vendor_service_info *info)
++{
++	if (!info)
++		return -EINVAL;
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "main svc init started for id: %d Enable: %d\n",
++		   info->id, vendor_info.service_enabled[info->id]);
++
++	if (ath12k_telemetry_is_agent_loaded())
++		ath12k_vendor_destroy_resources(&vendor_info, info->id);
++
++	if (vendor_info.is_vendor_init_done) {
++		if (ath12k_vendor_service_common(ah, info,
++						 AGENT_NOTIFY_EVENT_DEINIT,
++						 false))
++			return -EINVAL;
++
++		vendor_info.is_vendor_init_done = false;
++	}
++
++	ath12k_vendor_create_resources(&vendor_info, info->id);
++	if (ath12k_vendor_service_common(ah, info,
++					 AGENT_NOTIFY_EVENT_INIT, true))
++		return -EINVAL;
++
++	return 0;
++}
++
++static int ath12k_vendor_dynamic_service_init(struct ath12k_hw *ah,
++					      struct ath12k_vendor_service_info *info)
++{
++	set_bit(info->id, &vendor_info.dynamic_svc_bitmask);
++	if (ath12k_telemetry_dynamic_app_init_deinit_notify(AGENT_NOTIFY_EVENT_INIT,
++							    info->id,
++							    info->service_data))
++		return -EINVAL;
++	vendor_info.service_enabled[info->id] = true;
++	ath12k_dbg(NULL, ATH12K_DBG_RM, "Dynamic Init service ID: %d Enabled: %d\n",
++		   info->id, vendor_info.service_enabled[info->id]);
++	return 0;
++}
++
++static int ath12k_vendor_dynamic_service_deinit(struct ath12k_hw *ah,
++						struct ath12k_vendor_service_info *info)
++{
++	clear_bit(info->id, &vendor_info.dynamic_svc_bitmask);
++	if (ath12k_telemetry_dynamic_app_init_deinit_notify(AGENT_NOTIFY_EVENT_DEINIT,
++							    info->id,
++							    info->service_data))
++		return -EINVAL;
++
++	vendor_info.service_enabled[info->id] = false;
++	vendor_info.is_vendor_init_done = false;
++	ath12k_dbg(NULL, ATH12K_DBG_RM, "Dynamic De-Init service ID: %d Enabled: %d\n",
++		   info->id, vendor_info.service_enabled[info->id]);
++	return 0;
++}
++
++static int ath12k_vendor_send_init_response(const u8 service_id,
++					    const int vendor_resp_len,
++					    const struct ath12k_vendor_soc_device_info *soc_info,
++					    const struct ath12k_vendor_link_info *link_info)
++{
++	struct wiphy *wiphy = GET_WIPHY(vendor_info);
++	u8 category = QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_APP_INIT;
++	struct sk_buff *vendor_event;
++	struct nlattr *nl_soc_info = NULL, *nl_per_soc_info = NULL;
++	struct nlattr *nl_link_info = NULL;
++	struct nlattr *nl_per_link_info = NULL;
++
++	if (!wiphy) {
++		ath12k_err(NULL, "vendor: wireless phy or device doesn't exist");
++		return -1;
++	}
++
++	vendor_event = cfg80211_vendor_event_alloc(wiphy, NULL, vendor_resp_len,
++						   QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC_INDEX,
++						   GFP_ATOMIC);
++	if (!vendor_event) {
++		ath12k_err(NULL, "vendor: SKB alloc failed for 6 GHz power mode evt\n");
++		return -1;
++	}
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Build Generic App init attributes for link info entry");
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_CATEGORY, category)) {
++		ath12k_err(NULL, "vendor: Vendor Attr RM generic category put failed");
++		goto error;
++	}
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID, service_id)) {
++		ath12k_err(NULL, "vendor: Vendor Attr RM generic service id put failed");
++		goto error;
++	}
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_DYNAMIC_INIT_CONF,
++		       vendor_info.init_config_type)) {
++		ath12k_err(NULL, "vendor: Vendor Attr RM generic dynamic init conf put failed");
++		goto error;
++	}
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Send Vendor Generic Response for Category: %d service_id: %d\n",
++		   category, service_id);
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION,
++		       vendor_info.app_info.app_version)){
++		ath12k_err(NULL, " Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION");
++		goto error;
++	}
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_DRIVER_VERSION,
++		       vendor_info.app_info.driver_version)){
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION");
++		goto error;
++	}
++
++	nl_soc_info = nla_nest_start(vendor_event,
++				     QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SOC_DEVICE_INFO);
++	if (!nl_soc_info) {
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SOC_DEVICE_INFO");
++		goto error;
++	}
++
++	nl_per_soc_info = nla_nest_start(vendor_event, soc_info->soc_id);
++	if (!nl_per_soc_info) {
++		ath12k_err(NULL, "Fails to put per soc info for soc:%d",
++			   soc_info->soc_id);
++		goto error;
++	}
++	ATH12K_VENDOR_PUT(vendor_event, u8,
++			  QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_SOC_ID,
++			  soc_info->soc_id);
++
++	nl_link_info = nla_nest_start(vendor_event,
++				      QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_LINK_INFO);
++	if (!nl_link_info) {
++		ath12k_err(NULL, "Fails to put soc device link info soc:%d",
++			   soc_info->soc_id);
++		goto error;
++	}
++
++	nl_per_link_info = nla_nest_start(vendor_event, link_info->hw_link_id);
++	ATH12K_VENDOR_PUT(vendor_event, u16,
++			  QCA_WLAN_VENDOR_ATTR_LINK_INFO_HW_LINK_ID,
++			  link_info->hw_link_id);
++	if (nla_put(vendor_event,
++		    QCA_WLAN_VENDOR_ATTR_LINK_MAC,
++		    6, (void *)link_info->link_mac_addr)) {
++		ath12k_err(NULL, "Fails to put mac addr for hw link id :%d soc:%d",
++			   link_info->hw_link_id, soc_info->soc_id);
++		goto error;
++	}
++
++	ATH12K_VENDOR_PUT(vendor_event, u8, QCA_WLAN_VENDOR_ATTR_LINK_CHAN_BW,
++			  ath12k_nl_chan_bw_to_qca_vendor_chan_bw(link_info->chan_bw));
++	ATH12K_VENDOR_PUT(vendor_event, u16, QCA_WLAN_VENDOR_ATTR_LINK_CHAN_FREQ,
++			  link_info->chan_freq);
++	ATH12K_VENDOR_PUT(vendor_event, u8, QCA_WLAN_VENDOR_ATTR_LINK_TX_CHAIN_MASK,
++			  link_info->tx_chain_mask);
++	ATH12K_VENDOR_PUT(vendor_event, u8, QCA_WLAN_VENDOR_ATTR_LINK_RX_CHAIN_MASK,
++			  link_info->rx_chain_mask);
++	nla_nest_end(vendor_event, nl_per_link_info);
++	nla_nest_end(vendor_event, nl_link_info);
++
++	ATH12K_VENDOR_PUT(vendor_event, u8,
++			  QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_NUM_LINKS, 1);
++	nla_nest_end(vendor_event, nl_per_soc_info);
++	nla_nest_end(vendor_event, nl_soc_info);
++	ATH12K_VENDOR_PUT(vendor_event, u8,
++			  QCA_WLAN_VENDOR_ATTR_RM_GENERIC_NUM_SOC_DEVICES, 1);
++
++	cfg80211_vendor_event(vendor_event, GFP_ATOMIC);
++	return 0;
++error:
++	kfree(vendor_event);
++	return -1;
++}
++
++int ath12k_vendor_send_link_info(struct ath12k_vendor_soc_device_info *soc_info,
++				 struct ath12k_vendor_link_info *link_info)
++{
++	int vendor_data_len = nla_total_size(sizeof(struct ath12k_vendor_soc_device_info));
++	u8 service_id = ATH12K_RM_MAIN_SERVICE;
++
++	return ath12k_vendor_send_init_response(service_id, vendor_data_len,
++						soc_info, link_info);
++}
++
++static void ath12k_vendor_link_initialize_process(struct work_struct *work)
++{
++	struct ath12k_vendor_work *vendor_work = container_of(work, struct ath12k_vendor_work, work);
++	struct ath12k_vendor_service_info *vendor_info = vendor_work->vendor_info;
++	struct ath12k_vendor_soc_device_info *soc_info, *tmp;
++	struct ath12k_vendor_link_info *link_info;
++	int ret;
++
++	mutex_lock(&vendor_info->list_lock);
++	list_for_each_entry_safe(soc_info, tmp, &vendor_info->soc_list, list) {
++		link_info = &soc_info->link_info[0];
++		ret = ath12k_vendor_send_link_info(soc_info, link_info);
++		if (ret)
++			ath12k_warn(NULL, "Failed to send link info due to NL issue for soc: %d link: %d",
++				    soc_info->soc_id, link_info->hw_link_id);
++		else
++			ath12k_dbg(NULL, ATH12K_DBG_RM,
++				   "Sent link info for soc: %d hw link id: %d",
++				   soc_info->soc_id, link_info->hw_link_id);
++
++		list_del(&soc_info->list);
++		kfree(soc_info);
++	}
++	mutex_unlock(&vendor_info->list_lock);
++
++	kfree(vendor_work);
++}
++
++static int ath12k_vendor_queue_vendor_work(void)
++{
++	struct ath12k_vendor_work *vendor_work;
++
++	if (!vendor_info.is_vendor_init_done || !vendor_info.wq) {
++		ath12k_warn(NULL, "vendor: failed to schedule vendor as service(s) is not initialized");
++		return -EINVAL;
++	}
++
++	vendor_work = kmalloc(sizeof(*vendor_work), GFP_KERNEL);
++	if (!vendor_work) {
++		ath12k_err(NULL, "vendor: failed to create vendor work for link processing");
++		return -ENOMEM;
++	}
++
++	INIT_WORK(&vendor_work->work, ath12k_vendor_link_initialize_process);
++	vendor_work->vendor_info = &vendor_info;
++
++	queue_work(vendor_info.wq, &vendor_work->work);
++
++	return 0;
++}
++
++void ath12k_vendor_services_init(void)
++{
++	memset(&vendor_info, 0, sizeof(struct ath12k_vendor_service_info));
++
++	INIT_LIST_HEAD(&vendor_info.soc_list);
++	mutex_init(&vendor_info.list_lock);
++
++	vendor_info.wq = create_singlethread_workqueue("ath12k_vendor_wq");
++	if (!vendor_info.wq) {
++		ath12k_err(NULL, "vendor: failed to create vendor_wq for link processing");
++		return;
++	}
++
++	/* Initialize the service function array */
++	ath12k_vendor_service_init[ATH12K_RM_MAIN_SERVICE] = ath12k_vendor_main_service_init;
++	ath12k_vendor_service_deinit[ATH12K_RM_MAIN_SERVICE] = ath12k_vendor_main_service_deinit;
++	ath12k_vendor_service_init[ATH12K_RM_ENERGY_SERVICE] = ath12k_vendor_energy_service_init;
++	ath12k_vendor_service_deinit[ATH12K_RM_ENERGY_SERVICE] = ath12k_vendor_energy_service_deinit;
++
++	/* Initialize other serives as needed */
++}
++
++bool ath12k_vendor_is_energysvc_enabled(void)
++{
++	return vendor_info.service_enabled[ATH12K_RM_ENERGY_SERVICE] ? true : false;
++}
++
++bool ath12k_vendor_is_service_enabled(const u8 svc_id)
++{
++	if (svc_id >= ATH12K_RM_MAX_SERVICE)
++		return false;
++
++	return vendor_info.service_enabled[svc_id] ? true : false;
++}
++
++static int ath12k_vendor_set_wireless_references(struct wiphy *wiphy,
++					     struct wireless_dev *wdev)
++{
++	vendor_info.wiphy = wiphy;
++	vendor_info.wdev = wdev;
++
++	return 0;
++}
++
++int ath12k_vendor_initialize_service(struct wiphy *wiphy,
++				 struct wireless_dev *wdev,
++				 struct ath12k_vendor_service_info *info)
++{
++	int ret;
++
++	if (!info)
++		return -EINVAL;
++
++	if (info->id >= ATH12K_RM_MAX_SERVICE) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "Invalid sevice id received: %d\n", info->id);
++		return -EINVAL;
++	}
++
++	if (!ath12k_vendor_service_init[info->id] ||
++	    !ath12k_vendor_service_deinit[info->id]) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "Service id : %d not supported now\n", info->id);
++		return -ENOTSUPP;
++	}
++
++	ath12k_vendor_set_wireless_references(wiphy, wdev);
++
++	switch (info->init_config_type) {
++	case QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_RM_APP_START:
++		ret = ath12k_vendor_service_init[info->id](NULL, info);
++		break;
++	case QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_SERVICE_START:
++		ret = ath12k_vendor_dynamic_service_init(NULL, info);
++		break;
++	case QCA_WLAN_VENDOR_DYNAMIC_INIT_CONF_SERVICE_STOP:
++		ret = ath12k_vendor_dynamic_service_deinit(NULL, info);
++		break;
++	default:
++		ath12k_dbg(NULL, ATH12K_DBG_RM, "Invalid config init received \n");
++		return -EINVAL;
++	};
++
++	return ret;
++}
++
++int ath12k_vendor_generic_app_init_reply(struct sk_buff *vendor_event)
++{
++	struct wiphy *wiphy = GET_WIPHY(vendor_info);
++	struct ieee80211_hw *hw = wiphy_to_ieee80211_hw(wiphy);
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k_hw_group *ag = ah->ag;
++	struct ath12k_base *ab;
++	struct nlattr *soc_info = NULL, *per_soc_info = NULL;
++	struct nlattr *link_info = NULL;
++	struct nlattr *per_link_info = NULL;
++	struct ath12k *ar;
++	int num_socs = 0;
++	int num_hw_links;
++	int soc_id, hw_link_id;
++
++	/* Note this function is expected to be called with at least 1 valid
++	 * interface
++	 */
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION,
++		       vendor_info.app_info.app_version)){
++		ath12k_err(NULL, " Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION");
++		return -EINVAL;
++	}
++
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_DRIVER_VERSION,
++		       vendor_info.app_info.driver_version)){
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_APP_VERSION");
++		return -EINVAL;
++	}
++
++	soc_info = nla_nest_start(vendor_event,
++				  QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SOC_DEVICE_INFO);
++	if (!soc_info) {
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SOC_DEVICE_INFO");
++		return -1;
++	}
++
++	for (soc_id = 0; soc_id < ag->num_chip; soc_id++) {
++		u8 total_vdevs;
++
++		ab = ag->ab[soc_id];
++		total_vdevs = ath12k_core_get_total_num_vdevs(ab);
++
++		spin_lock_bh(&ab->base_lock);
++		if (ab->free_vdev_map == (1LL << (ab->num_radios * total_vdevs)) - 1) {
++			spin_unlock_bh(&ab->base_lock);
++			continue;
++		}
++		spin_unlock_bh(&ab->base_lock);
++		num_socs++;
++
++		per_soc_info = nla_nest_start(vendor_event, soc_id);
++		if (!per_soc_info) {
++			ath12k_err(NULL, "Fails to put per soc info for soc:%d",
++				   soc_id);
++			return -1;
++		}
++
++		ath12k_vendor_put_ab_soc_id(vendor_event, ab);
++
++		link_info = nla_nest_start(vendor_event,
++					   QCA_WLAN_VENDOR_ATTR_SOC_DEVICE_LINK_INFO);
++		if (!link_info) {
++			ath12k_err(ab, "Fails to put soc device link info soc:%d",
++				   ab->chip_id);
++			return -1;
++		}
++
++		num_hw_links = 0;
++		for (hw_link_id = 0; hw_link_id < ab->num_radios; hw_link_id++) {
++			ar = ab->pdevs[hw_link_id].ar;
++			if (!ar)
++				continue;
++
++			mutex_lock(&ar->conf_mutex);
++			if (ar->num_started_vdevs == 0) {
++				mutex_unlock(&ar->conf_mutex);
++				continue;
++			}
++			per_link_info = nla_nest_start(vendor_event,
++						       hw_link_id);
++			if (!per_link_info) {
++				ath12k_err(ab, "Fails to put per link info :%d for soc:%d",
++					   ar->pdev->hw_link_id, ab->chip_id);
++				mutex_unlock(&ar->conf_mutex);
++				return -1;
++			}
++			ath12k_vendor_put_ar_hw_link_id(vendor_event, ar);
++			ath12k_vendor_put_ar_link_mac_addr(vendor_event, ar);
++			ath12k_vendor_put_ar_chan_info(vendor_event, ar);
++			ath12k_vendor_put_ar_nss_chains(vendor_event, ar);
++			mutex_unlock(&ar->conf_mutex);
++			nla_nest_end(vendor_event, per_link_info);
++			num_hw_links++;
++		}
++		nla_nest_end(vendor_event, link_info);
++		ath12k_vendor_put_ab_num_links(vendor_event, ab, num_hw_links);
++		nla_nest_end(vendor_event, per_soc_info);
++	}
++	nla_nest_end(vendor_event, soc_info);
++
++	ATH12K_VENDOR_PUT(vendor_event, u8,
++			  QCA_WLAN_VENDOR_ATTR_RM_GENERIC_NUM_SOC_DEVICES,
++			  num_socs);
++
++	return 0;
++}
++
++static int ath12k_vendor_get_len_vendor_generic_response(void)
++{
++	int len = 0;
++
++	len += nla_total_size(sizeof(struct ath12k_vendor_soc_device_info)) +
++	       nla_total_size(sizeof(struct ath12k_vendor_generic_peer_assoc_event));
++	return len;
++}
++
++static int ath12k_vendor_generic_report_assoc_info(struct sk_buff *vendor_event,
++						   void *gen_data)
++{
++	struct ath12k_vendor_generic_peer_assoc_event *peer_event;
++	struct ath12k_vendor_mld_peer_link_entry *mld_link_entry;
++	struct nlattr *nl_mld_link_entry;
++	struct nlattr *nl_per_link_entry;
++	u8 index = 0;
++
++	peer_event = (struct ath12k_vendor_generic_peer_assoc_event *)gen_data;
++
++	if (nla_put(vendor_event, QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MLD_MAC_ADDR,
++		    6, &peer_event->mld_mac_addr[0])) {
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MLD_MAC_ADDR");
++		return -ENOMEM;
++	}
++
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_NUM_LINKS,
++		       peer_event->num_links)) {
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_NUM_LINKS");
++		return -ENOMEM;
++	}
++
++	nl_mld_link_entry = nla_nest_start(vendor_event,
++					   QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_PEER_LINK_ENTRY);
++
++	if (!nl_mld_link_entry) {
++		ath12k_err(NULL, "Fails to start nested attr QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_PEER_LINK_ENTRY");
++		return -ENOMEM;
++	}
++
++	for (index = 0; index < peer_event->num_links; index++) {
++		nl_per_link_entry = nla_nest_start(vendor_event, index);
++
++		if (!nl_mld_link_entry) {
++			ath12k_err(NULL, "Fails to start nested attr QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_PEER_LINK_ENTRY");
++			return -ENOMEM;
++		}
++
++		mld_link_entry = &peer_event->link_entry[index];
++
++		if (nla_put_u16(vendor_event,
++				QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_HW_LINK_ID,
++				mld_link_entry->hw_link_id) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_VDEV_ID,
++			       mld_link_entry->vdev_id) ||
++		    nla_put(vendor_event,
++			    QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_AP_MLD_MAC,
++			    6, &mld_link_entry->ap_mld_mac_addr[0]) ||
++		    nla_put(vendor_event,
++			    QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_PEER_MAC,
++			    6, &mld_link_entry->link_mac_addr[0]) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_MLO_LINK_ID,
++			       mld_link_entry->link_id) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_IS_ASSOC_LINK,
++			       mld_link_entry->is_assoc_link) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CHAN_BW,
++			       mld_link_entry->chan_bw) ||
++		    nla_put_u16(vendor_event,
++				QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CHAN_FREQ,
++				mld_link_entry->chan_freq) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_BAND_CAP,
++			       mld_link_entry->band_cap) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_RSSI,
++			       mld_link_entry->link_rssi) ||
++		    nla_put_u16(vendor_event,
++				QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_EFF_CHAN_BW,
++				mld_link_entry->eff_chan_bw) ||
++		    nla_put_u16(vendor_event,
++				QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_CAPS,
++				mld_link_entry->peer_capa_flags)) {
++					ath12k_err(NULL, "Fails to put per mld link entry attrs");
++					return -ENOMEM;
++		}
++		nla_nest_end(vendor_event, nl_per_link_entry);
++	}
++
++	nla_nest_end(vendor_event, nl_mld_link_entry);
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM, "Notify vendor app on assoc\n");
++	return 0;
++}
++
++static int ath12k_vendor_generic_report_disassoc(struct sk_buff *vendor_event,
++						 void *gen_data)
++{
++	struct ath12k_vendor_generic_peer_assoc_event *peer_event;
++	struct ath12k_vendor_mld_peer_link_entry *mld_link_entry;
++	struct nlattr *nl_mld_link_entry;
++	struct nlattr *nl_per_link_entry;
++	u8 index = 0;
++
++	peer_event = (struct ath12k_vendor_generic_peer_assoc_event *)gen_data;
++
++	if (nla_put(vendor_event, QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MLD_MAC_ADDR,
++		    6, &peer_event->mld_mac_addr[0])) {
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_MLD_MAC_ADDR");
++		return -ENOMEM;
++	}
++
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_NUM_LINKS,
++		       peer_event->num_links)) {
++		ath12k_err(NULL, "Fails to put QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_NUM_LINKS");
++		return -ENOMEM;
++	}
++
++	nl_mld_link_entry = nla_nest_start(vendor_event,
++					   QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_PEER_LINK_ENTRY);
++
++	if (!nl_mld_link_entry) {
++		ath12k_err(NULL, "Fails to start nested attr QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_PEER_LINK_ENTRY");
++		return -ENOMEM;
++	}
++
++	for (index = 0; index < peer_event->num_links; index++) {
++		nl_per_link_entry = nla_nest_start(vendor_event, index);
++
++		if (!nl_mld_link_entry) {
++			ath12k_err(NULL, "Fails to start nested attr QCA_WLAN_VENDOR_ATTR_RM_GENERIC_ASSOC_PEER_LINK_ENTRY");
++			return -ENOMEM;
++		}
++
++		mld_link_entry = &peer_event->link_entry[index];
++
++		if (nla_put_u16(vendor_event,
++				QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_HW_LINK_ID,
++				mld_link_entry->hw_link_id) ||
++		    nla_put(vendor_event,
++			    QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_PEER_MAC,
++			    6, &mld_link_entry->link_mac_addr[0]) ||
++		    nla_put_u8(vendor_event,
++			       QCA_WLAN_VENDOR_ATTR_MLO_PEER_LINK_IS_ASSOC_LINK,
++			       mld_link_entry->is_assoc_link)) {
++			ath12k_err(NULL, "Fails to put per mld link entry attrs");
++			return -ENOMEM;
++		}
++		nla_nest_end(vendor_event, nl_per_link_entry);
++	}
++
++	nla_nest_end(vendor_event, nl_mld_link_entry);
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM, "Notify vendor app on disassoc\n");
++	return 0;
++}
++
++static void ath12k_vendor_generic_response(void *out_data,
++					   u8 service_id, u8 category)
++{
++	struct wiphy *wiphy = GET_WIPHY(vendor_info);
++	int vendor_data_len = ath12k_vendor_get_len_vendor_generic_response();
++	struct sk_buff *vendor_event;
++
++	if (!wiphy) {
++		ath12k_err(NULL, "vendor: wireless phy or device doesn't exist");
++		return;
++	}
++
++	vendor_event = cfg80211_vendor_event_alloc(wiphy, NULL, vendor_data_len,
++						   QCA_NL80211_VENDOR_SUBCMD_RM_GENERIC_INDEX,
++						   GFP_ATOMIC);
++
++	if (!vendor_event) {
++		ath12k_err(NULL, "vendor: SKB alloc failed for 6 GHz power mode evt\n");
++		return;
++	}
++
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_CATEGORY, category)) {
++		ath12k_err(NULL, "vendor: Vendor Attr RM generic category put failed");
++		goto error;
++	}
++
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_SERVICE_ID, service_id)) {
++		ath12k_err(NULL, "vendor: Vendor Attr RM generic service id put failed");
++		goto error;
++	}
++
++	if (nla_put_u8(vendor_event,
++		       QCA_WLAN_VENDOR_ATTR_RM_GENERIC_DYNAMIC_INIT_CONF,
++		       vendor_info.init_config_type)) {
++		ath12k_err(NULL, "vendor: Vendor Attr RM generic dynamic init conf put failed");
++		goto error;
++	}
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Send Vendor Generic Response for Category: %d service_id: %d\n",
++		   category, service_id);
++
++	switch (category) {
++	case QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_INVALID:
++		ath12k_err(NULL, "vendor: Invalid catergory received from telemetry agent");
++		goto error;
++	case QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_APP_INIT:
++		if (ath12k_vendor_generic_app_init_reply(vendor_event)) {
++			ath12k_err(NULL, "vendor: Failed to response generic app init handshake");
++			goto error;
++		}
++		break;
++	case QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_NO_T2LM_INFO:
++		fallthrough;
++	case QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_ASSOC_WITH_T2LM_INFO:
++		fallthrough;
++	case QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_OMI_NO_T2LM_INFO:
++		if (ath12k_vendor_generic_report_assoc_info(vendor_event,
++							       out_data)) {
++			ath12k_dbg(NULL, ATH12K_DBG_RM,
++				   "vendor: failed to report assoc info to vendor app \n");
++			goto error;
++		}
++		break;
++	case QCA_WLAN_VENDOR_ATTR_GENERIC_CATEGORY_DISASSOC:
++		if (ath12k_vendor_generic_report_disassoc(vendor_event,
++							     out_data)) {
++			ath12k_dbg(NULL, ATH12K_DBG_RM,
++				   "vendor: failed to report disassoc info to vendor app \n");
++			goto error;
++		}
++		break;
++	default:
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "vendor: Invalid catergory received from telemetry agent \n");
++		goto error;
++	}
++
++	cfg80211_vendor_event(vendor_event, GFP_ATOMIC);
++	return;
++error:
++	kfree(vendor_event);
++}
++
++static void ath12k_vendor_create_peer_agent_resources(const u8 id)
++{
++	struct ath12k_hw_group *ag;
++	struct ath12k_base *ab;
++	int chip;
++	int ret;
++
++	if (id >= ATH12K_RM_MAX_SERVICE)
++		return;
++
++	ag = ath12k_core_get_ag();
++	if (!ag) {
++		ath12k_err(NULL, "Failed to create peer agent resources through rm\n");
++		return;
++	}
++
++	mutex_lock(&ag->mutex_lock);
++	for (chip = 0; chip < ag->num_chip; chip++) {
++		ab = ag->ab[chip];
++		ret = ath12k_telemetry_create_ab_peer_agent(ab);
++		if (ret)
++			ath12k_err(ab, "Failed to create peer agent for soc: %d\n",
++				   chip);
++	}
++	mutex_unlock(&ag->mutex_lock);
++}
++
++static void ath12k_vendor_destroy_peer_agent_resources(const u8 id)
++{
++	struct ath12k_hw_group *ag;
++	struct ath12k_base *ab;
++	int chip;
++	int ret;
++
++	if (id >= ATH12K_RM_MAX_SERVICE)
++		return;
++
++	ag = ath12k_core_get_ag();
++	if (!ag) {
++		ath12k_err(NULL, "Failed to destroy peer agent resources through rm\n");
++		return;
++	}
++
++	mutex_lock(&ag->mutex_lock);
++	for (chip = 0; chip < ag->num_chip; chip++) {
++		ab = ag->ab[chip];
++
++		ret = ath12k_telemetry_destroy_ab_peer_agent(ab);
++		if (ret)
++			ath12k_err(ab, "Failed to create peer agent for soc: %d\n",
++				   chip);
++	}
++	mutex_unlock(&ag->mutex_lock);
++}
++
++static void ath12k_vendor_create_soc_agent_resources(const u8 id)
++{
++	struct wiphy *wiphy = GET_WIPHY(vendor_info);
++	struct ieee80211_hw *hw = wiphy_to_ieee80211_hw(wiphy);
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k_hw_group *ag = ah->ag;
++	struct ath12k_pdev *pdev;
++	struct ath12k_base *ab;
++	int pdev_idx;
++	int chip;
++	int ret;
++
++	if (id >= ATH12K_RM_MAX_SERVICE)
++		return;
++
++	mutex_lock(&ag->mutex_lock);
++
++	for (chip = 0; chip < ag->num_chip; chip++) {
++		ab = ag->ab[chip];
++		if (!ab)
++			continue;
++
++		ret = ath12k_telemetry_ab_agent_create_handler(ab);
++		if (ret) {
++			ath12k_dbg(ab, ATH12K_DBG_RM,
++				   "Unable to create telemetry psoc agent object: %d\n", ret);
++			continue;
++		}
++		for (pdev_idx = 0; pdev_idx < ab->num_radios; pdev_idx++) {
++			pdev = &ab->pdevs[pdev_idx];
++			ret = ath12k_telemetry_pdev_agent_create_handler(pdev);
++			if (ret) {
++				ath12k_err(ab, "Unable to create telemetry pdev agent object: %d\n", ret);
++				continue;
++			}
++		}
++	}
++
++	mutex_unlock(&ag->mutex_lock);
++}
++
++static void ath12k_vendor_destroy_soc_agent_resources(const u8 id)
++{
++	struct wiphy *wiphy = GET_WIPHY(vendor_info);
++	struct ieee80211_hw *hw = wiphy_to_ieee80211_hw(wiphy);
++	struct ath12k_hw *ah = hw->priv;
++	struct ath12k_hw_group *ag = ah->ag;
++	struct ath12k_pdev *pdev;
++	struct ath12k_base *ab;
++	int pdev_idx;
++	int chip;
++	int ret;
++
++	if (id >= ATH12K_RM_MAX_SERVICE)
++		return;
++
++	mutex_lock(&ag->mutex_lock);
++
++	for (chip = 0; chip < ag->num_chip; chip++) {
++		ab = ag->ab[chip];
++		if (!ab)
++			continue;
++
++		for (pdev_idx = 0; pdev_idx < ab->num_radios; pdev_idx++) {
++			pdev = &ab->pdevs[pdev_idx];
++			ret = ath12k_telemetry_pdev_agent_delete_handler(pdev);
++			if (ret) {
++				ath12k_err(ab, "Unable to destroy telemetry pdev agent object: %d\n", ret);
++				continue;
++			}
++		}
++
++		ret = ath12k_telemetry_ab_agent_delete_handler(ab);
++		if (ret) {
++			ath12k_err(ab, "Unable to destroy telemetry psoc agent object: %d\n", ret);
++			continue;
++		}
++	}
++
++	mutex_unlock(&ag->mutex_lock);
++}
++
++void ath12k_telemetry_vendor_callback(u8 init,
++				      u8 id,
++				      u8 category)
++{
++	static int data;
++	void *ptr = &data;
++
++	if (id == ATH12K_RM_MAIN_SERVICE) {
++		if(ath12k_telemetry_is_agent_loaded()) {
++			if (init == 0) {
++				vendor_info.is_vendor_init_done = true;
++				ath12k_dbg(NULL, ATH12K_DBG_RM,
++					   "Received init event from ta for service main");
++			} else {
++				ath12k_dbg(NULL, ATH12K_DBG_RM,
++					   "Received de-init event from ta for service main");
++			}
++		}
++	}
++
++	if (init == 0) {
++		ath12k_vendor_generic_response(ptr, id, category);
++		if (id == ATH12K_RM_MAIN_SERVICE)
++			ath12k_vendor_queue_vendor_work();
++	} else {
++		ath12k_vendor_destroy_peer_agent_resources(id);
++	}
++}
++
++int ath12k_vendor_send_assoc_event(void *event_data,
++				   u8 category, u8 service_id)
++{
++	if (!ath12k_vendor_is_service_enabled(ATH12K_RM_MAIN_SERVICE)) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "skipped to send assoc response to vendor ap as service(s) not initialized\n");
++		return -1;
++	}
++
++	ath12k_vendor_generic_response(event_data, service_id, category);
++
++	return 0;
++}
++
++void ath12k_vendor_services_deinit(void)
++{
++	/* Clean up resources if needed */
++	struct ath12k_vendor_soc_device_info *soc_info, *tmp;
++	struct ath12k_vendor_service_info info = {0};
++	int id;
++
++	info.id = ATH12K_RM_MAIN_SERVICE;
++	if (ath12k_vendor_service_deinit[info.id] &&
++	    vendor_info.is_vendor_init_done)
++		ath12k_vendor_service_deinit[info.id](NULL, &info);
++
++	for (id = 0; id < ATH12K_RM_MAX_SERVICE; id++) {
++		ath12k_vendor_service_init[id] = NULL;
++		ath12k_vendor_service_deinit[id] = NULL;
++	}
++
++	flush_workqueue(vendor_info.wq);
++	destroy_workqueue(vendor_info.wq);
++	mutex_destroy(&vendor_info.list_lock);
++	list_for_each_entry_safe(soc_info, tmp, &vendor_info.soc_list, list) {
++		list_del(&soc_info->list);
++		kfree(soc_info);
++	}
++	memset(&vendor_info, 0, sizeof(struct ath12k_vendor_service_info));
++}
++
++static void ath12k_vendor_report_link_info(struct ath12k_base *ab,
++					   struct ath12k_link_vif *arvif)
++{
++	struct ath12k_vendor_soc_device_info *soc_info;
++	struct ath12k_vendor_link_info *link_info;
++	struct ieee80211_chanctx_conf *ctx = NULL;
++	struct ath12k *ar = arvif->ar;
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	ctx = &arvif->chanctx;
++	if (!ctx) {
++		ath12k_warn(ab, "Failed to send link info due to no chan ctx");
++		return;
++	}
++
++	/* Only report if the service is enabled */
++	if (!vendor_info.is_vendor_init_done) {
++		ath12k_dbg(ab, ATH12K_DBG_RM,
++			   "vendor: failed to report link info as main service not initialized");
++		return;
++	}
++
++	soc_info = kmalloc(sizeof(*soc_info), GFP_KERNEL);
++	if (!soc_info) {
++		ath12k_warn(ab, "Failed to create soc info for rm");
++		return;
++	}
++
++	soc_info->soc_id = ab->chip_id;
++	soc_info->num_radios = ab->num_radios;
++
++	link_info = &soc_info->link_info[0];
++	link_info->hw_link_id = ar->pdev->hw_link_id;
++	ether_addr_copy(link_info->link_mac_addr, arvif->addr);
++	link_info->chan_bw = ctx->def.width;
++	link_info->chan_freq = ctx->def.chan->center_freq;
++	link_info->tx_chain_mask = ar->pdev->cap.tx_chain_mask;
++	link_info->rx_chain_mask = ar->pdev->cap.rx_chain_mask;
++
++	mutex_lock(&vendor_info.list_lock);
++	list_add(&soc_info->list, &vendor_info.soc_list);
++	mutex_unlock(&vendor_info.list_lock);
++
++	ath12k_vendor_queue_vendor_work();
++}
++
++int ath12k_vendor_link_state_update(const u8 mac_id,
++				    struct ath12k_base *ab,
++				    struct ath12k_link_vif *arvif,
++				    enum ath12k_vendor_link_state new_state)
++{
++	struct ath12k_vendor_soc_device_info *soc_info;
++	struct ath12k_vendor_link_info *link_info;
++	u8 chip_id;
++
++	if (!ab || !arvif)
++		return -EINVAL;
++
++	if (arvif->ahvif->vdev_type != WMI_VDEV_TYPE_AP)
++		return -ENOTSUPP;
++
++	if (!ath12k_telemetry_is_agent_loaded()) {
++		ath12k_dbg(ab, ATH12K_DBG_RM,
++			   "vendor: vendor services are not initialized");
++		return -EINVAL;
++	}
++
++	if (new_state >= ATH12K_VENDOR_LINK_STATE_MAX)
++		return -EINVAL;
++
++	chip_id = ab->chip_id;
++	soc_info = &vendor_info.app_info.soc_info[chip_id];
++	link_info = &soc_info->link_info[mac_id];
++
++	link_info->state.prev_state = link_info->state.curr_state;
++	link_info->state.curr_state = new_state;
++
++	if (link_info->state.prev_state == ATH12K_VENDOR_LINK_STATE_ADDED &&
++	    link_info->state.curr_state == ATH12K_VENDOR_LINK_STATE_ASSIGNED) {
++		ath12k_vendor_report_link_info(ab, arvif);
++		ath12k_dbg(ab, ATH12K_DBG_RM,
++			   "Vendor link notification is sent for chip id: %d mac id: %d when prev: %d curr: %d state",
++			   chip_id, mac_id,
++			   link_info->state.prev_state,
++			   link_info->state.curr_state);
++	} else {
++		/*
++		 * For rest of the state transition, no action required
++		 * Currently, RM doesn't support link removal for this
++		 * particular notification
++		 */
++		ath12k_dbg(ab, ATH12K_DBG_RM,
++			   "Vendor link notification is not reported for chip id: %d mac id: %d when prev: %d curr: %d state",
++			   chip_id, mac_id,
++			   link_info->state.prev_state,
++			   link_info->state.curr_state);
++	}
++
++	return 0;
++}
++
+--- /dev/null
++++ b/drivers/net/wireless/ath/ath12k/vendor_services.h
+@@ -0,0 +1,138 @@
++#ifndef ATH12K_VENDOR_SERVICES_H
++#define ATH12K_VENDOR_SERVICES_H
++
++#include <linux/types.h>
++#include <net/netlink.h>
++#include <linux/refcount.h>
++
++#include "core.h"
++#include "vendor.h"
++
++enum ath12k_vendor_service_id {
++	ATH12K_RM_MAIN_SERVICE = 0,
++	ATH12K_UNUSED_RM_PMLO_SERVICE,
++	ATH12K_UNUSED_RM_DETSCHED_SERVICE,
++	ATH12K_UNUSED_RM_ERP_SERVICE,
++	ATH12K_UNUSED_RM_ADMCTRL_SERVICE,
++	ATH12K_RM_ENERGY_SERVICE,
++	ATH12K_UNUSED_RM_IFLI_PROXY_SERVICE,
++	ATH12K_RM_MAX_SERVICE
++};
++
++enum ath12k_vendor_link_state {
++	ATH12K_VENDOR_LINK_STATE_NO_LINK,
++	ATH12K_VENDOR_LINK_STATE_REMOVED,
++	ATH12K_VENDOR_LINK_STATE_ADDED,
++	ATH12K_VENDOR_LINK_STATE_UNASSIGNED,
++	ATH12K_VENDOR_LINK_STATE_ASSIGNED,
++	ATH12K_VENDOR_LINK_STATE_MAX
++};
++
++struct ath12k_vendor_service_ops {
++	int (*init)(struct ath12k_base *ab, const void *data, size_t len);
++	void (*deinit)(struct ath12k_base *ab);
++	int (*process_event)(struct ath12k_base *ab, const void *data, size_t len);
++};
++
++enum ath12k_link_band_caps {
++	LINK_BAND_INVALID,
++	LINK_BAND_2GHz,
++	LINK_BAND_5GHz,
++	LINK_BAND_5GHz_LOW,
++	LINK_BAND_5GHz_HIGH,
++	LINK_BAND_6GHz,
++	LINK_BAND_6GHz_LOW,
++	LINK_BAND_6GHz_HIGH,
++};
++
++struct ath12k_vendor_mld_peer_link_entry {
++	u16 hw_link_id;
++	u8 vdev_id;
++	u8 ap_mld_mac_addr[6];
++	u8 link_mac_addr[6];
++	u8 link_id;
++	u8 chip_id;
++	bool is_assoc_link;
++	u8 chan_bw;
++	u16 chan_freq;
++	u16 available_airtime;
++	u8 link_rssi;
++	enum ath12k_link_band_caps band_cap;
++	u16 eff_chan_bw;
++	u16 peer_capa_flags;
++};
++
++struct ath12k_vendor_generic_peer_assoc_event {
++	u8 mld_mac_addr[6];
++	u8 num_links;
++	enum qca_wlan_vendor_attr_app_generic_category category;
++	struct ath12k_vendor_mld_peer_link_entry link_entry[4];
++};
++
++struct ath12k_vendor_link_sm {
++	u8 prev_state;
++	u8 curr_state;
++};
++
++struct ath12k_vendor_link_info {
++	u16 hw_link_id;
++	u8 link_mac_addr[6];
++	u8 chan_bw;
++	u16 chan_freq;
++	enum ath12k_link_band_caps band_cap;
++	u8 tx_chain_mask;
++	u8 rx_chain_mask;
++	struct ath12k_vendor_link_sm state;
++};
++
++struct ath12k_vendor_soc_device_info {
++	struct list_head list;
++	u8 soc_id;
++	u8 num_radios;
++	struct ath12k_vendor_link_info link_info[3];
++};
++
++struct ath12k_generic_app_info {
++	u8 app_version;
++	u8 driver_version;
++	u8 num_soc_devices;
++	struct ath12k_vendor_soc_device_info soc_info[5];
++};
++
++struct ath12k_vendor_service_info {
++	struct wiphy *wiphy;
++	struct wireless_dev *wdev;
++	struct ath12k_generic_app_info app_info;
++	enum ath12k_vendor_service_id id;
++	u64 service_data;
++	const struct ath12k_vendor_service_ops *ops;
++	unsigned long dynamic_svc_bitmask;
++	u8 init_config_type;
++	bool service_enabled[ATH12K_RM_MAX_SERVICE];
++	bool is_vendor_init_done;
++	struct workqueue_struct *wq;
++	struct list_head soc_list;
++	struct mutex list_lock;
++};
++
++int ath12k_vendor_initialize_service(struct wiphy *wiphy,
++				     struct wireless_dev *wdev,
++				     struct ath12k_vendor_service_info *info);
++
++int ath12k_vendor_send_assoc_event(void *event_data,
++				   u8 category, u8 service_id);
++
++void ath12k_vendor_services_init(void);
++
++void ath12k_vendor_services_deinit(void);
++
++bool ath12k_vendor_is_energysvc_enabled(void);
++int ath12k_vendor_vendor_send_link_info(struct ath12k_vendor_soc_device_info *soc_info,
++					struct ath12k_vendor_link_info *link_info);
++
++int ath12k_vendor_link_state_update(const u8 mac_id,
++				    struct ath12k_base *ab,
++				    struct ath12k_link_vif *arvif,
++				    enum ath12k_vendor_link_state new_state);
++
++#endif /* ATH12K_VENDOR_SERVICES_H */

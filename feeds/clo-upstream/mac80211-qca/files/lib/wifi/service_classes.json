@@ -114,11 +114,18 @@
 			"tid": 5
 		},
 		{
+			"svc_id": 120,
+			"disable": 0,
+			"app_name": "ML_LiveStream",
+			"delay_bound":30,
+			"service_interval": 30,
+			"tid": 5
+		},
+		{
 			"svc_id": 121,
 			"disable": 0,
 			"app_name": "ML_Gaming",
-			"min_thruput_rate": 100,
-			"delay_bound":50,
+			"delay_bound":30,
 			"msdu_ttl": 200,
 			"tid": 7,
 			"msdu_rate_loss": 1000
@@ -127,8 +134,7 @@
 			"svc_id": 122,
 			"disable": 0,
 			"app_name": "ML_Interactive_Video",
-			"min_thruput_rate": 3000,
-			"delay_bound":125,
+			"delay_bound":75,
 			"msdu_ttl": 250,
 			"tid": 5,
 			"msdu_rate_loss": 1000
@@ -152,8 +158,7 @@
 			"svc_id": 124,
 			"disable": 0,
 			"app_name": "ML_VOD_Service",
-			"min_thruput_rate": 3000,
-			"delay_bound": 300,
+			"delay_bound": 200,
 			"msdu_ttl": 10000,
 			"tid": 5,
 			"msdu_rate_loss": 1

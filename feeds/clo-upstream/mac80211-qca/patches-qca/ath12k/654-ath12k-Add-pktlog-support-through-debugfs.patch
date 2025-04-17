@@ -80,7 +80,7 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  
  #define SM(_v, _f) (((_v) << _f##_LSB) & _f##_MASK)
  
-@@ -546,6 +547,11 @@ struct ath12k_debug {
+@@ -545,6 +546,11 @@ struct ath12k_debug {
  	u32 pktlog_mode;
  	u32 pktlog_peer_valid;
  	u8 pktlog_peer_addr[ETH_ALEN];
@@ -94,7 +94,7 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -1618,6 +1618,7 @@ int ath12k_debugfs_register(struct ath12
+@@ -1630,6 +1630,7 @@ int ath12k_debugfs_register(struct ath12
  	ath12k_debugfs_htt_stats_init(ar);
  
  	ath12k_debugfs_fw_stats_init(ar);
@@ -102,7 +102,7 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  
  	debugfs_create_file("ext_tx_stats", 0644,
  			    ar->debug.debugfs_pdev, ar,
-@@ -1649,6 +1650,7 @@ int ath12k_debugfs_register(struct ath12
+@@ -1661,6 +1662,7 @@ int ath12k_debugfs_register(struct ath12
  
  void ath12k_debugfs_unregister(struct ath12k *ar)
  {
@@ -112,7 +112,7 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  int ath12k_debugfs_create(void)
 --- a/drivers/net/wireless/ath/ath12k/debugfs.h
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.h
-@@ -250,4 +250,31 @@ static inline void ath12k_debugfs_remove
+@@ -258,4 +258,31 @@ static inline void ath12k_debugfs_remove
  }
  #endif /* CPTCFG_MAC80211_DEBUGFS*/
  
@@ -173,7 +173,7 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  static int ath12k_htt_tlv_ppdu_stats_parse(struct ath12k_base *ab,
  					   u16 tag, u16 len, const void *ptr,
  					   void *data)
-@@ -1691,8 +1711,10 @@ static int ath12k_htt_pull_ppdu_stats(st
+@@ -1698,8 +1718,10 @@ static int ath12k_htt_pull_ppdu_stats(st
  		goto exit;
  	}
  
@@ -185,9 +185,9 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  
  	spin_lock_bh(&ar->data_lock);
  	ppdu_info = ath12k_dp_htt_get_ppdu_desc(ar, ppdu_id);
-@@ -1940,6 +1962,9 @@ void ath12k_dp_htt_htc_t2h_msg_handler(s
- 	case HTT_T2H_MSG_TYPE_EXT_STATS_CONF:
- 		ath12k_debugfs_htt_ext_stats_handler(ab, skb);
+@@ -2011,6 +2033,9 @@ void ath12k_dp_htt_htc_t2h_msg_handler(s
+ 	case HTT_T2H_MSG_TYPE_BKPRESSURE_EVENT_IND:
+ 		ath12k_htt_backpressure_event_handler(ab, skb);
  		break;
 +	case HTT_T2H_MSG_TYPE_PKTLOG:
 +		ath12k_htt_pktlog(ab, skb);
@@ -366,8 +366,8 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
 +	if (vmf->pgoff > vma->vm_end)
 +		return VM_FAULT_SIGBUS;
 +
-+	get_page(virt_to_page(address));
-+	vmf->page = virt_to_page(address);
++	get_page(virt_to_page((void *)address));
++	vmf->page = virt_to_page((void *)address);
 +	return 0;
 +}
 +
@@ -792,9 +792,9 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
 +
 --- a/local-symbols
 +++ b/local-symbols
-@@ -182,6 +182,7 @@ ATH12K_TRACING=
+@@ -187,6 +187,7 @@ ATH12K_DEBUGFS=
+ ATH12K_TRACING=
  ATH12K_PPE_DS_SUPPORT=
- ATH12K_BONDED_DS_SUPPORT=
  ATH12K_SPECTRAL=
 +ATH12K_PKTLOG=
  WLAN_VENDOR_ATMEL=
@@ -832,7 +832,7 @@ Signed-off-by: Karthik M <quic_karm@quicinc.com>
  		spin_unlock_bh(&ab->base_lock);
 --- a/drivers/net/wireless/ath/ath12k/dp.h
 +++ b/drivers/net/wireless/ath/ath12k/dp.h
-@@ -1622,6 +1622,44 @@ struct htt_ppdu_stats_info {
+@@ -1673,6 +1673,44 @@ struct htt_ppdu_stats_info {
  	struct list_head list;
  };
  

@@ -21,7 +21,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -278,6 +278,43 @@ struct ath12k_fw_vdev_ol_stats {
+@@ -277,6 +277,43 @@ struct ath12k_fw_vdev_ol_stats {
  	u64 tx_msdu_ttl_pkt_cnt;
  };
  
@@ -87,7 +87,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	ath12k_dp_mon_hal_rx_parse_eht_sig_non_mumimo_user(user_info,
  							   ppdu_info);
  	return HAL_TLV_STATUS_PPDU_NOT_DONE;
-@@ -3717,7 +3717,7 @@ ath12k_dp_mon_rx_memset_ppdu_info(struct
+@@ -3714,7 +3714,7 @@ ath12k_dp_mon_rx_memset_ppdu_info(struct
  }
  
  int ath12k_dp_mon_srng_process(struct ath12k *ar, int mac_id, int *budget,
@@ -96,7 +96,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  {
  	struct hal_mon_dest_desc *mon_dst_desc;
  	struct ath12k_pdev_dp *pdev_dp = &ar->dp;
-@@ -3743,7 +3743,7 @@ int ath12k_dp_mon_srng_process(struct at
+@@ -3740,7 +3740,7 @@ int ath12k_dp_mon_srng_process(struct at
  
  	srng_id = ath12k_hw_mac_id_to_srng_id(ab->hw_params, mac_id);
  
@@ -105,7 +105,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  		mon_dst_ring = &pdev_dp->rxdma_mon_dst_ring[srng_id];
  		buf_ring = &dp->rxdma_mon_buf_ring;
  	} else {
-@@ -3852,7 +3852,7 @@ move_next:
+@@ -3849,7 +3849,7 @@ move_next:
  			                                   log_type, rx_buf_sz);
  		}
  
@@ -124,7 +124,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	u16 rate = 0, succ_pkts = 0, ru_start, ru_end;
  	u32 tx_duration = 0, ru_tones, ru_format, tlv_bitmap, rate_flags;
  	bool is_ampdu = false, resp_type_valid;
-@@ -4766,7 +4765,7 @@ static bool ath12k_dp_rx_h_4addr_null_fr
+@@ -4731,7 +4730,7 @@ static bool ath12k_dp_rx_h_4addr_null_fr
  
  	hdr = (struct ieee80211_hdr *)msdu->data;
  	hdr_len = ieee80211_hdrlen(hdr->frame_control);
@@ -169,7 +169,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  u8 ath12k_mac_bitrate_to_idx(const struct ieee80211_supported_band *sband,
  			     u32 bitrate)
  {
-@@ -11738,7 +11758,7 @@ ath12k_mac_vdev_start_restart(struct ath
+@@ -11747,7 +11767,7 @@ ath12k_mac_vdev_start_restart(struct ath
  	ath12k_dbg(ab, ATH12K_DBG_MAC,
  		   "mac vdev %d start center_freq %d phymode %s punct_bitmap 0x%x\n",
  		   arg.vdev_id, arg.channel.freq,
@@ -178,7 +178,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  
  	ret = ath12k_wmi_vdev_start(ar, &arg, restart);
  	if (ret) {
-@@ -16280,6 +16300,12 @@ static int __ath12k_mac_register(struct
+@@ -16296,6 +16316,12 @@ static int __ath12k_mac_register(struct
  	if (cap->nss_ratio_enabled)
  		ieee80211_hw_set(hw, SUPPORTS_VHT_EXT_NSS_BW);
  
@@ -191,7 +191,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	/* TODO: Check if HT capability advertised from firmware is different
  	 * for each band for a dual band capable radio. It will be tricky to
  	 * handle it when the ht capability different for each band.
-@@ -16737,8 +16763,8 @@ static inline struct ath12k *ath12k_mac_
+@@ -16753,8 +16779,8 @@ static inline struct ath12k *ath12k_mac_
  	return ar + link_idx;
  }
  
@@ -229,7 +229,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
         u8 i = 0, j = 0;
  
         for (i = 0; i < WMI_REG_CURRENT_MAX_AP_TYPE; i++) {
-@@ -729,10 +729,10 @@ ath12k_reg_build_regd(struct ath12k_base
+@@ -677,10 +677,10 @@ ath12k_reg_build_regd(struct ath12k_base
  	u8 i = 0, j = 0, k = 0;
  	u8 num_rules;
  	u16 max_bw;
@@ -297,7 +297,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
          struct wmi_coex_config_cmd *cmd;
          struct sk_buff *skb;
          int ret;
-@@ -4448,7 +4448,7 @@ int
+@@ -4442,7 +4442,7 @@ int
  ath12k_wmi_send_wmi_ctrl_stats_cmd(struct ath12k *ar,
  		struct wmi_ctrl_path_stats_cmd_param *param)
  {
@@ -306,7 +306,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct ath12k_base *ab = wmi->wmi_ab->ab;
  	u32 pdev_id_array[2] = {0};
  	int len, ret;
-@@ -6820,7 +6820,7 @@ static struct ath12k_reg_rule
+@@ -6863,7 +6863,7 @@ static struct ath12k_reg_rule
  	return reg_rule_ptr;
  }
  
@@ -315,7 +315,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  {
         switch (code) {
         case REG_SET_CC_STATUS_PASS:
-@@ -6916,9 +6916,9 @@ static const char *ath12k_sub_reg_6g_to_
+@@ -6959,9 +6959,9 @@ static const char *ath12k_sub_reg_6g_to_
  
  static void ath12k_print_reg_rule(struct ath12k_base *ab, char *prev,
                                   u32 num_reg_rules,
@@ -327,7 +327,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
         u32 count;
  
         ath12k_dbg(ab, ATH12K_DBG_WMI, "%s reg rules number %d\n", prev, num_reg_rules);
-@@ -6935,7 +6935,7 @@ static void ath12k_print_reg_rule(struct
+@@ -6978,7 +6978,7 @@ static void ath12k_print_reg_rule(struct
  
  static u8
  ath12k_invalid_5g_reg_ext_rules_from_wmi(u32 num_reg_rules,
@@ -336,7 +336,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  {
          u8 num_invalid_5g_rules = 0;
          u32 count, start_freq, end_freq;
-@@ -7982,13 +7982,14 @@ static int ath12k_pull_roam_ev(struct at
+@@ -8025,13 +8025,14 @@ static int ath12k_pull_roam_ev(struct at
  static int freq_to_idx(struct ath12k *ar, int freq)
  {
  	struct ieee80211_supported_band *sband;
@@ -352,7 +352,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  		if (!sband)
  			continue;
  
-@@ -8742,7 +8743,7 @@ static void ath12k_wmi_htc_tx_complete(s
+@@ -8785,7 +8786,7 @@ static void ath12k_wmi_htc_tx_complete(s
  }
  
  static int ath12k_reg_handle_chan_list(struct ath12k_base *ab,
@@ -361,7 +361,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
                                        enum ieee80211_ap_reg_power power_type)
  {
  	struct ieee80211_regdomain *regd;
-@@ -8834,7 +8835,7 @@ retfail:
+@@ -8877,7 +8878,7 @@ retfail:
  
  static int ath12k_reg_chan_list_event(struct ath12k_base *ab, struct sk_buff *skb)
  {
@@ -370,7 +370,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
         int ret, i, j;
  
         reg_info = kzalloc(sizeof(*reg_info), GFP_ATOMIC);
-@@ -13512,7 +13513,7 @@ exit:
+@@ -13556,7 +13557,7 @@ exit:
  
  int ath12k_wmi_pdev_get_tpc_table_cmdid(struct ath12k *ar)
  {
@@ -379,7 +379,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_request_ctrl_path_stats_cmd_fixed_param *cmd;
  	struct sk_buff *skb;
  	struct wmi_tlv *tlv;
-@@ -13683,7 +13684,7 @@ static const char *ath12k_wmi_twt_add_di
+@@ -13727,7 +13728,7 @@ static const char *ath12k_wmi_twt_add_di
  
  int ath12k_wmi_dbglog_cfg(struct ath12k *ar, u32 param, u64 value)
  {
@@ -388,7 +388,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_dbglog_config_cmd_fixed_param *cmd;
  	struct sk_buff *skb;
  	struct wmi_tlv *tlv;
-@@ -14583,7 +14584,7 @@ int ath12k_wmi_pdev_ap_ps_cmd_send(struc
+@@ -14626,7 +14627,7 @@ int ath12k_wmi_pdev_ap_ps_cmd_send(struc
  int ath12k_wmi_mlo_setup(struct ath12k *ar,
  			 struct wmi_mlo_setup_params *mlo_params)
  {
@@ -397,7 +397,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_mlo_setup_cmd_fixed_param *cmd;
  	struct sk_buff *skb;
  	struct wmi_tlv *tlv;
-@@ -14624,7 +14625,7 @@ int ath12k_wmi_mlo_setup(struct ath12k *
+@@ -14667,7 +14668,7 @@ int ath12k_wmi_mlo_setup(struct ath12k *
  
  int ath12k_wmi_mlo_ready(struct ath12k *ar)
  {
@@ -406,7 +406,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_mlo_ready_cmd_fixed_param *cmd;
  	struct sk_buff *skb;
  	int ret, len;
-@@ -14651,7 +14652,7 @@ int ath12k_wmi_mlo_ready(struct ath12k *
+@@ -14694,7 +14695,7 @@ int ath12k_wmi_mlo_ready(struct ath12k *
  
  int ath12k_wmi_mlo_teardown(struct ath12k *ar, bool umac_reset)
  {
@@ -415,7 +415,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_mlo_teardown_fixed_param *cmd;
  	struct sk_buff *skb;
  	int ret, len;
-@@ -14692,7 +14693,7 @@ bool ath12k_wmi_is_mvr_supported(struct
+@@ -14735,7 +14736,7 @@ bool ath12k_wmi_is_mvr_supported(struct
  int ath12k_wmi_pdev_multiple_vdev_restart(struct ath12k *ar,
  					  struct wmi_pdev_multiple_vdev_restart_req_arg *arg)
  {
@@ -424,7 +424,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_pdev_multiple_vdev_restart_request_cmd *cmd;
  	struct ath12k_wmi_channel_params *chan;
  	struct wmi_tlv *tlv;
-@@ -14762,7 +14763,7 @@ int ath12k_wmi_vdev_adfs_ch_cfg_cmd_send
+@@ -14805,7 +14806,7 @@ int ath12k_wmi_vdev_adfs_ch_cfg_cmd_send
  					 u32 vdev_id,
  					 struct cfg80211_chan_def *def)
  {
@@ -433,7 +433,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_vdev_adfs_ch_cfg_cmd *cmd;
  	struct sk_buff *skb;
  	int ret = 0;
-@@ -14817,7 +14818,7 @@ int ath12k_wmi_vdev_adfs_ch_cfg_cmd_send
+@@ -14860,7 +14861,7 @@ int ath12k_wmi_vdev_adfs_ch_cfg_cmd_send
  
  int ath12k_wmi_vdev_adfs_ocac_abort_cmd_send(struct ath12k *ar, u32 vdev_id)
  {
@@ -442,7 +442,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_vdev_adfs_ocac_abort_cmd *cmd;
  	struct sk_buff *skb;
  	int ret = 0;
-@@ -14854,7 +14855,7 @@ int ath12k_wmi_vdev_adfs_ocac_abort_cmd_
+@@ -14897,7 +14898,7 @@ int ath12k_wmi_vdev_adfs_ocac_abort_cmd_
  
  int ath12k_wmi_svc_config_send(struct ath12k *ar, struct ath12k_sawf_svc_params *param)
  {
@@ -451,7 +451,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_sawf_svc_cfg_cmd_fixed_param *cmd;
  	struct sk_buff *skb;
  	int len, ret;
-@@ -14904,7 +14905,7 @@ int ath12k_wmi_svc_config_send(struct at
+@@ -14947,7 +14948,7 @@ int ath12k_wmi_svc_config_send(struct at
  
  int ath12k_wmi_svc_send_disable(struct ath12k *ar, u32 svc_id)
  {
@@ -460,7 +460,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct wmi_sawf_svc_disable_cmd_fixed_param *cmd;
  	struct sk_buff *skb;
  	int len, ret;
-@@ -14972,7 +14973,7 @@ static int ath12k_wmi_peer_chan_width_sw
+@@ -15015,7 +15016,7 @@ static int ath12k_wmi_peer_chan_width_sw
  					     struct wmi_peer_chan_width_switch_arg *arg)
  {
  	struct ath12k_base *ab = ar->ab;
@@ -545,7 +545,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	struct sk_buff *skb;
 --- a/drivers/net/wireless/ath/ath12k/testmode.c
 +++ b/drivers/net/wireless/ath/ath12k/testmode.c
-@@ -402,7 +402,7 @@ out:
+@@ -401,7 +401,7 @@ out:
  
  static int ath12k_tm_cmd_process_ftm(struct ath12k *ar, struct nlattr *tb[])
  {
@@ -556,7 +556,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	int ret;
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -3476,6 +3476,87 @@ struct wmi_channel_arg {
+@@ -3477,6 +3477,87 @@ struct wmi_channel_arg {
  	enum wmi_phy_mode mode;
  };
  
@@ -685,16 +685,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  					work_done =
  					ath12k_dp_mon_process_ring(ab, id, napi, budget,
  								   monitor_mode);
-@@ -1889,7 +1889,7 @@ static inline void *ath12k_dp_cc_get_des
- {
- 	struct ath12k_dp *dp = &ab->dp;
- 
--	return dp->spt_info[ppt_idx].vaddr + spt_idx;
-+	return dp->spt_info[ppt_idx].vaddr + (spt_idx * sizeof(u64));
- }
- 
- struct ath12k_rx_desc_info *ath12k_dp_get_rx_desc(struct ath12k_base *ab,
-@@ -2137,13 +2137,16 @@ int ath12k_dp_cc_ppeds_desc_init(struct
+@@ -2136,13 +2136,16 @@ int ath12k_dp_cc_ppeds_desc_init(struct
  static int ath12k_dp_cc_desc_init(struct ath12k_base *ab)
  {
  	struct ath12k_dp *dp = &ab->dp;
@@ -713,7 +704,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	/* First ATH12K_NUM_RX_SPT_PAGES of allocated SPT pages are used for RX */
  	for (i = 0; i < ATH12K_NUM_RX_SPT_PAGES; i++) {
  		rx_descs = kcalloc(ATH12K_MAX_SPT_ENTRIES, sizeof(*rx_descs),
-@@ -2158,19 +2161,22 @@ static int ath12k_dp_cc_desc_init(struct
+@@ -2157,19 +2160,22 @@ static int ath12k_dp_cc_desc_init(struct
  		ppt_idx = dp->rx_spt_base + ATH12K_RX_SPT_PAGE_OFFSET + i;
  
  		for (j = 0; j < ATH12K_MAX_SPT_ENTRIES; j++) {
@@ -739,7 +730,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  	for (pool_id = 0; pool_id < ATH12K_HW_MAX_QUEUES; pool_id++) {
  		spin_lock_bh(&dp->tx_desc_lock[pool_id]);
  		for (i = 0; i < ATH12K_TX_SPT_PAGES_PER_POOL; i++) {
-@@ -2187,16 +2193,16 @@ static int ath12k_dp_cc_desc_init(struct
+@@ -2186,16 +2192,16 @@ static int ath12k_dp_cc_desc_init(struct
  			dp->spt_info->txbaddr[tx_spt_page] = &tx_descs[0];
  
  			for (j = 0; j < ATH12K_MAX_SPT_ENTRIES; j++) {
@@ -762,7 +753,7 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  		spin_unlock_bh(&dp->tx_desc_lock[pool_id]);
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -1589,6 +1589,7 @@ static ssize_t ath12k_debugfs_dump_soc_d
+@@ -1668,6 +1668,7 @@ static ssize_t ath12k_debugfs_dump_soc_d
  {
  	struct ath12k_base *ab = file->private_data;
  	struct ath12k_soc_dp_stats *soc_stats = &ab->soc_stats;

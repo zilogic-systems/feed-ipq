@@ -1,4 +1,4 @@
-From c55225884014a9d37db7433d35edb54d742e506b Mon Sep 17 00:00:00 2001
+From e46864d58a60fa2a1ed9b7bc918aa6ac85a971b3 Mon Sep 17 00:00:00 2001
 From: Thomas Wu <quic_wthomas@quicinc.com>
 Date: Wed, 9 Oct 2024 13:04:22 -0700
 Subject: [PATCH 5/6] wifi: ath12k: Add Power Boost - Compiling
@@ -42,10 +42,10 @@ index b92e8b7..fc783b8 100644
  # for tracing framework to find trace.h
  CFLAGS_trace.o := -I$(src)
 diff --git a/local-symbols b/local-symbols
-index 556c893..72ea2cb 100644
+index 259df69..b385d49 100644
 --- a/local-symbols
 +++ b/local-symbols
-@@ -192,6 +192,7 @@ ATH12K_CFR=
+@@ -193,6 +193,7 @@ ATH12K_CFR=
  ATH12K_MEM_PROFILE_512M=
  ATH12K_SAWF=
  ATH12K_POWER_OPTIMIZATION=

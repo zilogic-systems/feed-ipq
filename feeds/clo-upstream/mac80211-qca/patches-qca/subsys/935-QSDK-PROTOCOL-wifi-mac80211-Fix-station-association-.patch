@@ -1,0 +1,57 @@
+From 72b3cd403a0288d2ab6f8669e8f64040948731ed Mon Sep 17 00:00:00 2001
+From: Aaradhana Sahu <quic_aarasahu@quicinc.com>
+Date: Fri, 13 Dec 2024 15:16:05 +0530
+Subject: [PATCH] QSDK:PROTOCOL: wifi: mac80211: Fix station association issue in 40 MHz during bandwidth change for 6 GHz interface
+
+When the AP changes bandwidth to 40 MHz and station try to reconfig
+new bandwidth (40 MHz) based on the received beacon from AP via
+ieee80211_config_bw(), the function assign bandwidth based on HT
+operation, but for 6 GHz band HT and VHT operation is not supported,
+due to this 6 GHz station not able to get correct bandwidth (40 MHz)
+and associate with default bandwidth (20 MHz).
+
+To address this issue, allow bandwidth configuration based on HE and
+EHT operation for 6 GHz interface.
+
+Patch-dependency: None
+patch-work: None
+
+Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
+---
+ net/mac80211/mlme.c | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/net/mac80211/mlme.c b/net/mac80211/mlme.c
+index 9e1b8c9..46be595 100644
+--- a/net/mac80211/mlme.c
++++ b/net/mac80211/mlme.c
+@@ -568,7 +568,8 @@ static int ieee80211_config_bw(struct ieee80211_link_data *link,
+ 	int ret;
+ 
+ 	/* if HT was/is disabled, don't track any bandwidth changes */
+-	if (link->u.mgd.conn_flags & IEEE80211_CONN_DISABLE_HT || !ht_oper)
++	if (chan->band != NL80211_BAND_6GHZ &&
++	    (link->u.mgd.conn_flags & IEEE80211_CONN_DISABLE_HT || !ht_oper))
+ 		return 0;
+ 
+ 	/* don't check VHT if we associated as non-VHT station */
+@@ -591,10 +592,12 @@ static int ieee80211_config_bw(struct ieee80211_link_data *link,
+ 	 * if bss configuration changed store the new one -
+ 	 * this may be applicable even if channel is identical
+ 	 */
+-	ht_opmode = le16_to_cpu(ht_oper->operation_mode);
+-	if (link->conf->ht_operation_mode != ht_opmode) {
+-		*changed |= BSS_CHANGED_HT;
+-		link->conf->ht_operation_mode = ht_opmode;
++	if (chan->band != NL80211_BAND_6GHZ) {
++		ht_opmode = le16_to_cpu(ht_oper->operation_mode);
++		if (link->conf->ht_operation_mode != ht_opmode) {
++			*changed |= BSS_CHANGED_HT;
++			link->conf->ht_operation_mode = ht_opmode;
++		}
+ 	}
+ 
+ 	if (vht_cap)
+-- 
+2.34.1
+

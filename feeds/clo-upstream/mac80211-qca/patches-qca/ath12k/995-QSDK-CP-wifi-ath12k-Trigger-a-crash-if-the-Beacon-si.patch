@@ -1,0 +1,63 @@
+From 62bdc58b3ecab9f6d302fdb0768d3ec70b5dcee5 Mon Sep 17 00:00:00 2001
+From: Vignesh C <quic_vignc@quicinc.com>
+Date: Tue, 17 Dec 2024 18:44:06 +0530
+Subject: [PATCH] QSDK:CP wifi:ath12k Trigger a crash if the Beacon size
+ differs from the allocated memory.
+
+A recent issue was observed where the firmware asserts when parsing
+the TLVs of WMI_BCN_TMPL_CMD because the skb size passed from the
+host is less than the actual beacon content.
+
+Add a BUG_ON before sending the WMI to the firmware if the allocated
+and filled beacon buffer contents do not match.
+
+Patch-dependency: none
+Patch-work: none
+
+Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/wmi.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
+index 3867522..a86ba0d 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -3097,8 +3097,8 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *ar, u32 vdev_id,
+ 	struct ath12k_wmi_bcn_prb_info_params *bcn_prb_info;
+ 	struct wmi_tlv *tlv;
+ 	struct sk_buff *skb;
+-	void *ptr;
+-	int ret, len;
++	void *ptr, *start;
++	int ret, len, alloc_len;
+ 	size_t aligned_len = roundup(bcn->len, 4);
+ 	struct ath12k_link_vif *arvif = ath12k_mac_get_arvif(ar, vdev_id);
+ 	struct wmi_critical_update_arg cu_arg = {
+@@ -3127,6 +3127,9 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *ar, u32 vdev_id,
+ 		return -ENOMEM;
+ 	}
+ 
++	alloc_len = len;
++	start = skb->data;
++
+ 	cmd = (struct wmi_bcn_tmpl_cmd *)skb->data;
+ 	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_BCN_TMPL_CMD,
+ 						 sizeof(*cmd));
+@@ -3161,6 +3164,13 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *ar, u32 vdev_id,
+ 	ptr = ath12k_wmi_append_critical_update_params(ar, vdev_id, ptr,
+ 						       &cu_arg);
+ 
++
++	if (alloc_len != (ptr - start)) {
++		ath12k_err(ar->ab, "allocation len for beacon is not matching (%d != (%ld))\n",
++			   alloc_len, (long int)(ptr - start));
++		BUG_ON(1);
++	}
++
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_BCN_TMPL_CMDID);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to send WMI_BCN_TMPL_CMDID\n");
+-- 
+2.34.1
+

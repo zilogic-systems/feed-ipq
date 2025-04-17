@@ -60,7 +60,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -2123,9 +2123,72 @@ static int ath12k_core_rpd_atomic_ssr_no
+@@ -2124,9 +2124,72 @@ static int ath12k_core_rpd_atomic_ssr_no
  	return NOTIFY_OK;
  }
  
@@ -133,7 +133,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  
  	mutex_lock(&ab->core_lock);
  	ath12k_core_pdev_deinit(ab);
-@@ -2140,7 +2203,8 @@ static int ath12k_core_reconfigure_on_cr
+@@ -2141,7 +2204,8 @@ static int ath12k_core_reconfigure_on_cr
  	ath12k_dp_umac_reset_deinit(ab);
  	ath12k_umac_reset_completion(ab);
  
@@ -143,7 +143,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	ab->free_vdev_stats_id_map = 0;
  	ab->num_db_cap = 0;
  
-@@ -2379,6 +2443,7 @@ void ath12k_core_halt(struct ath12k *ar)
+@@ -2380,6 +2444,7 @@ void ath12k_core_halt(struct ath12k *ar)
  	lockdep_assert_held(&ar->conf_mutex);
  
  	ar->num_created_vdevs = 0;
@@ -151,7 +151,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	ar->allocated_vdev_map = 0;
  
  	/* Send low ack disassoc to hostapd to free the peers from host
-@@ -2836,12 +2901,15 @@ static int ath12k_mlo_core_recovery_reco
+@@ -2837,12 +2902,15 @@ static int ath12k_mlo_core_recovery_reco
  	struct ieee80211_chanctx_conf *ctx = &arvif->chanctx;
  	int ret = -1;
  	u8 link_id = link_conf->link_id;
@@ -169,7 +169,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  
  	if (vif->type == NL80211_IFTYPE_AP &&
  	    ar->num_peers > (ar->max_num_peers - 1)) {
-@@ -2850,14 +2918,8 @@ static int ath12k_mlo_core_recovery_reco
+@@ -2851,14 +2919,8 @@ static int ath12k_mlo_core_recovery_reco
  		goto exit;
  	}
  
@@ -246,7 +246,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/hw.h
 +++ b/drivers/net/wireless/ath/ath12k/hw.h
-@@ -20,13 +20,21 @@ struct ath12k_cfr_peer_tx_param;
+@@ -20,13 +20,22 @@ struct ath12k_cfr_peer_tx_param;
  #ifdef CPTCFG_ATH12K_MEM_PROFILE_512M
  /* Num VDEVS per radio */
  #define TARGET_NUM_VDEVS	(8 + 1)
@@ -264,11 +264,12 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  #define ATH12K_QMI_TARGET_MEM_MODE	ATH12K_QMI_TARGET_MEM_MODE_DEFAULT
  #endif
  
++#define TARGET_NUM_BRIDGE_SELF_PEER	TARGET_NUM_BRIDGE_VDEVS
 +/* ToDo: do we need to include self peer of bridge vdev also here? */
  #define TARGET_NUM_PEERS_PDEV	(TARGET_NUM_STATIONS + TARGET_NUM_VDEVS)
  
  /* Num of peers for Single Radio mode */
-@@ -43,6 +51,7 @@ struct ath12k_cfr_peer_tx_param;
+@@ -43,6 +52,7 @@ struct ath12k_cfr_peer_tx_param;
  
  #define TARGET_NUM_PEERS(x)	TARGET_NUM_PEERS_##x
  #define TARGET_NUM_PEER_KEYS	2
@@ -276,7 +277,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  #define TARGET_NUM_TIDS(x)	(2 * TARGET_NUM_PEERS(x) + \
  				 4 * TARGET_NUM_VDEVS + 8)
  
-@@ -111,7 +120,7 @@ struct ath12k_cfr_peer_tx_param;
+@@ -111,7 +121,7 @@ struct ath12k_cfr_peer_tx_param;
  #define ATH12K_UMAC_RESET_IPC_QCN6432	7
  
  #define ATH12K_MAX_SOCS 4
@@ -301,7 +302,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  static int ath12k_mac_vif_chan(struct ieee80211_vif *vif,
  			       struct cfg80211_chan_def *def,
  			       u8 link_id)
-@@ -5269,11 +5276,14 @@ static int ath12k_mac_vdev_delete(struct
+@@ -5279,11 +5286,14 @@ static int ath12k_mac_vdev_delete(struct
  
  	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
  	ar->ab->free_vdev_stats_id_map &= ~(1LL << arvif->vdev_stats_id);
@@ -318,7 +319,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		   ar->ab->free_vdev_map);
  clean_up:
  	arvif->is_created = false;
-@@ -8366,13 +8376,13 @@ void ath12k_mac_assign_middle_link_id(st
+@@ -8372,13 +8382,13 @@ void ath12k_mac_assign_middle_link_id(st
  	 * the middle device link as primary_link_id of sta which is adjacent
  	 * to other two devices.
  	 */
@@ -334,7 +335,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  			ath12k_err(NULL,
  				   "num devices %d Combination not supported yet\n",
  				   num_devices);
-@@ -10763,6 +10773,7 @@ int ath12k_mac_radio_start(struct ath12k
+@@ -10772,6 +10782,7 @@ int ath12k_mac_radio_start(struct ath12k
  
  	ar->num_started_vdevs = 0;
  	ar->num_created_vdevs = 0;
@@ -342,7 +343,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	ar->num_peers = 0;
  	ar->allocated_vdev_map = 0;
  	ar->chan_tx_pwr = ATH12K_PDEV_TX_POWER_INVALID;
-@@ -11144,7 +11155,7 @@ static int ath12k_mac_setup_vdev_create_
+@@ -11154,7 +11165,7 @@ static int ath12k_mac_setup_vdev_create_
  
  	arg->if_id = arvif->vdev_id;
  	arg->type = ahvif->vdev_type;
@@ -351,7 +352,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	arg->pdev_id = pdev->pdev_id;
  	arg->mbssid_flags = 0;
  	arg->mbssid_tx_vdev_id = 0;
-@@ -11403,7 +11414,7 @@ static void ath12k_update_obss_color_not
+@@ -11413,7 +11424,7 @@ static void ath12k_update_obss_color_not
  	/* Assume it as non-mbssid initially, well overwrite it later.
  	 */
  	arvif->tx_vdev_id = vdev_id;
@@ -360,7 +361,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	arvif->ar = ar;
  	arvif->ab = ab;
  	arvif->dp = &ab->dp;
-@@ -11416,7 +11427,7 @@ static void ath12k_update_obss_color_not
+@@ -11426,7 +11437,7 @@ static void ath12k_update_obss_color_not
  		ahvif->vdev_type = WMI_VDEV_TYPE_STA;
  		break;
  	case NL80211_IFTYPE_MESH_POINT:
@@ -369,7 +370,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		fallthrough;
  	case NL80211_IFTYPE_AP:
  		ahvif->vdev_type = WMI_VDEV_TYPE_AP;
-@@ -11431,7 +11442,7 @@ static void ath12k_update_obss_color_not
+@@ -11441,7 +11452,7 @@ static void ath12k_update_obss_color_not
  	}
  
  	ath12k_dbg(ar->ab, ATH12K_DBG_SET(MAC, L1), "mac vdev create id %d type %d subtype %d map %llx\n",
@@ -378,7 +379,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		   ab->free_vdev_map);
  
  	/* TODO Revisit this sharing of common queues across all ar's */
-@@ -11459,7 +11470,10 @@ static void ath12k_update_obss_color_not
+@@ -11469,7 +11480,10 @@ static void ath12k_update_obss_color_not
  		goto err;
  	}
  
@@ -390,7 +391,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	ahvif->num_vdev_created++;
  	arvif->is_created = true;
  	ath12k_dbg(ab, ATH12K_DBG_MAC, "vdev %pM created, vdev_id %d\n",
-@@ -11601,7 +11615,10 @@ err_peer_del:
+@@ -11611,7 +11625,10 @@ err_peer_del:
  
  err_vdev_del:
  	ath12k_wmi_vdev_delete(ar, arvif->vdev_id);
@@ -402,7 +403,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	arvif->is_created = false;
  	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
  	spin_lock_bh(&ar->ab->base_lock);
-@@ -11690,6 +11707,7 @@ static struct ath12k *ath12k_mac_assign_
+@@ -11700,6 +11717,7 @@ static struct ath12k *ath12k_mac_assign_
  	struct ieee80211_vif *vif = arvif->ahvif->vif;
  	struct ath12k_link_vif *scan_arvif;
  	int ret;
@@ -410,7 +411,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  
  	lockdep_assert_held(&ah->conf_mutex);
  
-@@ -11728,9 +11746,8 @@ static struct ath12k *ath12k_mac_assign_
+@@ -11738,9 +11756,8 @@ static struct ath12k *ath12k_mac_assign_
  		goto unlock;
  	}
  
@@ -422,7 +423,26 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		ret = -EBUSY;
  		goto unlock;
  	}
-@@ -18014,7 +18031,7 @@ int ath12k_mac_allocate(struct ath12k_hw
+@@ -17418,6 +17435,7 @@ static int __ath12k_mac_register(struct
+ {
+ 	struct ieee80211_hw *hw;
+ 	struct ath12k_pdev_cap *cap;
++	u8 total_vdevs;
+ 
+ 	int ret;
+ 	u32 ht_cap = 0;
+@@ -17447,6 +17465,10 @@ static int __ath12k_mac_register(struct
+ 	ar->max_num_stations = TARGET_NUM_STATIONS;
+ 	ar->max_num_peers = TARGET_NUM_PEERS_PDEV;
+ 
++	total_vdevs = ath12k_core_get_total_num_vdevs(ar->ab);
++	if (total_vdevs == ATH12K_MAX_NUM_VDEVS_NLINK)
++		ar->max_num_stations -= TARGET_NUM_BRIDGE_SELF_PEER;
++
+ 	if (cap->nss_ratio_enabled)
+ 		ieee80211_hw_set(hw, SUPPORTS_VHT_EXT_NSS_BW);
+ 
+@@ -18038,7 +18060,7 @@ int ath12k_mac_allocate(struct ath12k_hw
  	size_t len;
  	int i, j, k, total_radio, num_radios, ret;
  	int mac_id, chip_id;
@@ -431,7 +451,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  	struct ath12k_pdev *pdev;
  	char *mlo_phy_name;
  
-@@ -18117,8 +18134,10 @@ int ath12k_mac_allocate(struct ath12k_hw
+@@ -18141,8 +18163,10 @@ int ath12k_mac_allocate(struct ath12k_hw
  				/* Initialize channel counters frequency value in hertz */
  				ab->cc_freq_hz = 320000;
  
@@ -465,7 +485,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  #define ATH12K_MAX_STA_LINKS		3
  
  /* number of failed packets (20 packets with 16 sw reties each) */
-@@ -218,4 +229,5 @@ void ath12k_bss_disassoc(struct ath12k *
+@@ -220,4 +231,5 @@ void ath12k_bss_disassoc(struct ath12k *
  int ath12k_mac_op_set_scs(struct wireless_dev *wdev, struct ath12k_latency_params *params);
  
  void ath12k_agile_cac_abort_work(struct work_struct *work);
@@ -473,7 +493,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  #endif
 --- a/drivers/net/wireless/ath/ath12k/ppe.c
 +++ b/drivers/net/wireless/ath/ath12k/ppe.c
-@@ -1354,9 +1354,9 @@ void ath12k_vif_free_vp(struct ath12k_vi
+@@ -1355,9 +1355,9 @@ void ath12k_vif_free_vp(struct ath12k_vi
  	ppe_vp_free(ahvif->ppe_vp_num);
  
  	ath12k_info(NULL,
@@ -524,7 +544,7 @@ Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
  		config->num_peers = TARGET_NUM_PEERS(DBS);
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -6878,6 +6878,7 @@ enum wmi_vdev_subtype {
+@@ -6879,6 +6879,7 @@ enum wmi_vdev_subtype {
  	WMI_VDEV_SUBTYPE_PROXY_STA,
  	WMI_VDEV_SUBTYPE_MESH_NON_11S,
  	WMI_VDEV_SUBTYPE_MESH_11S,

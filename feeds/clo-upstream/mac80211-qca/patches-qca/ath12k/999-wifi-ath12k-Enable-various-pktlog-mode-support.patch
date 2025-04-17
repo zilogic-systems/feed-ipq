@@ -1,0 +1,766 @@
+From 2d6cc352e45d73f6c61b71379c9ad13947f5a3e7 Mon Sep 17 00:00:00 2001
+From: Adwait Nayak <quic_adwaitn@quicinc.com>
+Date: Tue, 4 Mar 2025 02:29:04 +0530
+Subject: [PATCH] QSDK:DP: wifi: ath12k: Enable various pktlog mode support
+
+This change is responsible for enabling pktlog support in ath12k.
+
+Change description:
+1. User config portion to enable filter settings for different
+   pktlog modes, is modified. Instead of numeric values, user
+   needs to provide strings (filters and mode) as input.
+   Old format:
+   pktlog lite:
+   echo "0x3 1" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+   pktlog full (TX + RX):
+   echo "0x3 2" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+   Disabling pktlog filter:
+   echo "0x0 0" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+
+   New Format:
+   In this design, we are supporting two modes and below filters:
+   Mode: Lite, Full
+   Filter: TX, RX, RCU, RCF
+   It is recommended to use one mode at a time, along with
+   one or multiple filters.
+   pktlog lite: (Enables both tx and rx pktlog lite)
+   echo "lite" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+   pktlog lite tx/rx along with rate code debug:
+   echo "lite,rcu,rcf" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+
+   pktlog full: Both Tx and Rx full packet log is enabled with this
+   change.
+   Ex: pktlog full rx:
+   echo "rx,full" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+
+   Disabling/ resetting pktlog filter:
+   echo "reset" > /sys/kernel/debug/ath12k/<hw>/macX/pktlog_filter
+
+   After configuring the mode and filter, invoke below commands to start
+   packet log capture.
+   echo 1 > /sys/kernel/debug/ath12k/<hw>/macX/pktlog/start
+   to stop the capture:
+   echo 0 > /sys/kernel/debug/ath12k/<hw>/macX/pktlog/start
+
+2. HTT TLV filter settings for each pktlog mode is properly defined.
+3. pktlog start and stop commands remain unchanged.
+4. word mask subscription is disabled when pktlog is enabled.
+5. Do not send WMI event to FW to enable pktlog, during filter
+   or mode setting. Send it when pktlog start command is issued.
+6. Enable global config bit and other params.
+7. Pass actual buffer length instead of a fixed buffer length
+   while sending pktlog buffer from dp_mon layer to pktlog
+   buffer handler.
+
+Signed-off-by: Adwait Nayak <quic_adwaitn@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h    |   3 +-
+ drivers/net/wireless/ath/ath12k/debugfs.c | 274 +++++++++++++++-------
+ drivers/net/wireless/ath/ath12k/debugfs.h |  39 ++-
+ drivers/net/wireless/ath/ath12k/dp.h      |   5 +-
+ drivers/net/wireless/ath/ath12k/dp_mon.c  |  18 +-
+ drivers/net/wireless/ath/ath12k/dp_rx.c   |  30 ++-
+ drivers/net/wireless/ath/ath12k/dp_tx.c   |  11 +-
+ drivers/net/wireless/ath/ath12k/mac.c     |   3 +-
+ drivers/net/wireless/ath/ath12k/pktlog.c  |  42 ++--
+ drivers/net/wireless/ath/ath12k/pktlog.h  |   6 +
+ 10 files changed, 286 insertions(+), 145 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -993,8 +993,7 @@ struct ath12k_debug {
+ };
+ 
+ int ath12k_pktlog_rx_filter_setting(struct ath12k *ar,
+-                                    struct htt_rx_ring_tlv_filter
+-                                    *tlv_filter);
++				    struct htt_rx_ring_tlv_filter *tlv_filter);
+ 
+ struct ath12k_per_peer_tx_stats {
+ 	u32 succ_bytes;
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -3652,11 +3652,11 @@ void ath12k_debugfs_fw_stats_init(struct
+ }
+ 
+ int ath12k_pktlog_rx_filter_setting(struct ath12k *ar,
+-                                    struct htt_rx_ring_tlv_filter
+-                                    *tlv_filter)
++				    struct htt_rx_ring_tlv_filter *tlv_filter)
+ {
+ 	int ret = 0, i;
+ 	u32 ring_id;
++
+ 	for (i = 0; i < ar->ab->hw_params->num_rxmda_per_pdev; i++) {
+ 	    ring_id = ar->dp.rxdma_mon_dst_ring[i].ring_id;
+ 	    ret = ath12k_dp_tx_htt_rx_filter_setup(ar->ab, ring_id,
+@@ -3718,6 +3718,119 @@ out:
+ 	return ret;
+ }
+ 
++#define HTT_RX_FILTER_TLV_PKTLOG_LITE \
++	(HTT_RX_FILTER_TLV_FLAGS_MPDU_START | \
++	 HTT_RX_FILTER_TLV_FLAGS_PPDU_START | \
++	 HTT_RX_FILTER_TLV_FLAGS_PPDU_END | \
++	 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS | \
++	 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS_EXT | \
++	 HTT_RX_FILTER_TLV_FLAGS_PPDU_END_STATUS_DONE | \
++	 HTT_RX_FILTER_TLV_FLAGS_PPDU_START_USER_INFO)
++
++#define HTT_RX_FILTER_TLV_PKTLOG_FULL \
++	(HTT_RX_FILTER_TLV_PKTLOG_LITE | \
++	 HTT_RX_FILTER_TLV_FLAGS_MSDU_START | \
++	 HTT_RX_FILTER_TLV_FLAGS_MSDU_END | \
++	 HTT_RX_FILTER_TLV_FLAGS_MPDU_END | \
++	 HTT_RX_FILTER_TLV_FLAGS_PACKET_HEADER)
++
++void ath12k_debugfs_set_mon_filter(struct htt_rx_ring_tlv_filter *tlv_filter,
++				   enum ath12k_pktlog_mode mode,
++				   u32 rx_filter)
++{
++	tlv_filter->rx_filter = rx_filter;
++	tlv_filter->drop_threshold_valid = true;
++	tlv_filter->conf_len_ctrl = HTT_RX_RING_DEFAULT_DMA_LENGTH;
++	tlv_filter->conf_len_mgmt = HTT_RX_RING_DEFAULT_DMA_LENGTH;
++	tlv_filter->conf_len_data = HTT_RX_RING_DEFAULT_DMA_LENGTH;
++	tlv_filter->pkt_filter_flags0 =
++		HTT_RX_MON_FP_MGMT_FILTER_FLAGS0 |
++		HTT_RX_MON_MO_MGMT_FILTER_FLAGS0;
++	tlv_filter->pkt_filter_flags1 =
++		HTT_RX_MON_FP_MGMT_FILTER_FLAGS1 |
++		HTT_RX_MON_MO_MGMT_FILTER_FLAGS1;
++	tlv_filter->pkt_filter_flags2 =
++		HTT_RX_MON_FP_CTRL_FILTER_FLASG2 |
++		HTT_RX_MON_MO_CTRL_FILTER_FLASG2;
++	tlv_filter->pkt_filter_flags3 =
++		HTT_RX_MON_FP_CTRL_FILTER_FLASG3 |
++		HTT_RX_MON_MO_CTRL_FILTER_FLASG3 |
++		HTT_RX_MON_FP_DATA_FILTER_FLASG3 |
++		HTT_RX_MON_MO_DATA_FILTER_FLASG3;
++	tlv_filter->rx_pktlog_mode = mode;
++}
++
++/**
++ * ath12k_set_pktlog_txrx_filter() - This function is responsible for sending
++ * the TX/ RX/ Hybrid filter settings to FW.
++ *
++ * @mode: Full/ Lite/ Disabled
++ * @filter: TX/ RX/ Hybrid/ rate control debug filter (RCU/ RCF)
++ *         RCU / RCF can be clubbed together TX or RX
++ * @rx_filter: HTT TLV Filter settings. This is mainly responsible for
++ *            pktlog rx. In Pktlog full mode, rx_filter contains all PPDU and
++ *            MPDU TLVs; whereas in Pktlog lite, rx_filter  contains mostly
++ *            PPDU TLVs and MPDU START TLV.
++ */
++int ath12k_set_pktlog_txrx_filter(struct ath12k *ar,
++				  enum ath12k_pktlog_mode mode,
++				  enum ath12k_pktlog_filter filter,
++				  u32 rx_filter)
++{
++	struct htt_rx_ring_tlv_filter tlv_filter = {0};
++	int retv = -EINVAL;
++
++	if (!filter) {
++		ath12k_warn(ar->ab, "failed as filter is not set\n");
++		return -EINVAL;
++	}
++
++	if (mode == ATH12K_PKTLOG_MODE_LITE ||
++	    (filter & ATH12K_PKTLOG_RX)) {
++		ath12k_debugfs_set_mon_filter(&tlv_filter, mode, rx_filter);
++
++		retv = ath12k_pktlog_rx_filter_setting(ar, &tlv_filter);
++		if (retv)
++			ath12k_warn(ar->ab, "failed to set rx filter for "
++				    "mon dest ring %d\n", retv);
++	}
++
++	if (filter & ATH12K_PKTLOG_HYBRID) {
++		retv = ath12k_pktlog_enable_hybrid_mode(ar, filter, mode);
++		if (retv)
++			ath12k_warn(ar->ab, "failed to enable pktlog "
++				    "in hybrid mode %d\n", retv);
++	}
++
++	return retv;
++}
++
++/**
++ * ath12k_write_pktlog_filter() - This function is responsible for setting
++ * the pktlog mode and htt tlv filter for different pktlog flavors.
++ *
++ * User needs to pass the combination of at least one mode and one filter
++ * while configuring pktlog, such as:
++ * {rx, full}/ {rx,lite}/ {tx,rx,lite}/ {tx,rx,lite,rcu,rcf} etc.
++ *
++ * pktlog modes:
++ * Full: Pktlog full version can be used to capture all PPDU and MPDU TLVs
++ * Lite: Pktlog lite is a lighter version of pktlog, which captures mostly
++ *       PPDU TLVs and MPDU START TLV.
++ *
++ * pktlog filters: Rx/ Tx/ RCU/ RCF/ Hybrid
++ *
++ * EX:
++ * 1. pktlog full rx:
++ * echo "rx, full" > /sys/kernel/debug/ath12k/<HW>/mac0/pktlog_filter
++ * 2. pktlog lite tx/rx:
++ * echo "lite" > /sys/kernel/debug/ath12k/<HW>/mac0/pktlog_filter
++ * 3. pktlog lite tx/rx/rcu/rcf:
++ * echo "lite,rcu,rcf" > /sys/kernel/debug/ath12k/<HW>/mac0/pktlog_filter
++ *
++ * To reset pktlog filters and mode:
++ * echo "reset" > /sys/kernel/debug/ath12k/<HW>/mac0/pktlog_filter
++ */
+ static ssize_t ath12k_write_pktlog_filter(struct file *file,
+ 					  const char __user *ubuf,
+ 					  size_t count, loff_t *ppos)
+@@ -3725,9 +3838,11 @@ static ssize_t ath12k_write_pktlog_filte
+ 	struct ath12k *ar = file->private_data;
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct htt_rx_ring_tlv_filter tlv_filter = {0};
+-	u32 rx_filter = 0, filter, mode;
++	u32 rx_filter = 0;
++	enum ath12k_pktlog_filter filter = ATH12K_PKTLOG_NO_FILTER;
++	enum ath12k_pktlog_mode mode = ATH12K_PKTLOG_DISABLED;
+ 	u8 buf[128] = {0};
+-	int ret, hybrid_enable, rx_buf_sz;
++	int ret = 0;
+ 	ssize_t rc;
+ 
+ 	mutex_lock(&ar->conf_mutex);
+@@ -3743,49 +3858,42 @@ static ssize_t ath12k_write_pktlog_filte
+ 	}
+ 	buf[rc] = '\0';
+ 
+-	ret = sscanf(buf, "0x%x %u %d", &filter, &mode, &hybrid_enable);
+-	if (ret < 2) {
+-		ret = -EINVAL;
+-		goto out;
++	if (strstr(buf, "lite"))
++		mode = ATH12K_PKTLOG_MODE_LITE;
++	if (strstr(buf, "full"))
++		mode = ATH12K_PKTLOG_MODE_FULL;
++	if (mode == ATH12K_PKTLOG_MODE_FULL) {
++		if (strstr(buf, "tx"))
++			filter |= ATH12K_PKTLOG_TX;
++		if (strstr(buf, "rx"))
++			filter |= ATH12K_PKTLOG_RX;
+ 	}
+ 
+-	if (ret == 2)
+-		hybrid_enable = 0;
++	if (strstr(buf, "rcf"))
++		filter |= ATH12K_PKTLOG_RCFIND;
++	if (strstr(buf, "rcu"))
++		filter |= ATH12K_PKTLOG_RCUPDATE;
++	if (strstr(buf, "hybrid"))
++		filter |= ATH12K_PKTLOG_HYBRID;
++	if (strstr(buf, "phy"))
++		filter |= ATH12K_PKTLOG_PHY_LOGGING;
+ 
+-	if ((filter & ATH12K_PKTLOG_RX) && hybrid_enable) {
+-		ret = -EINVAL;
+-		ath12k_warn(ab,
+-			    "Invalid configuration. Hybrid mode is only applicable when tx or lite pktlog is used");
+-		goto out;
++	if (strstr(buf, "reset")) {
++		mode = ATH12K_PKTLOG_DISABLED;
++		filter = ATH12K_PKTLOG_NO_FILTER;
+ 	}
+ 
+-	/* TODO : Hybrid mode is not supported yet.
+-	 * Bring up will happen once the FW design is finalised.
+-	 */
+-	if (hybrid_enable)
+-		filter |= ATH12K_PKTLOG_HYBRID;
+-	ret = ath12k_wmi_pdev_pktlog_enable(ar, filter);
+-	if (ret) {
+-		ath12k_warn(ab,
+-			    "failed to enable pktlog filter %x: %d\n",
+-			     ar->debug.pktlog_filter, ret);
++	if ((filter & ATH12K_PKTLOG_RX) &&
++	    (filter & ATH12K_PKTLOG_HYBRID)) {
++		ret = -EINVAL;
++		ath12k_warn(ab, "Invalid configuration. Hybrid mode is "
++			    "applicable only when tx or lite pktlog is used");
+ 		goto out;
+ 	}
+ 
+-	/*
+-	 * TODO : Filter setting needs to be revisited after enabling TX monitor
++	/* TODO : Hybrid mode is not supported yet.
++	 * It will be enabled in phase 2 implementation
+ 	 */
+-
+-	/* Clear rx filter set for monitor mode and rx status */
+-	tlv_filter.offset_valid = false;
+-
+-	ret = ath12k_pktlog_rx_filter_setting(ar, &tlv_filter);
+-	if (ret) {
+-		ath12k_warn(ab, "failed to clear rx filter for monitor dest ring %d\n",
+-		            ret);
+-		goto out;
+-	}
+-
+ 	if (filter & ATH12K_PKTLOG_HYBRID) {
+ 		ret = ath12k_pktlog_enable_hybrid_mode(ar, filter, mode);
+ 		if (ret) {
+@@ -3796,78 +3904,61 @@ static ssize_t ath12k_write_pktlog_filte
+ 		goto out;
+ 	}
+ 
+-#define HTT_RX_FILTER_TLV_LITE_MODE \
+-			(HTT_RX_FILTER_TLV_FLAGS_PPDU_START | \
+-			HTT_RX_FILTER_TLV_FLAGS_PPDU_END | \
+-			HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS | \
+-			HTT_RX_FILTER_TLV_FLAGS_PPDU_END_USER_STATS_EXT | \
+-			HTT_RX_FILTER_TLV_FLAGS_PPDU_END_STATUS_DONE | \
+-			HTT_RX_FILTER_TLV_FLAGS_MPDU_START)
++	if (ar->debug.pktlog_mode == mode) {
++		ath12k_err(ab, "This mode is already configured: %d\n", mode);
++		goto out;
++	}
+ 
+-	if (mode == ATH12K_PKTLOG_MODE_FULL) {
+-		rx_filter = HTT_RX_FILTER_TLV_LITE_MODE |
+-			    HTT_RX_FILTER_TLV_FLAGS_MSDU_START |
+-			    HTT_RX_FILTER_TLV_FLAGS_MSDU_END |
+-			    HTT_RX_FILTER_TLV_FLAGS_MPDU_END |
+-			    HTT_RX_FILTER_TLV_FLAGS_PACKET_HEADER |
+-			    HTT_RX_FILTER_TLV_FLAGS_ATTENTION;
+-		rx_buf_sz = DP_RX_MON_BUFFER_SIZE;
+-	} else if (mode == ATH12K_PKTLOG_MODE_LITE) {
++	switch (mode) {
++	case ATH12K_PKTLOG_MODE_FULL:
++		rx_filter = HTT_RX_FILTER_TLV_PKTLOG_FULL;
++		ret = ath12k_set_pktlog_txrx_filter(ar, mode,
++						    filter, rx_filter);
++		if (ret)
++			goto out;
++		break;
++	case ATH12K_PKTLOG_MODE_LITE:
+ 		ret = ath12k_dp_tx_htt_h2t_ppdu_stats_req(ar,
+-							  HTT_PPDU_STATS_TAG_PKTLOG);
++						HTT_PPDU_STATS_TAG_PKTLOG);
++		if (ret) {
++			ath12k_warn(ar->ab,
++				    "failed to enable pktlog T2H: %d\n", ret);
++		}
++		rx_filter = HTT_RX_FILTER_TLV_PKTLOG_LITE;
++		ret = ath12k_set_pktlog_txrx_filter(ar, mode,
++						    filter, rx_filter);
++		if (ret)
++			goto out;
++		break;
++	case ATH12K_PKTLOG_DISABLED:
++		ret = ath12k_dp_tx_htt_h2t_ppdu_stats_req(ar, 0);
+ 		if (ret) {
+-			ath12k_err(ab, "failed to enable pktlog lite: %d\n", ret);
++			ath12k_warn(ab, "failed to send htt ppdu "
++				    "stats req: %d\n", ret);
+ 			goto out;
+ 		}
+ 
+-		rx_filter = HTT_RX_FILTER_TLV_LITE_MODE;
+-		rx_buf_sz = DP_RX_BUFFER_SIZE_LITE;
+-	} else {
+-		rx_buf_sz = DP_RX_BUFFER_SIZE;
+ 		tlv_filter = ath12k_mac_mon_status_filter_default;
+-		rx_filter = tlv_filter.rx_filter;
+-
+-		ret = ath12k_dp_tx_htt_h2t_ppdu_stats_req(ar,
+-							  HTT_PPDU_STATS_TAG_DEFAULT);
++		ret = ath12k_pktlog_rx_filter_setting(ar, &tlv_filter);
+ 		if (ret) {
+-			ath12k_err(ab, "failed to send htt ppdu stats req: %d\n",
+-				   ret);
++			ath12k_warn(ab, "failed to set rx filter"
++				    " for mon dest ring\n");
+ 			goto out;
+ 		}
+-	}
+-
+-	tlv_filter.rx_filter = rx_filter;
+-	if (rx_filter) {
+-		tlv_filter.pkt_filter_flags0 =
+-					HTT_RX_FP_MGMT_FILTER_FLAGS0 |
+-					HTT_RX_MO_MGMT_FILTER_FLAGS0;
+-		tlv_filter.pkt_filter_flags1 =
+-					HTT_RX_FP_MGMT_FILTER_FLAGS1 |
+-					HTT_RX_MO_MGMT_FILTER_FLAGS1;
+-		tlv_filter.pkt_filter_flags2 =
+-					HTT_RX_FP_CTRL_FILTER_FLASG2 |
+-					HTT_RX_MO_CTRL_FILTER_FLASG2;
+-		tlv_filter.pkt_filter_flags3 =
+-					HTT_RX_FP_CTRL_FILTER_FLASG3 |
+-					HTT_RX_MO_CTRL_FILTER_FLASG3 |
+-					HTT_RX_FP_DATA_FILTER_FLASG3 |
+-					HTT_RX_MO_DATA_FILTER_FLASG3;
+-	}
++		break;
+ 
+-	ret = ath12k_pktlog_rx_filter_setting(ar, &tlv_filter);
+-	if (ret) {
+-		ath12k_warn(ab, "failed to set rx filter for monitor dest ring %d\n",
+-		            ret);
++	default:
++		ath12k_err(ab, "Please set a valid mode\n");
+ 		goto out;
+ 	}
+ 
++	ar->debug.pktlog_filter = filter;
++	ar->debug.pktlog_mode = mode;
++
+ 	ath12k_dbg(ab, ATH12K_DBG_WMI, "pktlog filter %d mode %s\n",
+ 		   filter, ((mode == ATH12K_PKTLOG_MODE_FULL) ? "full" : "lite"));
+ 
+-	ar->debug.pktlog_filter = filter;
+-	ar->debug.pktlog_mode = mode;
+ 	ret = count;
+-
+ out:
+ 	mutex_unlock(&ar->conf_mutex);
+ 	return ret;
+--- a/drivers/net/wireless/ath/ath12k/debugfs.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs.h
+@@ -191,20 +191,35 @@ struct ath12k_pktlog_hdr {
+ #define ATH12K_HTT_STATS_BUF_SIZE (1024 * 512)
+ #define ATH12K_FW_STATS_BUF_SIZE (1024 * 1024)
+ 
+-enum ath12k_pktlog_filter {
+-	ATH12K_PKTLOG_RX		= 0x000000001,
+-	ATH12K_PKTLOG_TX		= 0x000000002,
+-	ATH12K_PKTLOG_RCFIND		= 0x000000004,
+-	ATH12K_PKTLOG_RCUPDATE		= 0x000000008,
+-	ATH12K_PKTLOG_EVENT_SMART_ANT	= 0x000000020,
+-	ATH12K_PKTLOG_EVENT_SW		= 0x000000040,
+-	ATH12K_PKTLOG_HYBRID		= 0x000020000,
+-	ATH12K_PKTLOG_ANY		= 0x00000006f,
++enum {
++	ATH12K_PKTLOG_RX_BIT,
++	ATH12K_PKTLOG_TX_BIT,
++	ATH12K_PKTLOG_RCF_BIT,
++	ATH12K_PKTLOG_RCU_BIT,
++	ATH12K_PKTLOG_DBG_PRINT_BIT,
++	ATH12K_PKTLOG_SMART_ANT_BIT,
++	ATH12K_PKTLOG_H_INFO_BIT,
++	ATH12K_PKTLOG_STEERING_BIT,
++	ATH12K_PKTLOG_TX_DATA_CAP_BIT,
++	ATH12K_PKTLOG_PHY_LOGGING_BIT,
++	ATH12K_PKTLOG_CBF_BIT,
++	ATH12K_PKTLOG_HYBRID_BIT,
+ };
+ 
+-enum ath12k_pktlog_mode {
+-	ATH12K_PKTLOG_MODE_LITE = 1,
+-	ATH12K_PKTLOG_MODE_FULL = 2,
++enum ath12k_pktlog_filter {
++	ATH12K_PKTLOG_NO_FILTER		= 0,
++	ATH12K_PKTLOG_RX		= BIT(ATH12K_PKTLOG_RX_BIT),
++	ATH12K_PKTLOG_TX		= BIT(ATH12K_PKTLOG_TX_BIT),
++	ATH12K_PKTLOG_RCFIND		= BIT(ATH12K_PKTLOG_RCF_BIT),
++	ATH12K_PKTLOG_RCUPDATE		= BIT(ATH12K_PKTLOG_RCU_BIT),
++	ATH12K_PKTLOG_DBG_PRINT		= BIT(ATH12K_PKTLOG_DBG_PRINT_BIT),
++	ATH12K_PKTLOG_SMART_ANT	        = BIT(ATH12K_PKTLOG_SMART_ANT_BIT),
++	ATH12K_PKTLOG_H_INFO	        = BIT(ATH12K_PKTLOG_H_INFO_BIT),
++	ATH12K_PKTLOG_STEERING		= BIT(ATH12K_PKTLOG_STEERING_BIT),
++	ATH12K_PKTLOG_TX_DATA_CAPTURE	= BIT(ATH12K_PKTLOG_TX_DATA_CAP_BIT),
++	ATH12K_PKTLOG_PHY_LOGGING	= BIT(ATH12K_PKTLOG_PHY_LOGGING_BIT),
++	ATH12K_PKTLOG_CBF		= BIT(ATH12K_PKTLOG_CBF_BIT),
++	ATH12K_PKTLOG_HYBRID		= BIT(ATH12K_PKTLOG_HYBRID_BIT),
+ };
+ 
+ enum ath12k_pktlog_enum {
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -1387,6 +1387,7 @@ struct htt_rx_ring_tlv_filter {
+ 	u16 rx_mpdu_start_wmask;
+ 	u16 rx_mpdu_end_wmask;
+ 	u32 rx_msdu_end_wmask;
++	u8 rx_pktlog_mode;
+ };
+ 
+ #define HTT_STATS_FRAME_CTRL_TYPE_MGMT  0x0
+@@ -1744,6 +1745,8 @@ struct htt_t2h_sawf_info_ind {
+ 
+ #define HTT_T2H_PPDU_STATS_INFO_PDEV_ID GENMASK(11, 10)
+ #define HTT_T2H_PPDU_STATS_INFO_PAYLOAD_SIZE GENMASK(31, 16)
++#define ATH12K_PKTLOG_HDR_SIZE_OFFSET 1
++#define ATH12K_PKTLOG_HDR_SIZE GENMASK(31, 16)
+ 
+ struct ath12k_htt_ppdu_stats_msg {
+ 	__le32 info;
+@@ -2103,7 +2106,7 @@ struct htt_ppdu_stats_info {
+  */
+ struct htt_pktlog_msg {
+ 	u32 hdr;
+-	u8 payload[0];
++	u32 payload[0];
+ };
+ 
+ /* @brief target -> host MLO offset indiciation message
+--- a/drivers/net/wireless/ath/ath12k/dp_mon.c
++++ b/drivers/net/wireless/ath/ath12k/dp_mon.c
+@@ -4194,7 +4194,7 @@ int ath12k_dp_mon_rx_process_stats(struc
+ 	struct ath12k_neighbor_peer *nrp, *tmp;
+ 	u64 cookie;
+ 	int num_buffs_reaped = 0, srng_id, buf_id;
+-	u32 hal_status, end_reason, end_offset, rx_buf_sz;
++	u32 hal_status, end_reason, rx_buf_sz, end_offset = 0;
+ 	char buf[64] = {0};
+ 	u16 log_type = 0;
+ 
+@@ -4287,14 +4287,16 @@ move_next:
+ 		ath12k_dp_mon_rx_memset_ppdu_info(ppdu_info);
+ 
+ 	while ((skb = __skb_dequeue(&skb_list))) {
+-		if (ath12k_debugfs_is_pktlog_lite_mode_enabled(ar)) {
+-			log_type = ATH12K_PKTLOG_TYPE_LITE_RX;
+-			rx_buf_sz = DP_RX_BUFFER_SIZE_LITE;
+-		} else if (ath12k_debugfs_is_pktlog_rx_stats_enabled(ar)) {
+-			log_type = ATH12K_PKTLOG_TYPE_RX_STATBUF;
+-			rx_buf_sz = DP_RX_BUFFER_SIZE;
+-			ath12k_rx_stats_buf_pktlog_process(ar, skb->data, log_type,
+-			                                   rx_buf_sz);
++		if (ar->debug.is_pkt_logging) {
++			if (ath12k_debugfs_is_pktlog_lite_mode_enabled(ar))
++				log_type = ATH12K_PKTLOG_TYPE_LITE_RX;
++			else if (ath12k_debugfs_is_pktlog_rx_stats_enabled(ar))
++				log_type = ATH12K_PKTLOG_TYPE_RX_STATBUF;
++
++			rx_buf_sz = end_offset + 1;
++			ath12k_rx_stats_buf_pktlog_process(ar, skb->data,
++							   log_type,
++							   rx_buf_sz);
+ 		}
+ 		if (log_type)
+ 			trace_ath12k_htt_rxdesc(ar, skb->data, log_type,
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -1430,22 +1430,35 @@ static int ath12k_get_ppdu_user_index(st
+ 
+ static void ath12k_htt_pktlog(struct ath12k_base *ab, struct sk_buff *skb)
+ {
+-	struct htt_pktlog_msg *data = (struct htt_pktlog_msg *)skb->data;
+-	struct ath12k_pktlog_hdr *hdr = (struct ath12k_pktlog_hdr *)data;
++	struct ath12k_pktlog_hdr pl_hdr;
+ 	struct ath12k *ar;
+ 	u8 pdev_id;
++	u32 *pl_tgt_hdr, *msg_word;
++	u16 payload_size;
+ 
+-	pdev_id = u32_get_bits(data->hdr, HTT_T2H_PPDU_STATS_INFO_PDEV_ID);
++	if (!skb->data)
++		return;
++
++	msg_word = (u32 *)skb->data;
++
++	pdev_id = u32_get_bits(*msg_word, HTT_T2H_PPDU_STATS_INFO_PDEV_ID);
+ 	ar = ath12k_mac_get_ar_by_pdev_id(ab, pdev_id);
+ 	if (!ar) {
+ 		ath12k_warn(ab, "invalid pdev id %d on htt pktlog\n", pdev_id);
+ 		return;
+ 	}
+-	hdr->m_timestamp = ar->pdev->timestamp;
+ 
+-	trace_ath12k_htt_pktlog(ar, data->payload, hdr->size,
+-			ar->ab->pktlog_defs_checksum);
+-	ath12k_htt_pktlog_process(ar, (u8 *)data->payload);
++	payload_size = u32_get_bits(*msg_word,
++				    HTT_T2H_PPDU_STATS_INFO_PAYLOAD_SIZE);
++	pl_tgt_hdr = (u32 *)(msg_word + 1);
++	pl_hdr.size = u32_get_bits(*(pl_tgt_hdr +
++				     ATH12K_PKTLOG_HDR_SIZE_OFFSET),
++				   ATH12K_PKTLOG_HDR_SIZE);
++	trace_ath12k_htt_pktlog(ar, pl_tgt_hdr, pl_hdr.size,
++				ar->ab->pktlog_defs_checksum);
++
++	if (ar->debug.is_pkt_logging)
++		ath12k_htt_pktlog_process(ar, (u8 *)pl_tgt_hdr);
+ }
+ 
+ static void ath12k_dp_ppdu_stats_flush_tlv_parse(struct ath12k_base *ab,
+@@ -2239,9 +2252,10 @@ static int ath12k_htt_pull_ppdu_stats(st
+ 		goto exit;
+ 	}
+ 
+-	if (ath12k_debugfs_is_pktlog_lite_mode_enabled(ar)) {
++	if (ar->debug.is_pkt_logging &&
++	    ath12k_debugfs_is_pktlog_lite_mode_enabled(ar)) {
+ 		trace_ath12k_htt_ppdu_stats(ar, skb->data, len);
+-		ath12k_htt_ppdu_pktlog_process(ar, (u8 *)skb->data, DP_RX_BUFFER_SIZE);
++		ath12k_htt_ppdu_pktlog_process(ar, (u8 *)skb->data, skb->len);
+ 	}
+ 
+ 	spin_lock_bh(&ar->data_lock);
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -2061,8 +2061,7 @@ int ath12k_dp_tx_htt_h2t_ppdu_stats_req(
+ 	struct htt_ppdu_stats_cfg_cmd *cmd;
+ 	int len = sizeof(*cmd);
+ 	u8 pdev_mask;
+-	int ret;
+-	int i;
++	int ret, i;
+ 
+ 	for (i = 0; i < ab->hw_params->num_rxmda_per_pdev; i++) {
+ 		skb = ath12k_htc_alloc_skb(ab, len);
+@@ -2077,7 +2076,6 @@ int ath12k_dp_tx_htt_h2t_ppdu_stats_req(
+ 		pdev_mask = DP_SW2HW_MACID(ar->pdev_idx) + i;
+ 		cmd->msg |= le32_encode_bits(pdev_mask, HTT_PPDU_STATS_CFG_PDEV_ID);
+ 		cmd->msg |= le32_encode_bits(mask, HTT_PPDU_STATS_CFG_TLV_TYPE_BITMASK);
+-
+ 		ret = ath12k_htc_send(&ab->htc, dp->eid, skb);
+ 		if (ret) {
+ 			dev_kfree_skb_any(skb);
+@@ -2188,8 +2186,10 @@ int ath12k_dp_tx_htt_rx_filter_setup(str
+ 					 HTT_RX_RING_SELECTION_CFG_RX_ATTENTION_OFFSET);
+ 	}
+ 
+-	if (tlv_filter->rx_mpdu_start_wmask > 0 &&
+-			tlv_filter->rx_msdu_end_wmask > 0) {
++	/* Disable word mask subscription if pktlog is enabled */
++	if (tlv_filter->rx_pktlog_mode == ATH12K_PKTLOG_DISABLED &&
++	    (tlv_filter->rx_mpdu_start_wmask > 0 &&
++	     tlv_filter->rx_msdu_end_wmask > 0)) {
+ 		cmd->info2 |=
+ 			u32_encode_bits(true,
+ 					HTT_RX_RING_SELECTION_CFG_WORD_MASK_COMPACTION_ENABLE_SET);
+@@ -2207,6 +2207,7 @@ int ath12k_dp_tx_htt_rx_filter_setup(str
+ 			u32_encode_bits(tlv_filter->rx_msdu_end_wmask,
+ 					HTT_RX_RING_SELECTION_CFG_RX_MSDU_END_MASK);
+ 	}
++
+ 	ret = ath12k_htc_send(&ab->htc, ab->dp.eid, skb);
+ 	if (ret)
+ 		goto err_free;
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -253,7 +253,8 @@ const struct htt_rx_ring_tlv_filter ath1
+ 	.pkt_filter_flags1 = HTT_RX_FP_MGMT_FILTER_FLAGS1,
+ 	.pkt_filter_flags2 = HTT_RX_FP_CTRL_FILTER_FLASG2,
+ 	.pkt_filter_flags3 = HTT_RX_FP_DATA_FILTER_FLASG3 |
+-			     HTT_RX_FP_CTRL_FILTER_FLASG3
++			     HTT_RX_FP_CTRL_FILTER_FLASG3,
++	.rx_pktlog_mode = ATH12K_PKTLOG_DISABLED
+ };
+ 
+ #define ATH12K_MAC_FIRST_OFDM_RATE_IDX 4
+--- a/drivers/net/wireless/ath/ath12k/pktlog.c
++++ b/drivers/net/wireless/ath/ath12k/pktlog.c
+@@ -341,13 +341,25 @@ static const struct file_operations fops
+ 	.open = simple_open
+ };
+ 
++/**
++ * ath12k_write_pktlog_start() : This function is responsible for starting and
++ * stopping pktlog data collection.
++ *
++ * Below command invokes this function:
++ * 1. To start the dump collection:
++ *   echo 1 > /sys/kernel/debug/ath12k/<HW>/mac0/pktlog/start
++ *
++ * 2. To stop the dump collection:
++ *   echo 0 > /sys/kernel/debug/ath12k/<HW>/mac0/pktlog/start
++ *
++ */
+ static ssize_t ath12k_write_pktlog_start(struct file *file, const char __user *ubuf,
+                                          size_t count, loff_t *ppos)
+ {
+ 	struct ath12k *ar = file->private_data;
+ 	struct ath12k_pktlog *pktlog = &ar->debug.pktlog;
+ 	struct htt_rx_ring_tlv_filter tlv_filter = {0};
+-	u32 start_pktlog;
++	u32 start_pktlog, filter;
+ 	int err;
+ 
+ 	err = kstrtou32_from_user(ubuf, count, 0, &start_pktlog);
+@@ -358,6 +370,9 @@ static ssize_t ath12k_write_pktlog_start
+ 		pr_err("packet logging is inprogress\n");
+ 		return -EINVAL;
+ 	}
++
++	filter = ar->debug.pktlog_filter;
++
+ 	if (start_pktlog) {
+ 		if (pktlog->buf)
+ 			ath12k_pktlog_release(pktlog);
+@@ -366,15 +381,16 @@ static ssize_t ath12k_write_pktlog_start
+ 		if (err != 0)
+ 			return err;
+ 
++		err = ath12k_wmi_pdev_pktlog_enable(ar, filter);
++		if (err) {
++			pr_err("failed to enable pktlog filter %x: %d\n",
++			       ar->debug.pktlog_filter, err);
++			return err;
++		}
+ 		ath12k_init_pktlog_buf(ar, pktlog);
+ 		ar->debug.is_pkt_logging = 1;
+ 	} else {
+ 		ar->debug.is_pkt_logging = 0;
+-		err = ath12k_pktlog_rx_filter_setting(ar, &tlv_filter);
+-		if (err) {
+-			pr_err("failed to reset the rx filter of pktlog : %d\n", err);
+-			return err;
+-		}
+ 		tlv_filter = ath12k_mac_mon_status_filter_default;
+ 		err = ath12k_pktlog_rx_filter_setting(ar, &tlv_filter);
+ 		if (err) {
+@@ -486,7 +502,8 @@ void ath12k_deinit_pktlog(struct ath12k
+ 		ath12k_pktlog_release(pktlog);
+ }
+ 
+-static int ath12k_pktlog_pull_hdr(struct ath12k_pktlog_hdr_arg *arg, u8 *data)
++static int ath12k_pktlog_pull_hdr(struct ath12k_pktlog_hdr_arg *arg,
++				  struct ath12k *ar, u8 *data)
+ {
+ 	struct ath12k_pktlog_hdr *hdr = (struct ath12k_pktlog_hdr *)data;
+ 
+@@ -522,10 +539,7 @@ void ath12k_htt_pktlog_process(struct at
+ 	struct ath12k_pktlog_hdr_arg hdr_arg;
+ 	int ret;
+ 
+-	if  (!ar->debug.is_pkt_logging)
+-		return;
+-
+-	ret = ath12k_pktlog_pull_hdr(&hdr_arg, data);
++	ret = ath12k_pktlog_pull_hdr(&hdr_arg, ar, data);
+ 	if (ret)
+ 		return;
+ 
+@@ -539,9 +553,6 @@ void ath12k_htt_ppdu_pktlog_process(stru
+ 	struct ath12k_pktlog_hdr hdr;
+ 	struct ath12k_pktlog_hdr_arg hdr_arg;
+ 
+-	if  (!ar->debug.is_pkt_logging)
+-		return;
+-
+ 	hdr.flags = (1 << PKTLOG_FLG_FRM_TYPE_REMOTE_S);
+ 	hdr.missed_cnt = 0;
+ 	hdr.log_type = ATH12K_PKTLOG_TYPE_PPDU_STATS;
+@@ -564,9 +575,6 @@ void ath12k_rx_stats_buf_pktlog_process(
+ 	struct ath12k_pktlog_hdr hdr;
+ 	struct ath12k_pktlog_hdr_arg hdr_arg;
+ 
+-	if  (!ar->debug.is_pkt_logging)
+-		return;
+-
+ 	hdr.flags = (1 << PKTLOG_FLG_FRM_TYPE_REMOTE_S);
+ 	hdr.missed_cnt = 0;
+ 	hdr.log_type = log_type;
+--- a/drivers/net/wireless/ath/ath12k/pktlog.h
++++ b/drivers/net/wireless/ath/ath12k/pktlog.h
+@@ -29,6 +29,12 @@ enum {
+ 	PKTLOG_FLG_FRM_TYPE_UNKNOWN_S
+ };
+ 
++enum ath12k_pktlog_mode {
++	ATH12K_PKTLOG_DISABLED = 0,
++	ATH12K_PKTLOG_MODE_LITE = 1,
++	ATH12K_PKTLOG_MODE_FULL = 2,
++};
++
+ struct ath12k_pktlog_hdr_arg {
+ 	u16 log_type;
+ 	u8 *payload;

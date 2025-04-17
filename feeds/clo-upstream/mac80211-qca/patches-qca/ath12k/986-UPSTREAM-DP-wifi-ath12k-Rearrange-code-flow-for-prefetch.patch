@@ -24,7 +24,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
-@@ -857,7 +857,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+@@ -852,7 +852,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
  				 struct sk_buff *msdu,
  				 int tcl_data_ring_id, int htt_status,
  				 u8 mac_id, struct ath12k_tx_desc_info *tx_desc,
@@ -33,7 +33,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  {
  	struct ieee80211_tx_info *info;
  	struct ath12k_skb_cb *skb_cb;
-@@ -870,6 +870,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+@@ -865,6 +865,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
  	struct htt_tx_wbm_completion *status_desc;
  	struct ath12k_link_vif *arvif;
  	int ack_rssi;
@@ -41,7 +41,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	u8 flags = 0;
  	u8 link_id;
  
-@@ -939,6 +940,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+@@ -925,6 +926,7 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
  	}
  
  	if (unlikely(ath12k_debugfs_is_sawf_stats_enabled(ar))) {
@@ -49,7 +49,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  		spin_lock_bh(&ab->base_lock);
  		ath12k_dp_tx_status_parse(ab, desc, &ts_status);
  		peer = ath12k_peer_find_pri_by_id(ab, ts_status.peer_id);
-@@ -959,17 +961,21 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
+@@ -945,17 +947,21 @@ ath12k_dp_tx_htt_tx_complete_buf(struct
  
  static void
  ath12k_dp_tx_process_htt_tx_complete(struct ath12k_base *ab,
@@ -75,7 +75,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  
  		break;
  	case HAL_WBM_REL_HTT_TX_COMP_STATUS_DROP:
-@@ -1125,16 +1131,15 @@ err_out:
+@@ -1110,16 +1116,15 @@ err_out:
  	rcu_read_unlock();
  }
  
@@ -95,7 +95,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	struct ieee80211_tx_info *info;
  	struct ath12k_skb_cb *skb_cb;
  	struct ath12k_peer *peer;
-@@ -1145,6 +1150,9 @@ static void ath12k_dp_tx_complete_msdu(s
+@@ -1130,6 +1135,9 @@ static void ath12k_dp_tx_complete_msdu(s
  	struct sk_buff *skb_ext_desc;
  	struct ieee80211_vif *vif;
  	struct ath12k_vif *ahvif;
@@ -105,7 +105,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	u8 flags = 0;
  	u8 link_id;
  	bool sawf_stats_update = false;
-@@ -1158,6 +1166,7 @@ static void ath12k_dp_tx_complete_msdu(s
+@@ -1143,6 +1151,7 @@ static void ath12k_dp_tx_complete_msdu(s
  	if (unlikely(skb_ext_desc))
  		dev_kfree_skb_any(skb_ext_desc);
  
@@ -113,7 +113,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	if (unlikely(!rcu_access_pointer(ab->pdevs_active[ar->pdev_idx]))) {
                  ieee80211_free_txskb(ar->ah->hw, msdu);
                  return;
-@@ -1196,6 +1205,8 @@ static void ath12k_dp_tx_complete_msdu(s
+@@ -1181,6 +1190,8 @@ static void ath12k_dp_tx_complete_msdu(s
  	info = IEEE80211_SKB_CB(msdu);
  	memset(&info->status, 0, sizeof(info->status));
  
@@ -122,7 +122,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	/* skip tx rate update from ieee80211_status*/
  	info->status.rates[0].idx = -1;
  
-@@ -1325,6 +1336,8 @@ unlock:
+@@ -1310,6 +1321,8 @@ unlock:
  		ieee80211_vif_is_mesh(vif))
  		status.skip_per_packet_metric_update = true;
  
@@ -131,7 +131,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  
  	if (unlikely(ath12k_debugfs_is_extd_tx_stats_enabled(ar))) {
  		if(arsta->wbm_tx_stats && wbm_status < HAL_WBM_REL_HTT_TX_COMP_STATUS_MAX)
-@@ -1605,7 +1618,6 @@ int ath12k_dp_tx_completion_handler(stru
+@@ -1587,7 +1600,6 @@ int ath12k_dp_tx_completion_handler(stru
  	int valid_entries;
  	int orig_budget = budget;
  	struct hal_wbm_completion_ring_tx *tx_status;
@@ -139,7 +139,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	enum hal_wbm_rel_src_module buf_rel_source;
  	struct sk_buff_head free_list_head;
  	int dp_tx_dec_count[MAX_RADIOS] = {0};
-@@ -1637,10 +1649,9 @@ int ath12k_dp_tx_completion_handler(stru
+@@ -1621,10 +1633,9 @@ int ath12k_dp_tx_completion_handler(stru
  		buf_rel_source = FIELD_GET(HAL_WBM_COMPL_TX_INFO0_REL_SRC_MODULE, tx_status->info0);
  		ab->soc_stats.tx_wbm_rel_source[buf_rel_source]++;
  
@@ -152,7 +152,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  			ab->soc_stats.fw_tx_status[htt_status]++;
  			/* Dont consider HTT_TX_COMP_STATUS_MEC_NOTIFY */
  			if (htt_status == HAL_WBM_REL_HTT_TX_COMP_STATUS_MEC_NOTIFY)
-@@ -1664,18 +1675,11 @@ int ath12k_dp_tx_completion_handler(stru
+@@ -1648,18 +1659,11 @@ int ath12k_dp_tx_completion_handler(stru
  			continue;
  		}
  
@@ -174,7 +174,7 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  		if (unlikely(!msdu)) {
  			ab->soc_stats.null_tx_complete[data_ring_id]++;
  
-@@ -1692,26 +1696,19 @@ int ath12k_dp_tx_completion_handler(stru
+@@ -1676,34 +1680,31 @@ int ath12k_dp_tx_completion_handler(stru
  		prefetch( (u8 *) msdu + 64);
  
  		if (unlikely(buf_rel_source == HAL_WBM_REL_SRC_MODULE_FW)) {
@@ -188,13 +188,12 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
 -							     timestamp, htt_status);
 +							     tx_desc);
  			continue;
--		}
--
+ 		}
+ 
 -		ar = ab->pdevs[mac_id].ar;
 -
 -		dp_tx_dec_count[mac_id]++;
-+                }
- 
+-
  		if (unlikely(WARN_ON_ONCE(buf_rel_source != HAL_WBM_REL_SRC_MODULE_TQM))) {
  			/* Must not happen */
  			continue;
@@ -202,12 +201,10 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  
 -		ab->soc_stats.tx_completed[data_ring_id]++;
 -
- #ifdef CPTCFG_ATH12K_MEM_PROFILE_512M
- 		skb_cb = (struct ath12k_skb_cb *)&IEEE80211_SKB_CB(msdu)->driver_data;
- 		flags = skb_cb->flags;
-@@ -1724,9 +1721,13 @@ int ath12k_dp_tx_completion_handler(stru
- #endif
- 		} else {
+ 		/* Free skb here if stats is disabled */
+ 		if (ab->stats_disable && tx_desc->flags & DP_TX_DESC_FLAG_FAST)
+ 			__skb_queue_head(&free_list_head, msdu);
+ 		else {
  
 -			ath12k_dp_tx_complete_msdu(ar, msdu, tx_status, buf_rel_source,
 -						   tx_desc, timestamp, htt_status);
@@ -221,30 +218,26 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	}
  	ath12k_hal_srng_access_dst_ring_end_nolock(status_ring);
  
-@@ -1737,6 +1738,10 @@ int ath12k_dp_tx_completion_handler(stru
+@@ -1714,6 +1715,8 @@ int ath12k_dp_tx_completion_handler(stru
  		ath12k_dp_tx_decrement_by_count(ar,ab,dp_tx_dec_count[i]);
  	}
  
-+#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
-+       dev_kfree_skb_list_fast(&free_list_head);
-+#endif
++	dev_kfree_skb_list_fast(&free_list_head);
 +
  	spin_lock_bh(&dp->tx_desc_lock[ring_id]);
  	list_for_each(cur, &desc_free_list) {
  		tx_desc = list_entry(cur, struct ath12k_tx_desc_info, list);
-@@ -1746,9 +1751,6 @@ int ath12k_dp_tx_completion_handler(stru
- 	}
+@@ -1724,7 +1727,6 @@ int ath12k_dp_tx_completion_handler(stru
  	list_splice_tail(&desc_free_list, &dp->tx_desc_free_list[ring_id]);
  	spin_unlock_bh(&dp->tx_desc_lock[ring_id]);
--#ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ 
 -	dev_kfree_skb_list_fast(&free_list_head);
--#endif
  	return (orig_budget - budget);
  }
  
 --- a/drivers/net/wireless/ath/ath12k/hal.c
 +++ b/drivers/net/wireless/ath/ath12k/hal.c
-@@ -1900,7 +1900,7 @@ ath12k_hal_srng_dst_prefetch_reo_desc(st
+@@ -1904,7 +1904,7 @@ ath12k_hal_srng_dst_prefetch_reo_desc(st
  u32 *ath12k_hal_srng_dst_get_next_cache_entry(struct ath12k_base *ab,
                                                struct hal_srng *srng)
  {

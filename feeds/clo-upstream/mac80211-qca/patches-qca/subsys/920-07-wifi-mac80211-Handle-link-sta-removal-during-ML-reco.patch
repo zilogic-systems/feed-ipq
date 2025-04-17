@@ -95,7 +95,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	int ret;
  
  	sdata_lock(sdata);
-@@ -5781,6 +5783,22 @@ static void ieee80211_ml_reconf_work(str
+@@ -5781,6 +5783,18 @@ static void ieee80211_ml_reconf_work(str
  		   "MLO Reconfiguration: work: valid=0x%x, removed=0x%x\n",
  		   sdata->vif.valid_links, sdata->u.mgd.removed_links);
  
@@ -103,10 +103,6 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
 +		if (sdata != sta->sdata)
 +			continue;
 +
-+		/* WAR: Until primary umac_migration is supported, disassoc the
-+		 * entire MLD association if the link getting removed is
-+		 * primary link in driver
-+		 */
 +		if (drv_check_removed_link_is_primary(local, sta,
 +						      sdata->u.mgd.removed_links)) {
 +			___ieee80211_disconnect(sdata);
@@ -118,7 +114,7 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  	new_valid_links = sdata->vif.valid_links & ~sdata->u.mgd.removed_links;
  	if (new_valid_links == sdata->vif.valid_links) {
  		sdata_unlock(sdata);
-@@ -5818,9 +5836,18 @@ static void ieee80211_ml_reconf_work(str
+@@ -5818,9 +5832,18 @@ static void ieee80211_ml_reconf_work(str
  		sdata_info(sdata, "Failed setting valid links\n");
  
  out:
@@ -233,3 +229,42 @@ Signed-off-by: Manish Dharanenthiran <quic_mdharane@quicinc.com>
  
  void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta);
  void ieee80211_sta_ps_deliver_poll_response(struct sta_info *sta);
+--- a/net/mac80211/driver-ops.c
++++ b/net/mac80211/driver-ops.c
+@@ -559,6 +559,7 @@ int drv_change_sta_links(struct ieee8021
+ {
+ 	struct sta_info *info = container_of(sta, struct sta_info, sta);
+ 	struct link_sta_info *link_sta;
++	struct ieee80211_vif *vif = &sdata->vif;
+ 	unsigned long links_to_add;
+ 	unsigned long links_to_rem;
+ 	unsigned int link_id;
+@@ -569,8 +570,17 @@ int drv_change_sta_links(struct ieee8021
+ 	if (!check_sdata_in_driver(sdata))
+ 		return -EIO;
+ 
+-	old_links &= sdata->vif.active_links;
+-	new_links &= sdata->vif.active_links;
++	if (vif->type == NL80211_IFTYPE_AP_VLAN) {
++		struct wireless_dev *wdev = ieee80211_vif_to_wdev(vif);
++		/* Update parent vif for further use when vif type is AP/VLAN */
++		vif = wdev_to_ieee80211_vif_vlan(wdev, false);
++
++		if (!vif)
++			return -EINVAL;
++	}
++
++	old_links &= vif->active_links;
++	new_links &= vif->active_links;
+ 
+ 	if (old_links == new_links)
+ 		return 0;
+@@ -587,7 +597,7 @@ int drv_change_sta_links(struct ieee8021
+ 
+ 	trace_drv_change_sta_links(local, sdata, sta, old_links, new_links);
+ 	if (local->ops->change_sta_links)
+-		ret = local->ops->change_sta_links(&local->hw, &sdata->vif, sta,
++		ret = local->ops->change_sta_links(&local->hw, vif, sta,
+ 						   old_links, new_links);
+ 	trace_drv_return_int(local, ret);
+ 

@@ -1,0 +1,1828 @@
+From 26687a888512aec0bea7eb00b72580a127d9e3a9 Mon Sep 17 00:00:00 2001
+From: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
+Date: Fri, 7 Feb 2025 15:59:19 -0800
+Subject: [PATCH] QSDK:CP: wifi: ath12k: 11s MLO Test framework implementation
+
+This commit implements host driver changes to validate firmware
+support for the 11s Mesh MLO use case. It handles two
+independent SLO Mesh VAPs on different bands in userspace and
+configures them as MLO VAPs within the driver. Currently, only
+open security is supported, with secure mode support to be
+added in future patches.
+
+The framework includes the following features:
+1. Handles mesh operations from userspace, adding MLO parameters
+   via custom debugfs, and follows the MLO sequence for
+   interface bring up and bring down.
+2. Follows the peer creation and association sequences, adding
+   partner link information as expected by the firmware for MLO
+   connections.
+3. Manages address translation and primary UMAC selection for
+   traffic.
+4. Uses the compilation flag `CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO`,
+   which is disabled by default.
+
+Configurations for 2-link MLO in 2-node mesh:
+
+1. Enable `ATH12K_TEST_FW_FOR_11S_MLO` in make menuconfig and recompile.
+2. Define MAC addresses to be used intesting in the following format
+   on both mesh nodes. For Node1, link_sta will be Node2' netdevices
+   and viceversa.
+
+    echo "<link_sta1_mac> <link_id1> <link_idx1> <vdev_id1> <is_primary_link1> <is_assoc_link1>
+    <link_sta2_mac> <link_id2> <link_idx2> <vdev_id2> <is_primary_link2> <is_assoc_link2> <sta_mld_mac>
+    <iface_mld_mac>" > /sys/kernel/debug/ath12k/qcn9274\ hw2.0_0001:01:00.0/test_mlo_mesh
+
+3. Define MAC addresses for two independent Mesh VAPs on two bands
+   in `/etc/config/wireless` using `option macaddr`. MLD address is
+   picked from the above debugfs.
+4. Block beacons until both VAPs come up:
+        echo "block" > /sys/kernel/debug/ath12k/qcn9274\ hw2.0_0001:01:00.0/tmm_options
+5. Bring up WiFi.
+6. Wait until both independent SLO Mesh VAPs come up.
+7. Enable beacons on both Mesh nodes and wait for association:
+        echo "enable" > /sys/kernel/debug/ath12k/qcn9274\ hw2.0_0001:01:00.0/tmm_options
+8. Keep only primay link's netdevice under the bridge and remove the other:
+        brctl delif br-lan phy00.0-0
+9. Assign IP to br-lan interface
+10. Test ping.
+
+Patch-dependency: none
+
+Signed-off-by: Ganesh Kariganuru Mahabalesh <quic_gkarigan@quicinc.com>
+Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/debugfs.c     |   4 +
+ drivers/net/wireless/ath/ath12k/dp_mon.c      |  11 +
+ drivers/net/wireless/ath/ath12k/dp_rx.c       |  13 +-
+ drivers/net/wireless/ath/ath12k/mac.c         | 139 ++-
+ drivers/net/wireless/ath/ath12k/peer.c        |  16 +
+ .../net/wireless/ath/ath12k/test_mlo_mesh.c   | 962 ++++++++++++++++++
+ .../net/wireless/ath/ath12k/test_mlo_mesh.h   | 252 +++++
+ drivers/net/wireless/ath/ath12k/wmi.c         |  13 +
+ 8 files changed, 1407 insertions(+), 3 deletions(-)
+ create mode 100644 drivers/net/wireless/ath/ath12k/test_mlo_mesh.c
+ create mode 100644 drivers/net/wireless/ath/ath12k/test_mlo_mesh.h
+
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -20,6 +20,7 @@
+ #include "ppe.h"
+ #include "ahb.h"
+ #include "dp_mon.h"
++#include "test_mlo_mesh.h"
+ 
+ static struct dentry *debugfs_ath12k;
+ 
+@@ -3586,6 +3587,9 @@ int ath12k_debugfs_pdev_create(struct at
+ 		debugfs_create_file("ppeds_stats", 0600, ab->debugfs_soc, ab,
+ 				    &fops_ppeds_stats);
+ #endif
++
++	ath12k_11s_mlo_testing_debugfs_init(ab);
++
+ 	return 0;
+ }
+ 
+--- a/drivers/net/wireless/ath/ath12k/dp_mon.c
++++ b/drivers/net/wireless/ath/ath12k/dp_mon.c
+@@ -9,6 +9,7 @@
+ #include "dp_rx.h"
+ #include "dp_tx.h"
+ #include "peer.h"
++#include "test_mlo_mesh.h"
+ 
+ #define ATH12K_LE32_DEC_ENC(value, decode_bits, encode_bits) \
+ 	le32_encode_bits(le32_get_bits(value, decode_bits), encode_bits)
+@@ -2305,6 +2306,16 @@ static void ath12k_dp_mon_rx_deliver_msd
+ 		rx_status->flag |= RX_FLAG_8023;
+ 
+ 	ar->dp_mon_stats.skb_to_mac80211++;
++
++/* This section is intentionally defined within a compile flag to
++ * avoid any performance impact
++ */
++#ifdef CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO
++	if (ath12k_11s_mlo_testing_is_drop_packet()) {
++		dev_kfree_skb_any(msdu);
++		return;
++	}
++#endif
+ 	ieee80211_rx_napi(ar->ah->hw, pubsta, msdu, napi);
+ }
+ 
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -29,7 +29,7 @@
+ #include "fse.h"
+ #include <ppe_drv_sc.h>
+ #endif
+-
++#include "test_mlo_mesh.h"
+ 
+ #define ATH12K_DP_RX_FRAGMENT_TIMEOUT_MS (2 * HZ)
+ 
+@@ -3971,6 +3971,17 @@ static void ath12k_dp_rx_deliver_msdu(st
+ 	    !(is_mcbc && rx_status->flag & RX_FLAG_DECRYPTED))
+ 		rx_status->flag |= RX_FLAG_8023;
+ 
++/* This section is intentionally defined within a compile flag to
++ * avoid any performance impact
++ */
++#ifdef CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO
++	if (ath12k_11s_mlo_testing_is_drop_packet()) {
++		rcu_read_unlock();
++		dev_kfree_skb_any(msdu);
++		return;
++	}
++#endif
++
+ 	ieee80211_rx_napi(ar->ah->hw, pubsta, msdu, napi);
+ 
+ 	if (ath12k_debugfs_is_extd_rx_stats_enabled(ar)) {
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -26,6 +26,7 @@
+ #include "debugfs_sta.h"
+ #include "ppe.h"
+ #include "vendor_services.h"
++#include "test_mlo_mesh.h"
+ 
+ #define IEEE80211_EHT_PPE_THRES_NSS_POS                        0
+ #define IEEE80211_EHT_PPE_THRES_NSS_MASK               0xf
+@@ -1192,6 +1193,10 @@ bool ath12k_mac_is_ml_arvif(struct ath12
+ 	if (ahvif->vif->valid_links & BIT(arvif->link_id))
+ 		return true;
+ 
++	if (arvif->link_id != ATH12K_DEFAULT_SCAN_LINK &&
++	    ath12k_11s_mlo_testing_is_ml_vif(ahvif))
++		return true;
++
+ 	return false;
+ }
+ 
+@@ -4240,6 +4245,9 @@ static void ath12k_peer_assoc_prepare(st
+ 	ath12k_peer_assoc_h_smps(arsta, arg, link_sta);
+ 	ath12k_peer_assoc_h_mlo(arsta, arg);
+ 
++	/* keep after ath12k_peer_assoc_h_mlo */
++	ath12k_11s_mlo_testing_fill_peer_assoc_h_mlo(arvif->ahvif, arsta, arg);
++
+ 	arsta->peer_nss = arg->peer_nss;
+ 
+ 	WARN_ON_ONCE(arsta->peer_nss < 1 ||
+@@ -7687,6 +7695,8 @@ static int ath12k_station_disassoc(struc
+ 
+ 	spin_unlock_bh(&arvif->ar->data_lock);
+ 
++	ath12k_11s_mlo_testing_notify_peer_disassoc_h_mlo(arvif->ahvif, arsta);
++
+ 	if (link_sta)
+ 		ath12k_mac_vendor_send_disassoc_event(arsta, link_sta);
+ 	if (!sta->wme) {
+@@ -8328,6 +8338,7 @@ static int ath12k_mac_station_add(struct
+ 		}
+ 	}
+ 
++	ath12k_11s_mlo_testing_update_peer_create_arg(ahvif, &peer_param);
+ 	ret = ath12k_peer_create(ar, arvif, sta, &peer_param);
+ 	if (ret) {
+ 		ath12k_warn(ab, "Failed to add peer: %pM for VDEV: %d\n",
+@@ -9312,6 +9323,104 @@ send_dp_tx_event:
+ 					   src_info, ret);
+ }
+ 
++/* This section is intentionally defined within mac.c as it use  many ath12k mac static functions */
++#ifdef CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO
++static int
++ath12k_11s_mlo_testing_handle_sta_state_transitions(struct ath12k_hw *ah,
++						    struct ath12k_vif *ahvif,
++						    struct ieee80211_sta *sta,
++						    enum ieee80211_sta_state old_state,
++						    enum ieee80211_sta_state new_state)
++{
++	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
++	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
++	struct ath12k_link_vif *arvif;
++	struct ath12k_link_sta *arsta;
++	u8 link_id = 0;
++	int ret;
++
++	lockdep_assert_held(&ah->conf_mutex);
++
++	/* Proceed with regular flow if
++	 *	1. feature is disabled
++	 *	2. VAP is not MESH TYPE
++	 *	3. not MLO STA as per preconfigured debugfs entries
++	 *	4. netdevice is going down
++	 */
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    !ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(sta->addr) ||
++	    wdev->is_netdev_going_down)
++		return 0;
++
++	/* Dont allow 11S MLO STA state changes before all VAPS comes up or
++	 *	beacons enabled on DP RX
++	 */
++	if (!ath12k_11s_mlo_testing_are_all_vaps_up() || ath12k_block_mesh_beacon_rx)
++		return -EBUSY;
++
++	/* First time NOEXIST <-> NONE transitions are handled in regular path */
++	if ((old_state == IEEE80211_STA_NONE && new_state == IEEE80211_STA_NOTEXIST) ||
++	    (old_state == IEEE80211_STA_NOTEXIST && new_state == IEEE80211_STA_NONE)) {
++		if (!ath12k_11s_mlo_testing_peer_already_created(sta->addr)) {
++			ath12k_11s_mlo_testing_free_ptk(sta->addr);
++			return 0;
++		}
++	}
++
++	/*
++	 * Ensure not to delete MLO Mesh peers from firmware when connection is unstable
++	 * as each sta may have different state in upper layers and syncronizations
++	 * is difficult to handle due to firmware requirements.
++	 * TODO: handle single STA entry from upper layers and add link peer from ath12k
++	 */
++	if (old_state == IEEE80211_STA_NONE && new_state == IEEE80211_STA_NOTEXIST) {
++		arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
++		arsta = ahsta->link[link_id];
++		if (!arvif || !arsta)
++			return -EINVAL;
++
++		mutex_lock(&arvif->ar->conf_mutex);
++		ath12k_11s_mlo_testing_mac_station_remove(arvif->ar, arvif, arsta);
++		mutex_unlock(&arvif->ar->conf_mutex);
++
++		ath12k_mac_unassign_link_sta(ah, ahsta, link_id);
++
++		/* bypass rest of ath12k_mac_update_sta_state */
++		return 1;
++	}
++
++	/* if peer entry is already present in firmware, skip only that part */
++	if (old_state == IEEE80211_STA_NOTEXIST && new_state == IEEE80211_STA_NONE) {
++		INIT_WORK(&ahsta->set_4addr_wk, ath12k_sta_set_4addr_wk);
++		ath12k_mac_assign_link_sta(ah, ahsta, &ahsta->deflink,
++					   ahvif, link_id);
++
++		arvif = ath12k_get_arvif_from_link_id(ahvif, link_id);
++		arsta = ahsta->link[link_id];
++		if (!arvif || !arsta)
++			return -EINVAL;
++
++		mutex_lock(&arvif->ar->conf_mutex);
++		ret = ath12k_11s_mlo_testing_mac_station_add(arvif->ar, arvif, arsta);
++		if (ret) {
++			ath12k_warn(NULL,
++				    "11S MLO TEST: Failed to add station NOTEXIST-->NONE for %pM\n",
++				    sta->addr);
++			return ret;
++		}
++		INIT_WORK(&arsta->update_wk, ath12k_sta_rc_update_wk);
++		mutex_unlock(&arvif->ar->conf_mutex);
++
++		/* bypass rest of ath12k_mac_update_sta_state */
++		return 1;
++	}
++
++	/* when unsure always rest of ath12k_mac_update_sta_state process sta state */
++	return 0;
++}
++#endif
++
+ /*
+  * FIXME: Refactor this function based on clean code principle
+  * mac80211 warns on any error during state transition.
+@@ -9341,6 +9450,18 @@ int ath12k_mac_update_sta_state(struct i
+ 
+ 	mutex_lock(&ah->conf_mutex);
+ 
++	/* This fucntion return 1 or error when ath12k_mac_update_sta_state
++	 * must be bypassed. */
++	ret = ath12k_11s_mlo_testing_handle_sta_state_transitions(ah, ahvif, sta,
++								  old_state, new_state);
++	if (ret) {
++		/* reset return value to 0 so that mac80211 doesn't warn */
++		if (ret == 1)
++			ret = 0;
++		mutex_unlock(&ah->conf_mutex);
++		return ret;
++	}
++
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ 	if (!ahsta->ppe_vp_num)
+ 		ahsta->ppe_vp_num = ahvif->ppe_vp_num;
+@@ -9611,8 +9732,13 @@ static int ath12k_mac_op_sta_state(struc
+ 				   enum ieee80211_sta_state old_state,
+ 				   enum ieee80211_sta_state new_state)
+ {
+-	return ath12k_mac_update_sta_state(hw, vif, sta, old_state,
+-					   new_state);
++	int ret = 0;
++
++	ath12k_11s_mlo_testing_notify_peer_state(sta->addr, new_state, 0);
++	ret = ath12k_mac_update_sta_state(hw, vif, sta, old_state, new_state);
++	ath12k_11s_mlo_testing_notify_peer_state(sta->addr, new_state, 1);
++
++	return ret;
+ }
+ 
+ void ath12k_mac_assign_middle_link_id(struct ieee80211_sta *sta,
+@@ -11754,6 +11880,14 @@ static void ath12k_mac_op_tx(struct ieee
+ 		}
+ 	} else {
+ 		link = 0;
++
++/* This section is intentionally defined within a compile flag to avoid any performance impact */
++#ifdef CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO
++		link_id = 0;
++		arvif = rcu_dereference(ahvif->link[link_id]);
++		ath12k_11s_mlo_testing_handle_tx_skb((arvif && arvif->ar) ?
++						     arvif->ar->ab : NULL, vif, skb);
++#endif
+ 	}
+ 
+ 	/* TODO: Holding RCU lock for such a big function is not required, may
+@@ -12784,6 +12918,8 @@ static int ath12k_mac_setup_vdev_create_
+ 			   arg->mld_addr, arvif->vdev_id, arvif->addr);
+ 	}
+ 
++	ath12k_11s_mlo_testing_update_vdev_create_arg(arvif, arg);
++
+ 	return 0;
+ }
+ 
+@@ -14401,6 +14537,9 @@ static int ath12k_mac_vdev_start_restart
+ 		   arg.vdev_id, arg.channel.freq,
+ 		   ath12k_mac_phymode_str(arg.channel.mode), arg.punct_bitmap);
+ 
++	if (!restart)
++		ath12k_11s_mlo_testing_update_vdev_start_mlo_arg(ahvif, arvif, &arg.ml);
++
+ 	ret = ath12k_wmi_vdev_start(ar, &arg, restart);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to %s WMI vdev %i\n",
+@@ -16575,6 +16714,8 @@ ath12k_mac_assign_vif_chanctx_handle(str
+ 
+ 	/* TODO: Setup ps and cts/rts protection */
+ 
++	ath12k_11s_mlo_testing_notify_add_interface(vif, arvif, link_conf->addr);
++
+ out:
+ 	mutex_unlock(&ar->conf_mutex);
+ 
+@@ -16757,6 +16898,9 @@ stop_primary:
+ 
+ 	arvif->is_started = false;
+ 
++	/*keep this after is_started = true*/
++	ath12k_11s_mlo_testing_notify_remove_interface(vif, arvif);
++
+ 	peer = ath12k_peer_find_by_vdev_id(ab, arvif->vdev_id);
+ 	if (ahvif->vdev_type == WMI_VDEV_TYPE_STA && peer) {
+ 		if (ath12k_mac_is_bridge_vdev(arvif))
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -10,6 +10,7 @@
+ #ifdef CPTCFG_MAC80211_PPE_SUPPORT
+ #include "ppe.h"
+ #endif
++#include "test_mlo_mesh.h"
+ 
+ struct ath12k_ml_peer *ath12k_ml_peer_find_by_id(struct ath12k_hw *ah,
+ 						 u16 ml_peer_id)
+@@ -666,6 +667,9 @@ static int __ath12k_peer_delete(struct a
+ 		ath12k_dp_tx_ppeds_cfg_astidx_cache_mapping(ab, arvif, false);
+ 	}
+ 
++	if (ath12k_11s_mlo_testing_skip_peer_delete_wait(arvif->ahvif, ar, addr))
++		return 0;
++
+ 	ret = ath12k_wait_for_peer_delete_done(ar, vdev_id, addr);
+ 	if (ret)
+ 		return ret;
+@@ -895,6 +899,10 @@ int ath12k_peer_create(struct ath12k *ar
+ 			    arg->peer_addr, ar->pdev_idx, peer->vdev_id);
+ 		spin_unlock_bh(&ab->base_lock);
+ 		mutex_unlock(&ab->tbl_mtx_lock);
++
++		if (ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(sta->addr))
++			goto peer_created;
++
+ 		return -EINVAL;
+ 	}
+ 
+@@ -936,6 +944,10 @@ int ath12k_peer_create(struct ath12k *ar
+ 	if (ret)
+ 		return ret;
+ 
++peer_created:
++	/* Update peer entry in 11s MLO Testing framweork */
++	ath12k_11s_mlo_testing_peer_create_notify(ar, arvif, arsta, arg);
++
+ 	mutex_lock(&ab->tbl_mtx_lock);
+ 	spin_lock_bh(&ab->base_lock);
+ 
+@@ -1059,6 +1071,10 @@ int ath12k_peer_create(struct ath12k *ar
+ 			peer->ml_peer_id = ATH12K_MLO_PEER_ID_INVALID;
+ 			peer->mlo = false;
+ 		}
++
++		/* Overwirte peer ml param for 11s MLO Testing purposes */
++		ath12k_11s_mlo_testing_fill_ml_peer_param(ab, arvif->ahvif,
++							  peer, ar->pdev_idx);
+ 	}
+ 
+ 	rcu_assign_pointer(ab->peer_list[peer_id], peer);
+--- /dev/null
++++ b/drivers/net/wireless/ath/ath12k/test_mlo_mesh.c
+@@ -0,0 +1,1110 @@
++// SPDX-License-Identifier: BSD-3-Clause-Clear
++/*
++ * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
++ */
++
++#include "mac.h"
++#include "debug.h"
++#include "dp_rx.h"
++#include "peer.h"
++#include "test_mlo_mesh.h"
++#include <linux/module.h>
++#include <linux/skbuff.h>
++#include <linux/ip.h>
++#include <linux/if_arp.h>
++#include <uapi/linux/icmp.h>
++#include <linux/spinlock.h>
++
++/*
++ * NOTE: In 11s MLO testing, two independent SLO stations, as seen by upper
++ * layers, are manipulated to become MLO STA within driver/Firmware/Hardware.
++ * TODO: make single STA from userspace and add additional MLO VAP within
++ *	the framework using device band capabilities.
++ */
++
++/* number of arguments in debugfs for passing config */
++#define ATH12K_11S_MLO_TEST_NUM_ARGS 34
++
++/* Maximum number of MLO mesh interfaces framework currently supports */
++#define ATH12K_NUM_11S_MLO_IFACES 2
++
++/* Maximum number of MLO mesh interfaces framework currently supports */
++#define ATH12K_NUM_11S_MLO_STA_LINKS 2
++
++struct ath12k_11s_mlo_testing_interfaces {
++	struct net_device *dev;
++	struct ath12k_link_vif *arvif;
++	struct ieee80211_vif *vif;
++	u32 vdev_id;
++	u16 hw_link_id;
++	u8 addr[ETH_ALEN] __aligned(2);
++	enum nl80211_band band;
++	struct ath12k_11s_mlo_testing_link_sta_info *link_sta;
++};
++
++struct ath12k_11s_mlo_testing_link_sta_info {
++	u8 addr[ETH_ALEN];
++	u8 link_id;
++	u8 link_idx;
++	u8 vdev_id;
++	u8 is_primary_link;
++	u8 is_assoc_link;
++	u8 hw_link_id;
++	u8 peer_create_sent;
++	u8 peer_assoc_sent;
++	struct ath12k *ar;
++	struct ath12k_link_vif *arvif;
++	struct ath12k_link_sta *arsta;
++	u8 mld_addr[ETH_ALEN];
++	u8 is_authorized;
++	enum ieee80211_sta_state state;
++};
++
++/* Used to block Mesh beacons from MGMT RX path. Helps preventing associations
++ * until all MLO VAP are up and running.
++ */
++int ath12k_block_mesh_beacon_rx;
++
++/* Disable address translations done specifically for 11S MLO test framework */
++int ath12k_11s_mlo_testing_disable_addr_trans;
++
++/* Uses predefined GTK and PTK 16 byte keys for debugging only */
++int use_predef_keys;
++
++/* Protects 11s mlo sta states maintained locally */
++static DEFINE_SPINLOCK(state_change_lock);
++
++/* number of link sta entries */
++static int num_sta_entries;
++
++/* 11s Link VAPS */
++struct ath12k_11s_mlo_testing_interfaces ath12k_11s_mlo_ifaces[3];
++
++/* number of 11s Link VAPS. used for debug and syncronizations */
++static int num_mlo_vaps;
++
++/* 11S MLO Mesh Node's mld_address. can be initialized using debufs */
++static u8 global_iface_mld_addr[ETH_ALEN];
++
++/* Indentify STA state transitions */
++static bool state_change_in_progress;
++
++/* Identify primary MAC's array index among ath12k_11s_mlo_ifaces */
++static int ath12k_11s_mlo_test_primary_link_iface_idx = -1;
++
++/*
++ * Module parameter to enable the feature.
++ */
++bool ath12k_11s_mlo_testing_enable;
++module_param_named(11smlo_test_framework, ath12k_11s_mlo_testing_enable, bool, 0444);
++MODULE_PARM_DESC(fse, "Enable Test Framework support for 11s MLO (Default: false)");
++
++/* Default initialization of 11s MLO link STAs. can be replaced using debugfs */
++struct ath12k_11s_mlo_testing_link_sta_info link_sta_info[2] = {
++	{
++		.addr = {0x00, 0x03, 0x7f, 0x25, 0xaa, 0x11},
++		.link_id = 0,
++		.link_idx = 0,
++		.vdev_id = 0,
++		.is_primary_link = 0,
++		.is_assoc_link = false,
++		.hw_link_id = 0,
++		.ar = NULL,
++		.arvif = NULL,
++		.arsta = NULL,
++		.is_authorized = 0,
++		.peer_create_sent = 0,
++	},
++	{
++		.addr = {0x00, 0x03, 0x7f, 0x25, 0xaa, 0x22},
++		.link_id = 1,
++		.link_idx = 1,
++		.vdev_id = 0,
++		.is_primary_link = 1,
++		.is_assoc_link = true,
++		.hw_link_id = 1,
++		.ar = NULL,
++		.arvif = NULL,
++		.arsta = NULL,
++		.is_authorized = 0,
++		.peer_create_sent = 0,
++	}
++};
++
++inline u8 ath12k_11s_mlo_testing_are_all_vaps_up(void)
++{
++	if (!ath12k_11s_mlo_testing_enable)
++		return true;
++
++	return ((num_mlo_vaps == 2) ? 1 : 0);
++}
++
++inline bool ath12k_11s_mlo_testing_is_ml_vif(struct ath12k_vif *ahvif)
++{
++	if (ath12k_11s_mlo_testing_enable &&
++	    ahvif->vif->type == NL80211_IFTYPE_MESH_POINT)
++		return true;
++
++	return false;
++}
++
++inline bool ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(const u8 *addr)
++{
++	int idx;
++
++	if (!ath12k_11s_mlo_testing_enable)
++		return false;
++
++	for (idx = 0; idx < ATH12K_NUM_11S_MLO_STA_LINKS; idx++) {
++		if (memcmp(link_sta_info[idx].addr, addr, ETH_ALEN) == 0)
++			return true;
++	}
++	return false;
++}
++
++inline void
++ath12k_11s_mlo_testing_notify_peer_state(const u8 *addr,
++					 enum ieee80211_sta_state state,
++					 u8 after)
++{
++	unsigned long flags;
++	int link_sta_idx;
++
++	if (!ath12k_11s_mlo_testing_enable)
++		return;
++
++	spin_lock_irqsave(&state_change_lock, flags);
++	for (link_sta_idx = 0; link_sta_idx < ATH12K_NUM_11S_MLO_STA_LINKS;
++	     link_sta_idx++) {
++		if (memcmp(link_sta_info[link_sta_idx].addr, addr, ETH_ALEN) == 0) {
++			link_sta_info[link_sta_idx].state = state;
++			break;
++		}
++	}
++
++	if (after == 1)
++		state_change_in_progress = false;
++	else
++		state_change_in_progress = true;
++
++	spin_unlock_irqrestore(&state_change_lock, flags);
++}
++
++/* Ensure packets are not delivered to mac80211 until both STA's under
++ * MLO operation are in the IEEE80211_STA_AUTHORIZED state for better
++ * synchronization. Currently, ath12k does not delete peer entries in
++ * firmware during NONE->NOEXIST, causing packet delivery to the driver
++ * despite differing STA states in mac80211/supplicant.
++ */
++bool ath12k_11s_mlo_testing_is_drop_packet(void)
++{
++	int link_sta_idx;
++	unsigned long flags;
++
++	if (!ath12k_11s_mlo_testing_enable)
++		return false;
++
++	spin_lock_irqsave(&state_change_lock, flags);
++
++	for (link_sta_idx = 0; link_sta_idx < ATH12K_NUM_11S_MLO_STA_LINKS;
++	     link_sta_idx++) {
++		if (link_sta_info[link_sta_idx].state < IEEE80211_STA_AUTHORIZED ||
++		    state_change_in_progress) {
++			spin_unlock_irqrestore(&state_change_lock, flags);
++			return true;
++		}
++	}
++
++	spin_unlock_irqrestore(&state_change_lock, flags);
++
++	return false;
++}
++
++void
++ath12k_11s_mlo_testing_notify_add_interface(struct ieee80211_vif *vif,
++					    struct ath12k_link_vif *arvif,
++					    u8 *addr)
++{
++	struct wireless_dev *wdev = ieee80211_vif_to_wdev(vif);
++	struct ath12k_11s_mlo_testing_interfaces *entry = &ath12k_11s_mlo_ifaces[num_mlo_vaps];
++	struct ath12k *ar = arvif->ar;
++	struct ath12k_pdev *pdev = ar->pdev;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    !arvif || arvif->ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	     arvif->link_id == ATH12K_DEFAULT_SCAN_LINK)
++		return;
++
++	if (!wdev->netdev)
++		return;
++
++	if (num_mlo_vaps >= ATH12K_NUM_11S_MLO_IFACES) {
++		ath12k_err(NULL, "No more entries can be added\n");
++		return;
++	}
++
++	/* The lifetime of this entry is tied to arvif->is_started, ensuring
++	 * that vif and arvif can be accessed safely without worrying about
++	 * dangling pointers
++	 */
++	entry->dev = wdev->netdev;
++	entry->arvif = arvif;
++	entry->vif = vif;
++	entry->vdev_id = arvif->vdev_id;
++	entry->hw_link_id = arvif->ar->pdev->hw_link_id;
++	entry->link_sta = NULL;
++	ether_addr_copy(entry->addr, addr);
++	if (pdev->cap.supported_bands & WMI_HOST_WLAN_2G_CAP)
++		entry->band = NL80211_BAND_2GHZ;
++	else if (pdev->cap.supported_bands & WMI_HOST_WLAN_5G_CAP && !ar->supports_6ghz)
++		entry->band = NL80211_BAND_5GHZ;
++	else if (pdev->cap.supported_bands & WMI_HOST_WLAN_5G_CAP && ar->supports_6ghz)
++		entry->band = NL80211_BAND_6GHZ;
++	else
++		ath12k_info(NULL, "11S_MLO_TEST: Unable to determine band info !\n");
++
++	num_mlo_vaps++;
++	ath12k_info(NULL, "11S_MLO_TEST: VAP %pM added as MLO LINK mlo_link_vap_count %d hw_link_id %d band %d\n",
++		    addr, num_mlo_vaps, arvif->ar->pdev->hw_link_id, entry->band);
++}
++
++void
++ath12k_11s_mlo_testing_notify_remove_interface(struct ieee80211_vif *vif,
++					       struct ath12k_link_vif *arvif)
++{
++	int iface_idx;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    arvif->ahvif->vif->type != NL80211_IFTYPE_MESH_POINT)
++		return;
++
++	for (iface_idx = 0; iface_idx < ATH12K_NUM_11S_MLO_IFACES; iface_idx++) {
++		if (ath12k_11s_mlo_ifaces[iface_idx].vif == vif &&
++		    ath12k_11s_mlo_ifaces[iface_idx].arvif == arvif) {
++			memset(&ath12k_11s_mlo_ifaces[iface_idx], 0,
++			       sizeof(struct ath12k_11s_mlo_testing_interfaces));
++			num_mlo_vaps--;
++
++			return;
++		}
++	}
++}
++
++void
++ath12k_11s_mlo_testing_update_vdev_start_mlo_arg(struct ath12k_vif *ahvif,
++						 struct ath12k_link_vif *arvif,
++						 struct wmi_ml_arg *ml_arg)
++{
++	struct ath12k_11s_mlo_testing_interfaces *entry;
++	struct wmi_ml_partner_info *partner_info;
++	int iface_idx = -1, other_iface_idx;
++	int idx;
++
++	for (idx = 0; idx < ATH12K_NUM_11S_MLO_IFACES; idx++) {
++		if (ath12k_11s_mlo_ifaces[idx].arvif == arvif) {
++			iface_idx = idx;
++			other_iface_idx = (idx == 0) ? 1 : 0;
++			break;
++		}
++	}
++
++	if (iface_idx == -1)
++		return;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    !num_mlo_vaps)
++		return;
++
++	ml_arg->enabled = true;
++	ml_arg->link_add = true;
++	ml_arg->ieee_link_id = arvif->link_id;
++	partner_info = ml_arg->partner_info;
++
++	if (num_sta_entries <= 1)
++		return;
++
++	/* currently supports only 2 link MLD */
++	other_iface_idx = (iface_idx == 0) ? 1 : 0;
++	entry = &ath12k_11s_mlo_ifaces[other_iface_idx];
++	partner_info->vdev_id = entry->vdev_id;
++	partner_info->hw_link_id = entry->hw_link_id;
++	ether_addr_copy(partner_info->addr, entry->addr);
++	ath12k_info(arvif->ar->ab,
++		    "11S_MLO_TEST: added partner info vdev_id %d addr %pM hw_link_id %d band %d\n",
++		    partner_info->vdev_id,  entry->addr, partner_info->hw_link_id, ath12k_11s_mlo_ifaces[other_iface_idx].band);
++
++	ml_arg->num_partner_links++;
++	partner_info++;
++}
++
++int ath12k_11s_mlo_testing_find_arrayidx_by_addr_match(const u8 *addr)
++{
++	int arr_idx;
++
++	for (arr_idx = 0; arr_idx < ATH12K_NUM_11S_MLO_STA_LINKS; arr_idx++) {
++		if (ether_addr_equal(link_sta_info[arr_idx].addr, addr))
++			return arr_idx;
++	}
++
++	return -1;
++}
++
++void
++ath12k_11s_mlo_testing_notify_peer_disassoc_h_mlo(struct ath12k_vif *ahvif,
++						  struct ath12k_link_sta *arsta)
++{
++	struct ath12k_sta *ahsta = arsta->ahsta;
++	struct ieee80211_sta *sta;
++	u8 sta_arr_idx = 0;
++	struct ath12k_11s_mlo_testing_link_sta_info *link_info;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT)
++		return;
++
++	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
++
++	sta_arr_idx = ath12k_11s_mlo_testing_find_arrayidx_by_addr_match(sta->addr);
++	if (sta_arr_idx < 0)
++		return;
++
++	link_info = &link_sta_info[sta_arr_idx];
++	/* PLACEHOLDER to cleanup peer assoc related info*/
++}
++
++void
++ath12k_11s_mlo_testing_fill_peer_assoc_h_mlo(struct ath12k_vif *ahvif,
++					     struct ath12k_link_sta *arsta,
++					     struct ath12k_wmi_peer_assoc_arg *arg)
++{
++	struct ath12k_link_vif *arvif;
++	struct ath12k_sta *ahsta = arsta->ahsta;
++	struct ieee80211_sta *sta;
++	struct peer_assoc_mlo_params *ml = &arg->ml;
++	u8 cur_sta_arr_idx = 0, partner_sta_arr_idx = 0;
++	struct ath12k_11s_mlo_testing_link_sta_info *link_info;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT)
++		return;
++
++	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
++
++	cur_sta_arr_idx = ath12k_11s_mlo_testing_find_arrayidx_by_addr_match(sta->addr);
++	if (cur_sta_arr_idx == -1)
++		return;
++
++	link_info = &link_sta_info[cur_sta_arr_idx];
++	arvif = link_info->arvif;
++	if (!arvif || !arvif->is_started)
++		return;
++
++	ml->enabled = true;
++	ml->assoc_link = link_info->is_assoc_link;
++
++	ml->primary_umac = link_info->is_primary_link;
++	ml->peer_id_valid = true;
++	ml->logical_link_idx_valid = true;
++
++	ether_addr_copy(ml->mld_addr, link_sta_info[1].mld_addr);
++	ml->logical_link_idx = link_info->link_idx;
++	ml->ml_peer_id = 0;
++	ml->ieee_link_id = link_info->link_id;
++	ml->bridge_peer = 0;
++	ml->num_partner_links = 0;
++	/*emlsr */
++	ml->eml_caps = sta->eml_cap;
++
++	if (num_sta_entries <= 1)
++		return;
++
++	/* Pick partner link */
++	partner_sta_arr_idx = (cur_sta_arr_idx == 0) ? 1 : 0;
++	link_info = &link_sta_info[partner_sta_arr_idx];
++
++	ml->partner_info[0].vdev_id = link_info->vdev_id;
++	ml->partner_info[0].hw_link_id = link_info->hw_link_id;
++	ml->partner_info[0].assoc_link = link_info->is_assoc_link;
++	ml->partner_info[0].bridge_peer = 0;
++	ml->partner_info[0].primary_umac = link_info->is_primary_link;
++	ml->partner_info[0].logical_link_idx_valid = true;
++	ml->partner_info[0].logical_link_idx = link_info->link_idx;
++	ml->num_partner_links++;
++
++	ath12k_info(NULL, "11S_MLO_TEST: peer_assoc_params vif %pM mld %pM arsta %pM primary %d assoc_link %d  Partner info  %pM in peer assoc cmd hw_link_id %d assoc_link %d primary_link %d \n",
++		    arvif->addr, link_sta_info[1].mld_addr, arsta->addr, ml->primary_umac, ml->assoc_link,
++		    link_info->addr, link_info->hw_link_id, link_info->is_assoc_link, link_info->is_primary_link);
++}
++
++void
++ath12k_11s_mlo_testing_update_vdev_create_arg(struct ath12k_link_vif *arvif,
++					      struct ath12k_wmi_vdev_create_arg *arg)
++{
++	if (!arvif || arvif->ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    arvif->link_id == ATH12K_DEFAULT_SCAN_LINK || !ath12k_11s_mlo_testing_enable)
++		return;
++
++	ether_addr_copy(arg->mld_addr, global_iface_mld_addr);
++	ath12k_info(NULL, "11S_MLO_TEST: mld addr %pM added for link VAP %pM in Vdev Create\n",
++		    global_iface_mld_addr, arvif->addr);
++}
++
++void
++ath12k_11s_mlo_testing_update_peer_create_arg(struct ath12k_vif *ahvif,
++					      struct ath12k_wmi_peer_create_arg *arg)
++{
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT)
++		return;
++
++	arg->ml_enabled = 1;
++}
++
++int ath12k_11s_mlo_testing_peer_already_created(u8 *addr)
++{
++	int cur_sta_arr_idx;
++
++	if (!ath12k_11s_mlo_testing_enable)
++		return 0;
++
++	for (cur_sta_arr_idx = 0; cur_sta_arr_idx < ATH12K_NUM_11S_MLO_STA_LINKS;
++	     cur_sta_arr_idx++) {
++		if (memcmp(link_sta_info[cur_sta_arr_idx].addr, addr, ETH_ALEN) == 0 &&
++		    link_sta_info[cur_sta_arr_idx].peer_create_sent)
++			return 1;
++	}
++
++	return 0;
++}
++
++bool ath12k_11s_mlo_testing_skip_peer_delete_wait(struct ath12k_vif *ahvif,
++						  struct ath12k *ar, const u8 *addr)
++{
++	int sta_arr_idx;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    !ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(addr))
++		return false;
++
++	for (sta_arr_idx = 0; sta_arr_idx < ATH12K_NUM_11S_MLO_STA_LINKS; sta_arr_idx++) {
++		if ((memcmp(link_sta_info[sta_arr_idx].addr, addr, ETH_ALEN) == 0) &&
++		    link_sta_info[sta_arr_idx].peer_create_sent) {
++			link_sta_info[sta_arr_idx].ar = NULL;
++			link_sta_info[sta_arr_idx].arsta = NULL;
++			link_sta_info[sta_arr_idx].arvif = NULL;
++			link_sta_info[sta_arr_idx].peer_create_sent = 0;
++			num_sta_entries--;
++			ath12k_info(NULL, "11S_MLO_TEST: sta entry deleted for %pM count %d\n",
++				    addr, num_sta_entries);
++
++			return true;
++		}
++	}
++
++	ath12k_info(NULL, "11S_MLO_TEST: sta entry delete notfification with its not created %pM\n",
++		    addr);
++
++	return true;
++}
++
++void
++ath12k_11s_mlo_testing_peer_create_notify(struct ath12k *ar, struct ath12k_link_vif *arvif,
++					  struct ath12k_link_sta *arsta,
++					  struct ath12k_wmi_peer_create_arg *arg)
++{
++	struct ath12k *partner_ar;
++	struct ath12k_wmi_peer_create_arg partner_arg = {0};
++	int ret;
++	int iface, link_sta, other_linksta_idx = -1;
++	int iface_idx = -1, other_iface_idx = -1;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    arvif->ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    !ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(arg->peer_addr))
++		return;
++
++	for (iface = 0; iface < ATH12K_NUM_11S_MLO_IFACES; iface++) {
++		if (ath12k_11s_mlo_ifaces[iface].arvif == arvif) {
++			iface_idx = iface;
++			other_iface_idx = (iface_idx == 0) ? 1 : 0;
++			break;
++		}
++	}
++
++	if (iface_idx == -1)
++		return;
++
++	for (link_sta = 0; link_sta < ATH12K_NUM_11S_MLO_STA_LINKS; link_sta++) {
++		if (memcmp(link_sta_info[link_sta].addr, arg->peer_addr, ETH_ALEN) == 0) {
++			link_sta_info[link_sta].ar = ar;
++			link_sta_info[link_sta].arsta = arsta;
++			link_sta_info[link_sta].arvif = arvif;
++			link_sta_info[link_sta].peer_create_sent = 1;
++			num_sta_entries++;
++			ath12k_info(ar->ab,
++				   "11S_MLO_TEST: sta entry added for %pM for VAP %pM peer_create_sent count %d is_primary_link %d hw_link_id %d band %d\n",
++				   arg->peer_addr, ath12k_11s_mlo_ifaces[iface_idx].addr, num_sta_entries, link_sta_info[link_sta].is_primary_link,
++				   ath12k_11s_mlo_ifaces[iface_idx].hw_link_id, ath12k_11s_mlo_ifaces[iface_idx].band);
++			link_sta_info[link_sta].hw_link_id =
++				ath12k_11s_mlo_ifaces[iface_idx].hw_link_id;
++			ath12k_11s_mlo_ifaces[iface_idx].link_sta = &link_sta_info[link_sta];
++
++			other_linksta_idx = (link_sta == 0) ? 1 : 0;
++			link_sta_info[other_linksta_idx].hw_link_id =
++				ath12k_11s_mlo_ifaces[other_iface_idx].hw_link_id;
++			break;
++		}
++	}
++
++	if (link_sta_info[link_sta].is_primary_link)
++		ath12k_11s_mlo_test_primary_link_iface_idx = iface_idx;
++
++	if (other_linksta_idx == -1) {
++		ath12k_warn(ar->ab, "failed to identify other_linksta_idx in peer notify for %pM\n",
++			    arg->peer_addr);
++		return;
++	}
++	if (link_sta_info[other_linksta_idx].peer_create_sent)
++		return;
++
++	partner_ar = ath12k_11s_mlo_ifaces[other_iface_idx].arvif->ar;
++	partner_arg.ml_enabled = 1;
++	partner_arg.mlo_bridge_peer = 0;
++	partner_arg.peer_type = cpu_to_le32(arg->peer_type);
++	partner_arg.vdev_id = cpu_to_le32(arg->vdev_id);
++	partner_arg.peer_addr = link_sta_info[other_linksta_idx].addr;
++
++	/* send partner peer create to firmware irrespective of state */
++	ret = ath12k_wmi_send_peer_create_cmd(partner_ar, &partner_arg);
++	if (ret)
++		ath12k_warn(ar->ab, "failed to submit PEER_CREATE for partner\n");
++}
++
++struct ath12k_vif*
++ath12k_mac_mlo_mesh_update_primary_vif(struct ieee80211_vif *vif)
++{
++	struct ath12k_vif *ahvif;
++	struct ath12k_link_vif *primary_arvif;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    ath12k_11s_mlo_test_primary_link_iface_idx == -1)
++		return NULL;
++
++	primary_arvif = ath12k_11s_mlo_ifaces[ath12k_11s_mlo_test_primary_link_iface_idx].arvif;
++
++	ahvif = primary_arvif ? primary_arvif->ahvif : NULL;
++
++	return (ahvif) ? ahvif : NULL;
++}
++
++void ath12k_mac_mlo_mesh_h_addr_trans(struct ath12k_base *ab, struct sk_buff *skb)
++{
++	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
++	u8 from_ds = ieee80211_has_fromds(hdr->frame_control);
++	u8 to_ds = ieee80211_has_tods(hdr->frame_control);
++	u8 *addr1 = hdr->addr1; bool is_addr1_mcast = is_multicast_ether_addr(addr1);
++	u8 *addr2 = hdr->addr2; bool is_addr2_mcast = is_multicast_ether_addr(addr2);
++	u8 *addr3 = hdr->addr3; bool is_addr3_mcast = is_multicast_ether_addr(addr3);
++
++	ath12k_dbg(ab, ATH12K_DBG_DP_TX,
++		   "11S MLO TX: BEFORE TRANS - addr1 %pM addr2 %pM addr3 %pM addr4 %pM mld addr %pM from_ds %d to_ds %d ARP %d PAE %d\n",
++		   hdr->addr1, hdr->addr2, hdr->addr3,
++		   ieee80211_has_a4(hdr->frame_control) ? hdr->addr4 : NULL,
++		   link_sta_info[0].mld_addr, from_ds, to_ds,
++		   skb->protocol == cpu_to_be16(ETH_P_ARP),
++		   skb->protocol == cpu_to_be16(ETH_P_PAE));
++
++	if (from_ds == 0 && to_ds == 0) {
++		if (!is_addr1_mcast)
++			ether_addr_copy(hdr->addr1, link_sta_info[0].mld_addr);//DA
++		if (!is_addr3_mcast)
++			ether_addr_copy(hdr->addr3, global_iface_mld_addr);//BSSID
++	} else if (from_ds == 0 && to_ds == 1) {
++		if (!is_addr1_mcast)
++			ether_addr_copy(hdr->addr1, global_iface_mld_addr);//BSSID
++		if (!is_addr3_mcast)
++			ether_addr_copy(hdr->addr3, link_sta_info[0].mld_addr);//DA
++	} else if (from_ds == 1 && to_ds == 0) {
++		if (!is_addr1_mcast)
++			ether_addr_copy(hdr->addr1, link_sta_info[0].mld_addr);//DA
++		if (!is_addr2_mcast)
++			ether_addr_copy(hdr->addr2, global_iface_mld_addr);//BSSID
++	} else {
++		if (!is_addr1_mcast)
++			ether_addr_copy(hdr->addr1, link_sta_info[0].mld_addr);//RA
++		if (!is_addr2_mcast)
++			ether_addr_copy(hdr->addr2, global_iface_mld_addr);//TA
++	}
++
++	ath12k_dbg(ab, ATH12K_DBG_DP_TX,
++		   "11S MLO TX: AFTER TRANS - addr1 %pM addr2 %pM addr3 %pM addr4 %pM mld addr %pM from_ds %d to_ds %d ARP %d PAE %d\n",
++		   hdr->addr1, hdr->addr2, hdr->addr3,
++		   ieee80211_has_a4(hdr->frame_control) ? hdr->addr4 : NULL,
++		   link_sta_info[0].mld_addr, from_ds, to_ds,
++		   skb->protocol == cpu_to_be16(ETH_P_ARP),
++		   skb->protocol == cpu_to_be16(ETH_P_PAE));
++}
++
++static ssize_t ath12k_write_test_mlo_mesh_configs(struct file *file,
++						  const char __user *user_buf,
++						  size_t count, loff_t *ppos)
++{
++	struct ath12k_base *ab = file->private_data;
++	struct ath12k_11s_mlo_testing_link_sta_info *sta_info = &link_sta_info[0];
++	int ret;
++	char buf[256] = {0};
++	u8 iface_mld_addr[ETH_ALEN], addr1[ETH_ALEN], addr2[ETH_ALEN], mld_addr[ETH_ALEN];
++	int link_id1, link_idx1, vdev_id1, is_primary_link1, is_assoc_link1;
++	int link_id2, link_idx2, vdev_id2, is_primary_link2, is_assoc_link2;
++
++	ret = simple_write_to_buffer(buf, sizeof(buf) - 1, ppos, user_buf, count);
++
++	if (ret <= 0)
++		goto out;
++
++	ret = sscanf(buf,
++		     "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx %d %d %d %d %d %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx %d %d %d %d %d %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
++		     &addr1[0], &addr1[1], &addr1[2], &addr1[3], &addr1[4], &addr1[5],
++		     &link_id1, &link_idx1, &vdev_id1, &is_primary_link1, &is_assoc_link1,
++		     &addr2[0], &addr2[1], &addr2[2], &addr2[3], &addr2[4], &addr2[5],
++		     &link_id2, &link_idx2, &vdev_id2, &is_primary_link2, &is_assoc_link2,
++		     &mld_addr[0], &mld_addr[1], &mld_addr[2], &mld_addr[3], &mld_addr[4],
++		     &mld_addr[5],
++		     &iface_mld_addr[0], &iface_mld_addr[1], &iface_mld_addr[2],
++		     &iface_mld_addr[3], &iface_mld_addr[4], &iface_mld_addr[5]);
++
++	if (ret != ATH12K_11S_MLO_TEST_NUM_ARGS) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if (memcmp(addr1, addr2, ETH_ALEN) == 0) {
++		ath12k_err(ab, "Addresses must be different\n");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if ((is_primary_link1 != 0 && is_primary_link1 != 1) ||
++	    (is_primary_link2 != 0 && is_primary_link2 != 1) ||
++	    is_primary_link1 == is_primary_link2) {
++		ath12k_err(ab, "Only one is_primary_link must be set and value must be 0 or 1\n");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if ((is_assoc_link1 != 0 && is_assoc_link1 != 1) ||
++	    (is_assoc_link2 != 0 && is_assoc_link2 != 1) ||
++	    is_assoc_link1 == is_assoc_link2) {
++		ath12k_err(ab, "Only one is_assoc_link must be set and value must be 0 or 1\n");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if ((link_idx1 != 0 && link_idx1 != 1) ||
++	    (link_idx2 != 0 && link_idx2 != 1) ||
++	    link_idx1 == link_idx2) {
++		ath12k_err(ab, "link_idx must be unique and one must be 0 and the other 1\n");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	memcpy(sta_info[0].addr, addr1, ETH_ALEN);
++	sta_info[0].link_id = link_id1;
++	sta_info[0].link_idx = link_idx1;
++	sta_info[0].vdev_id = vdev_id1;
++	sta_info[0].is_primary_link = is_primary_link1;
++	sta_info[0].is_assoc_link = is_assoc_link1;
++	memcpy(sta_info[0].mld_addr, mld_addr, ETH_ALEN);
++
++	memcpy(sta_info[1].addr, addr2, ETH_ALEN);
++	sta_info[1].link_id = link_id2;
++	sta_info[1].link_idx = link_idx2;
++	sta_info[1].vdev_id = vdev_id2;
++	sta_info[1].is_primary_link = is_primary_link2;
++	sta_info[1].is_assoc_link = is_assoc_link2;
++	memcpy(sta_info[1].mld_addr, mld_addr, ETH_ALEN);
++
++	memcpy(global_iface_mld_addr, iface_mld_addr, ETH_ALEN);
++	ath12k_info(NULL, "%pM %d %d %d %d %d %pM %d %d %d %d %d mld addr:%pM iface_mld_addr:%pM\n",
++		    sta_info[0].addr, sta_info[0].link_id, sta_info[0].link_idx,
++		    sta_info[0].vdev_id,
++		    sta_info[0].is_primary_link, sta_info[0].is_assoc_link,
++		    sta_info[1].addr, sta_info[1].link_id, sta_info[1].link_idx,
++		    sta_info[1].vdev_id,
++		    sta_info[1].is_primary_link, sta_info[1].is_assoc_link,
++		    sta_info[1].mld_addr,
++		    global_iface_mld_addr);
++
++	ret = count;
++
++out:
++	return ret;
++}
++
++static const struct file_operations fops_test_mlo_mesh = {
++	.write = ath12k_write_test_mlo_mesh_configs,
++	.open = simple_open,
++	.owner = THIS_MODULE,
++	.llseek = default_llseek,
++};
++
++static ssize_t ath12k_read_tmm_options(struct file *file,
++				       char __user *user_buf,
++				       size_t count, loff_t *ppos)
++{
++	const char buf[] =
++		"keywords to configure different aspects of MLO MESH Testing:\n"
++		"`block` - Block beacons from ath12k dp rx. Default disabled.\n"
++		"`enable` - Enable beacons in dp rx after all VAPs are up.\n"
++		"`disable_addr_trans` - Disable address translation in Datapath TX/RX\n"
++		"`enable_addr_trans` - Enable address translation in Datapath TX/RX\n"
++		"`use_predef_keys` - Replace both GTK and PTK with static keys for debugging\n";
++
++	return simple_read_from_buffer(user_buf, count, ppos, buf, strlen(buf));
++}
++
++static ssize_t ath12k_write_tmm_options(struct file *file,
++					const char __user *user_buf,
++					size_t count, loff_t *ppos)
++{
++	struct ath12k_base *ab = file->private_data;
++	char buf[32] = {0};
++	ssize_t rc;
++	int ret;
++
++	if (!ath12k_11s_mlo_testing_enable)
++		return -EINVAL;
++
++	/* filter partial writes and invalid commands */
++	if (*ppos != 0 || count >= sizeof(buf) || count == 0)
++		return -EINVAL;
++
++	rc = simple_write_to_buffer(buf, sizeof(buf) - 1, ppos, user_buf, count);
++	if (rc < 0)
++		return rc;
++
++	/* drop the possible '\n' from the end */
++	if (buf[*ppos - 1] == '\n')
++		buf[*ppos - 1] = '\0';
++
++	if (!strcmp(buf, "block")) {
++		ath12k_info(ab, "blocking mesh beacons\n");
++		ath12k_block_mesh_beacon_rx = 1;
++		ret = 0;
++	} else if (!strcmp(buf, "enable")) {
++		ath12k_info(ab, "enabling mesh beacons\n");
++		ath12k_block_mesh_beacon_rx = 0;
++		ret = 0;
++	} else if (!strcmp(buf, "disable_addr_trans")) {
++		ath12k_info(ab, "disabling address translation\n");
++		ath12k_11s_mlo_testing_disable_addr_trans = 1;
++		ret = 0;
++	} else if (!strcmp(buf, "enable_addr_trans")) {
++		ath12k_info(ab, "enabling address translation\n");
++		ath12k_11s_mlo_testing_disable_addr_trans = 0;
++		ret = 0;
++	} else if (!strcmp(buf, "use_predef_keys")) {
++		ath12k_info(ab, "Replaces both GTK and PTKs with static keys during key install.\n");
++		use_predef_keys = 1;
++		ret = 0;
++	} else {
++		ret = -EINVAL;
++	}
++
++	if (ret) {
++		ath12k_warn(ab, "failed to configure option %s: %d\n", buf, ret);
++		goto exit;
++	}
++
++	ret = count;
++
++exit:
++	return ret;
++}
++
++static const struct file_operations fops_tmm_options = {
++	.read = ath12k_read_tmm_options,
++	.write = ath12k_write_tmm_options,
++	.open = simple_open,
++	.owner = THIS_MODULE,
++	.llseek = default_llseek,
++};
++
++void ath12k_11s_mlo_testing_debugfs_init(struct ath12k_base *ab)
++{
++	if (!ath12k_11s_mlo_testing_enable)
++		return;
++
++	/* Disable beaocns when Feature is enabled and user to
++	 * to enable after all VAPS are up */
++	ath12k_block_mesh_beacon_rx = 1;
++
++	debugfs_create_file("test_mlo_mesh", 0600, ab->debugfs_soc, ab,
++			    &fops_test_mlo_mesh);
++	debugfs_create_file("tmm_options", 0600, ab->debugfs_soc, ab,
++			    &fops_tmm_options);
++}
++
++int
++ath12k_11s_mlo_testing_mac_station_add(struct ath12k *ar,
++				       struct ath12k_link_vif *arvif,
++				       struct ath12k_link_sta *arsta)
++{
++	struct ath12k_base *ab = ar->ab;
++	struct ath12k_vif *ahvif = arvif->ahvif;
++	struct ath12k_sta *ahsta = arsta->ahsta;
++	struct ieee80211_sta *sta;
++	struct ath12k_peer *peer = NULL;
++	int ret;
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	if (!arvif)
++		return -EINVAL;
++
++	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
++
++	if (ath12k_debugfs_is_extd_rx_stats_enabled(ar) && !arsta->rx_stats) {
++		arsta->rx_stats = kzalloc(sizeof(*arsta->rx_stats), GFP_KERNEL);
++		if (!arsta->rx_stats) {
++			ret = -ENOMEM;
++			goto exit;
++		}
++	}
++
++	if (ath12k_debugfs_is_extd_tx_stats_enabled(ar) && !arsta->tx_stats) {
++		arsta->tx_stats = kzalloc(sizeof(*arsta->tx_stats),
++					  GFP_KERNEL);
++		if (!arsta->tx_stats) {
++			ret = -ENOMEM;
++			goto free_rx_stats;
++		}
++
++		arsta->wbm_tx_stats = kzalloc(sizeof(*arsta->wbm_tx_stats), GFP_KERNEL);
++		if (!arsta->wbm_tx_stats) {
++			ret = -ENOMEM;
++			goto free_tx_stats;
++		}
++	}
++
++	ahsta->ahvif = ahvif;
++	ewma_avg_rssi_init(&arsta->avg_rssi);
++
++	spin_lock_bh(&ab->base_lock);
++	peer = ath12k_peer_find(ab, arvif->vdev_id, arsta->addr);
++	if (!peer) {
++		spin_unlock_bh(&ab->base_lock);
++		ath12k_warn(ab, "failed to find peer %pM on vdev %i after creation\n",
++			    arsta->addr, arvif->vdev_id);
++		goto free_wbm_tx_stats;
++	}
++
++	peer->pdev_idx = ar->pdev_idx;
++	peer->sta = sta;
++	peer->is_bridge_peer = 0;
++
++	spin_unlock_bh(&ab->base_lock);
++
++	return 0;
++
++free_wbm_tx_stats:
++	kfree(arsta->wbm_tx_stats);
++	arsta->wbm_tx_stats = NULL;
++free_tx_stats:
++	kfree(arsta->tx_stats);
++	arsta->tx_stats = NULL;
++free_rx_stats:
++	kfree(arsta->rx_stats);
++	arsta->rx_stats = NULL;
++exit:
++	return ret;
++}
++
++void
++ath12k_11s_mlo_testing_mac_station_remove(struct ath12k *ar,
++					  struct ath12k_link_vif *arvif,
++					  struct ath12k_link_sta *arsta)
++{
++	struct ath12k_sta *ahsta = arsta->ahsta;
++	struct ieee80211_sta *sta;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    arvif->ahvif->vif->type != NL80211_IFTYPE_MESH_POINT)
++		return;
++
++	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
++
++	lockdep_assert_held(&ar->conf_mutex);
++
++	kfree(arsta->tx_stats);
++	arsta->tx_stats = NULL;
++
++	kfree(arsta->wbm_tx_stats);
++	arsta->wbm_tx_stats = NULL;
++
++	kfree(arsta->rx_stats);
++	arsta->rx_stats = NULL;
++	/*
++	 * Remove ahvif reference only when all the links from ahsta is removed
++	 */
++	if (hweight16(ahsta->links_map) <= 1)
++		ahsta->ahvif = NULL;
++}
++
++void ath12k_11s_mlo_testing_handle_tx_skb(struct ath12k_base *ab,
++					  struct ieee80211_vif *vif,
++					  struct sk_buff *skb)
++{
++	struct ath12k_vif *ahvif;
++	struct ieee80211_hdr *hdr;
++
++	if (vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    !ath12k_11s_mlo_testing_enable || !skb)
++		return;
++
++	hdr = (struct ieee80211_hdr *)skb->data;
++	if (!ieee80211_is_data(hdr->frame_control))
++		return;
++
++	ahvif = ath12k_mac_mlo_mesh_update_primary_vif(vif);
++	if (!ahvif) {
++		ath12k_warn(ab,
++			    "11S MLO TX: primary ahvif is NULL\n");
++		ahvif = ath12k_vif_to_ahvif(vif);
++	}
++
++	if (!ath12k_11s_mlo_testing_disable_addr_trans)
++		ath12k_mac_mlo_mesh_h_addr_trans(ab, skb);
++}
++
++void
++ath12k_11s_mlo_testing_fill_ml_peer_param(struct ath12k_base *ab,
++					  struct ath12k_vif *ahvif,
++					  struct ath12k_peer *peer,
++					  u8 pdev_idx)
++{
++	/* support only one peer currently so default assign 0 */
++	int ml_peer_id = 0;
++
++	if (!ath12k_11s_mlo_testing_enable ||
++	    ahvif->vif->type != NL80211_IFTYPE_MESH_POINT ||
++	    !ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(peer->addr))
++		return;
++
++	peer->ml_peer_id = ml_peer_id | ATH12K_ML_PEER_ID_VALID;
++
++	for (int i = 0; i < ATH12K_NUM_11S_MLO_STA_LINKS; i++) {
++		if (memcmp(link_sta_info[i].addr, peer->addr, ETH_ALEN) == 0) {
++			memcpy(peer->ml_addr, link_sta_info[i].mld_addr, ETH_ALEN);
++			break;
++		}
++	}
++
++	peer->mlo = true;
++
++	rcu_assign_pointer(ab->ml_peer_list[ml_peer_id][pdev_idx], peer);
++	ath12k_dbg(ab, ATH12K_DBG_PEER, "11S_MLO_TEST: ML peer: %pM assigned to ML peer list[%d]\n",
++		   peer->addr, peer->ml_peer_id);
++}
++
++#define MAX_KEY_IDX	3
++#define KEY_LENGTH	16
++
++/*
++ * Random predefined keys can be replaced by debugfs use_predef_keys before interface bringup
++ * gtk - repalced for mesh VAPs as well as per mesh peer GTK
++ * ptk - repalced for per mesh peer PTK
++ */
++static u8 ath12k_11s_mlo_gtk[KEY_LENGTH] = {
++	0xd9, 0xd8, 0xc4, 0x38, 0xed, 0xa3, 0x1f, 0x54,
++	0xd4, 0x34, 0xc7, 0x8f, 0x06, 0x6d, 0x11, 0x11
++};
++
++static u8 ath12k_11s_mlo_ptk[KEY_LENGTH] = {
++	0xd9, 0xd8, 0xc4, 0x38, 0xed, 0xa3, 0x1f, 0x54,
++	0xd4, 0x34, 0xc7, 0x8f, 0x06, 0x6d, 0x22, 0x22
++};
++
++static u8 ath12k_11s_mlo_test_skb_ptk[MAX_KEY_IDX][KEY_LENGTH];
++static bool ath12k_11s_mlo_test_skb_ptk_stored[MAX_KEY_IDX];
++
++void ath12k_11s_mlo_testing_free_ptk(const u8 *addr)
++{
++	int key_idx;
++
++	if (!ath12k_11s_mlo_testing_enable || use_predef_keys)
++		return;
++
++	for (key_idx = 0; key_idx < MAX_KEY_IDX; key_idx++) {
++		memset(ath12k_11s_mlo_test_skb_ptk[key_idx], 0, KEY_LENGTH);
++		ath12k_11s_mlo_test_skb_ptk_stored[key_idx] = false;
++	}
++
++	ath12k_warn(NULL, "11S_MLO_TEST: clean ptk for %pM cleared ptk\n", addr);
++}
++
++int
++ath12k_mlo_testing_replace_or_store_ptk(struct wmi_vdev_install_key_arg *arg,
++					u8 *tlv_data)
++{
++	const u8 *addr = arg->macaddr;
++	int key_idx = arg->key_idx;
++	int key_flags = arg->key_flags;
++
++	if (!ath12k_11s_mlo_testing_enable)
++		return -EINVAL;
++
++	if (key_idx < 0 || key_idx >= MAX_KEY_IDX) {
++		ath12k_warn(NULL, "11S_MLO_TEST: get key for %pM Invalid key_idx %d\n",
++			    addr, key_idx);
++		return -EINVAL;
++	}
++
++	if (arg->key_len != KEY_LENGTH) {
++		ath12k_warn(NULL, "11S_MLO_TEST: KEY_LENGTH mismatch %d cannot change any keys \n",
++			    arg->key_len);
++		return -EINVAL;
++	}
++
++	if (use_predef_keys) {
++		if (arg->key_flags == WMI_KEY_PAIRWISE)
++			memcpy(tlv_data, ath12k_11s_mlo_ptk, KEY_LENGTH);
++		else
++			memcpy(tlv_data, ath12k_11s_mlo_gtk, KEY_LENGTH);
++
++		return 0;
++	}
++
++	/* In MLO Mesh, only PTK is expected to match across mesh links.
++	 * GTKs can differ per link similar to MLO AP mode
++	 */
++	if (key_flags != WMI_KEY_PAIRWISE)
++		return 0;
++
++	if (!ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(addr))
++		return 0;
++
++	 /* If key is already present use it*/
++	if (ath12k_11s_mlo_test_skb_ptk_stored[key_idx]) {
++		ath12k_info(NULL, "11S_MLO_TEST: already has PTK at key_idx %d. replaced current one\n",
++			    key_idx);
++		memcpy(tlv_data, ath12k_11s_mlo_test_skb_ptk[key_idx], KEY_LENGTH);
++		return 0;
++	}
++
++	if (key_idx < MAX_KEY_IDX) {
++		memcpy(ath12k_11s_mlo_test_skb_ptk[key_idx], arg->key_data, KEY_LENGTH);
++		ath12k_11s_mlo_test_skb_ptk_stored[key_idx] = true;
++	} else {
++		ath12k_warn(NULL, "11S_MLO_TEST: Key buffer is full\n");
++		return -ENOMEM;
++	}
++
++	ath12k_warn(NULL, "11S_MLO_TEST: stored ptk for %pM at key_idx %d\n",
++		    addr, key_idx);
++
++	return 0;
++}
+--- /dev/null
++++ b/drivers/net/wireless/ath/ath12k/test_mlo_mesh.h
+@@ -0,0 +1,239 @@
++// SPDX-License-Identifier: BSD-3-Clause-Clear
++/*
++ * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
++ */
++
++#ifndef ATH12K_MLO_MESH_H
++#define ATH12K_MLO_MESH_H
++
++#include "debug.h"
++#include "wmi.h"
++#include "peer.h"
++#include <linux/module.h>
++
++extern int ath12k_block_mesh_beacon_rx;
++extern bool ath12k_11s_mlo_testing_enable;
++
++#ifdef CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO
++u8 ath12k_11s_mlo_testing_are_all_vaps_up(void);
++bool ath12k_11s_mlo_testing_is_ml_vif(struct ath12k_vif *ahvif);
++bool ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(const u8 *addr);
++void
++ath12k_11s_mlo_testing_notify_add_interface(struct ieee80211_vif *vif,
++					    struct ath12k_link_vif *arvif,
++					    u8 *addr);
++void
++ath12k_11s_mlo_testing_notify_remove_interface(struct ieee80211_vif *vif,
++					       struct ath12k_link_vif *arvif);
++void ath12k_11s_mlo_testing_notify_peer_disassoc_h_mlo(struct ath12k_vif *ahvif,
++						       struct ath12k_link_sta *arsta);
++void ath12k_11s_mlo_testing_fill_peer_assoc_h_mlo(struct ath12k_vif *ahvif,
++						  struct ath12k_link_sta *arsta,
++						  struct ath12k_wmi_peer_assoc_arg *arg);
++void ath12k_11s_mlo_testing_debugfs_init(struct ath12k_base *ab);
++void ath12k_11s_mlo_testing_update_vdev_create_arg(struct ath12k_link_vif *arvif,
++						   struct ath12k_wmi_vdev_create_arg *arg);
++void
++ath12k_11s_mlo_testing_update_vdev_start_mlo_arg(struct ath12k_vif *ahvif,
++						 struct ath12k_link_vif *arvif,
++						 struct wmi_ml_arg *ml_arg);
++void
++ath12k_11s_mlo_testing_update_peer_create_arg(struct ath12k_vif *ahvif,
++					      struct ath12k_wmi_peer_create_arg *arg);
++void ath12k_11s_mlo_testing_peer_create_notify(struct ath12k *ar,
++					       struct ath12k_link_vif *arvif,
++					       struct ath12k_link_sta *arsta,
++					       struct ath12k_wmi_peer_create_arg *arg);
++bool ath12k_11s_mlo_testing_skip_peer_delete_wait(struct ath12k_vif *ahvif,
++						  struct ath12k *ar, const u8 *addr);
++void ath12k_mac_mlo_mesh_h_addr_trans(struct ath12k_base *ab, struct sk_buff *skb);
++struct ath12k_vif *ath12k_mac_mlo_mesh_update_primary_vif(struct ieee80211_vif *vif);
++int ath12k_11s_mlo_testing_peer_already_created(u8 *addr);
++void ath12k_11s_mlo_testing_notify_peer_state(const u8 *addr,
++					      enum ieee80211_sta_state state, u8 after);
++bool ath12k_11s_mlo_testing_is_drop_packet(void);
++int ath12k_11s_mlo_testing_mac_station_add(struct ath12k *ar,
++					   struct ath12k_link_vif *arvif,
++					   struct ath12k_link_sta *arsta);
++void ath12k_11s_mlo_testing_mac_station_remove(struct ath12k *ar,
++					       struct ath12k_link_vif *arvif,
++					      struct ath12k_link_sta *arsta);
++void ath12k_11s_mlo_testing_fill_ml_peer_param(struct ath12k_base *ab,
++					       struct ath12k_vif *ahvif,
++					       struct ath12k_peer *peer,
++					       u8 pdev_idx);
++void ath12k_11s_mlo_testing_handle_tx_skb(struct ath12k_base *ab,
++					  struct ieee80211_vif *vif,
++					  struct sk_buff *skb);
++void ath12k_11s_mlo_testing_free_ptk(const u8 *addr);
++int
++ath12k_mlo_testing_replace_or_store_ptk(struct wmi_vdev_install_key_arg *arg,
++					u8 *tlv_data);
++#else
++static inline int
++ath12k_11s_mlo_testing_handle_sta_state_transitions(struct ath12k_hw *ah,
++						    struct ath12k_vif *ahvif,
++						    struct ieee80211_sta *sta,
++						    enum ieee80211_sta_state old_state,
++						    enum ieee80211_sta_state new_state)
++{
++	/* Follow regular processing */
++	return 0;
++}
++
++static inline u8
++ath12k_11s_mlo_testing_are_all_vaps_up(void)
++{
++	return 0;
++}
++
++static inline bool
++ath12k_11s_mlo_testing_is_ml_vif(struct ath12k_vif *ahvif)
++{
++	return false;
++}
++
++static inline bool
++ath12k_11s_mlo_testing_is_preconfigured_11s_mlo_sta(const u8 *addr)
++{
++	return false;
++}
++
++static inline void
++ath12k_11s_mlo_testing_notify_add_interface(struct ieee80211_vif *vif,
++					    struct ath12k_link_vif *arvif,
++					    u8 *addr)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_notify_remove_interface(struct ieee80211_vif *vif,
++					       struct ath12k_link_vif *arvif)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_notify_peer_disassoc_h_mlo(struct ath12k_vif *ahvif,
++						  struct ath12k_link_sta *arsta)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_fill_peer_assoc_h_mlo(struct ath12k_vif *ahvif,
++					     struct ath12k_link_sta *arsta,
++					     struct ath12k_wmi_peer_assoc_arg *arg)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_debugfs_init(struct ath12k_base *ab)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_update_vdev_create_arg(struct ath12k_link_vif *arvif,
++					      struct ath12k_wmi_vdev_create_arg *arg)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_update_vdev_start_mlo_arg(struct ath12k_vif *ahvif,
++						 struct ath12k_link_vif *arvif,
++						 struct wmi_ml_arg *ml_arg)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_update_peer_create_arg(struct ath12k_vif *ahvif,
++					      struct ath12k_wmi_peer_create_arg *arg)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_peer_create_notify(struct ath12k *ar,
++					  struct ath12k_link_vif *arvif,
++					  struct ath12k_link_sta *arsta,
++					  struct ath12k_wmi_peer_create_arg *arg)
++{
++}
++
++static inline bool
++ath12k_11s_mlo_testing_skip_peer_delete_wait(struct ath12k_vif *ahvif,
++					     struct ath12k *ar, const u8 *addr)
++{
++	return false;
++}
++
++static inline void
++ath12k_mac_mlo_mesh_h_addr_trans(struct ath12k_base *ab, struct sk_buff *skb)
++{
++}
++
++static inline
++struct ath12k_vif *ath12k_mac_mlo_mesh_update_primary_vif(struct ieee80211_vif *vif)
++{
++	return NULL;
++}
++
++static inline int
++ath12k_11s_mlo_testing_peer_already_created(u8 *addr)
++{
++	return 0;
++}
++
++static inline void
++ath12k_11s_mlo_testing_notify_peer_state(const u8 *addr, enum ieee80211_sta_state state,
++					 u8 after)
++{
++}
++
++static inline bool
++ath12k_11s_mlo_testing_is_drop_packet(void)
++{
++	return false;
++}
++
++static inline int
++ath12k_11s_mlo_testing_mac_station_add(struct ath12k *ar, struct ath12k_link_vif *arvif,
++				       struct ath12k_link_sta *arsta)
++{
++	return 0;
++}
++
++static inline void
++ath12k_11s_mlo_testing_mac_station_remove(struct ath12k *ar,
++					  struct ath12k_link_vif *arvif,
++					  struct ath12k_link_sta *arsta)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_fill_ml_peer_param(struct ath12k_base *ab,
++					  struct ath12k_vif *ahvif,
++					  struct ath12k_peer *peer,
++					  u8 pdev_idx)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_handle_tx_skb(struct ath12k_base *ab,
++				     struct ieee80211_vif *vif,
++				     struct sk_buff *skb)
++{
++}
++
++static inline void
++ath12k_11s_mlo_testing_free_ptk(const u8 *addr)
++{
++}
++
++static inline int
++ath12k_mlo_testing_replace_or_store_ptk(struct wmi_vdev_install_key_arg *arg,
++					u8 *tlv_data)
++{
++	return 0;
++}
++
++#endif /* CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO */
++
++#endif
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -21,6 +21,7 @@
+ #include "peer.h"
+ #include "testmode.h"
+ #include "dp_mon.h"
++#include "test_mlo_mesh.h"
+ 
+ struct ath12k_wmi_svc_ready_parse {
+ 	bool wmi_svc_bitmap_done;
+@@ -3253,6 +3254,7 @@ int ath12k_wmi_vdev_install_key(struct a
+ 	tlv = (struct wmi_tlv *)(skb->data + sizeof(*cmd));
+ 	tlv->header = ath12k_wmi_tlv_hdr(WMI_TAG_ARRAY_BYTE, key_len_aligned);
+ 	memcpy(tlv->value, arg->key_data, arg->key_len);
++	ath12k_mlo_testing_replace_or_store_ptk(arg, tlv->value);
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
+ 		   "WMI vdev install key idx %d cipher %d len %d\n",
+@@ -13097,6 +13099,18 @@ skip_mgmt_stats:
+ 		}
+ 	}
+ 
++#ifdef CPTCFG_ATH12K_TEST_FW_FOR_11S_MLO
++	if (ath12k_11s_mlo_testing_enable &&
++	    (ieee80211_is_beacon(hdr->frame_control) ||
++	    ieee80211_is_assoc_req(hdr->frame_control)) &&
++	     ath12k_block_mesh_beacon_rx) {
++		ath12k_dbg(ab, ATH12K_DBG_MGMT,
++			   "dropping mesh beacon src %pM\n", ieee80211_get_SA(hdr));
++		dev_kfree_skb(skb);
++		goto exit;
++	}
++#endif
++
+ 	if (ieee80211_is_beacon(hdr->frame_control))
+ 		ath12k_mac_handle_beacon(ar, skb);
+ 

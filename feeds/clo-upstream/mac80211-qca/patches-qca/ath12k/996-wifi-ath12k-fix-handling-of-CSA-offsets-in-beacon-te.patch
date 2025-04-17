@@ -1,0 +1,83 @@
+From 5530de2d7e4577945165501356f9d55d4c6f7e3a Mon Sep 17 00:00:00 2001
+From: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Date: Tue, 24 Dec 2024 08:24:27 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL:wifi: ath12k: fix handling of CSA offsets
+ in beacon template command
+
+The driver is informed of the counter offsets in the beacon during CSA
+through the ieee80211_mutable_offsets structure. According to the
+documentation for the cntdwn_counter_offs member, "This array can contain
+zero values which should be ignored." However, the current implementation
+uses these values unconditionally, without checking for zeros.
+
+Whenever CSA is active, these offsets are guaranteed to be set. Therefore,
+add a check for CSA active status before setting the CSA switch count
+offsets. This ensures that the offsets are only set when CSA is active,
+preventing incorrect configurations.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/wmi.c | 23 ++++++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -3094,14 +3094,17 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *a
+ 			struct sk_buff *bcn, u32 ema_params)
+ {
+ 	struct ath12k_wmi_pdev *wmi = ar->wmi;
++	struct ath12k_base *ab = ar->ab;
+ 	struct wmi_bcn_tmpl_cmd *cmd;
+ 	struct ath12k_wmi_bcn_prb_info_params *bcn_prb_info;
++	struct ieee80211_bss_conf *conf;
+ 	struct wmi_tlv *tlv;
+ 	struct sk_buff *skb;
+ 	void *ptr, *start;
+ 	int ret, len, alloc_len;
+ 	size_t aligned_len = roundup(bcn->len, 4);
+ 	struct ath12k_link_vif *arvif = ath12k_mac_get_arvif(ar, vdev_id);
++	struct ath12k_vif *ahvif = arvif->ahvif;
+ 	struct wmi_critical_update_arg cu_arg = {
+ 						 .num_ml_params = 0,
+ 						 .ml_params = NULL,
+@@ -3112,6 +3115,14 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *a
+ 	if (WARN_ON(!arvif))
+ 		return -EINVAL;
+ 
++	conf = ath12k_get_link_bss_conf(arvif);
++	if (!conf) {
++		ath12k_warn(ab, "unable to access bss link conf in"
++				"beacon template command for vif %pM link %u\n",
++			    ahvif->vif->addr, arvif->link_id);
++		return -EINVAL;
++	}
++
+ 	ath12k_wmi_fill_cu_arg(arvif, &cu_arg);
+ 
+ 	len = sizeof(*cmd) + sizeof(*bcn_prb_info) + TLV_HDR_SIZE + aligned_len +
+@@ -3136,8 +3147,14 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *a
+ 						 sizeof(*cmd));
+ 	cmd->vdev_id = cpu_to_le32(vdev_id);
+ 	cmd->tim_ie_offset = cpu_to_le32(offs->tim_offset);
+-	cmd->csa_switch_count_offset = cpu_to_le32(offs->cntdwn_counter_offs[0]);
+-	cmd->ext_csa_switch_count_offset = cpu_to_le32(offs->cntdwn_counter_offs[1]);
++
++	if (conf->csa_active) {
++		cmd->csa_switch_count_offset =
++			cpu_to_le32(offs->cntdwn_counter_offs[0]);
++		cmd->ext_csa_switch_count_offset =
++			cpu_to_le32(offs->cntdwn_counter_offs[1]);
++	}
++
+ 	cmd->csa_event_bitmap = cpu_to_le32(0xFFFFFFFF);
+ 	cmd->buf_len = cpu_to_le32(bcn->len);
+ 	cmd->mbssid_ie_offset = cpu_to_le32(offs->mbssid_off);
+@@ -3174,7 +3191,7 @@ int ath12k_wmi_bcn_tmpl(struct ath12k *a
+ 
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_BCN_TMPL_CMDID);
+ 	if (ret) {
+-		ath12k_warn(ar->ab, "failed to send WMI_BCN_TMPL_CMDID\n");
++		ath12k_warn(ab, "failed to send WMI_BCN_TMPL_CMDID\n");
+ 		dev_kfree_skb(skb);
+ 	}
+ 

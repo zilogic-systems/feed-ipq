@@ -1,0 +1,51 @@
+From f7e9af00048ac0ab7266ab0a095e906f27a66b41 Mon Sep 17 00:00:00 2001
+From: Ganesh Kariganuru Mahabalesh <quic_gkarigan@quicinc.com>
+Date: Mon, 3 Mar 2025 08:52:41 -0800
+Subject: [PATCH] QSDK:DP: wifi: ath12k: Increase PPE2TCL AND WBM2SW ring sizes
+ for DS
+
+With the current ring sizes for PPE2TCL and WBM2SW ring, we are
+seeing backpressure in the PPE HW when we run the short frames tests.
+
+This patch increases the ring sizes for PPE2TCL from 2048
+to 8192 and for PPE WBM2SW from 8192 to 32768.
+
+Patch-dependency: 763-b-wifi-ath12k-add-framework-to-support-PPE-DS.patch
+
+Signed-off-by: Ganesh Kariganuru Mahabalesh <quic_gkarigan@quicinc.com>
+
+---
+ drivers/net/wireless/ath/ath12k/dp.h |    8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -184,6 +184,8 @@ struct ath12k_pdev_dp {
+ #define DP_RXDMA_MONITOR_BUF_RING_SIZE	256
+ #define DP_RXDMA_MONITOR_DST_RING_SIZE	512
+ #define ATH12K_NUM_POOL_TX_DESC		16384
++#define DP_PPE2TCL_RING_SIZE		2048
++#define DP_PPE_WBM2SW_RING_SIZE		8192
+ #define DP_REO2PPE_RING_SIZE		2048
+ /* TODO revisit this count during testing */
+ #define ATH12K_RX_DESC_COUNT		(6144)
+@@ -196,7 +198,9 @@ struct ath12k_pdev_dp {
+ #define DP_RXDMA_MONITOR_BUF_RING_SIZE	4096
+ #define DP_RXDMA_MONITOR_DST_RING_SIZE	8192
+ #define ATH12K_NUM_POOL_TX_DESC		32768
+-#define DP_REO2PPE_RING_SIZE 16384
++#define DP_PPE2TCL_RING_SIZE		8192
++#define DP_PPE_WBM2SW_RING_SIZE		32768
++#define DP_REO2PPE_RING_SIZE		16384
+ /* TODO revisit this count during testing */
+ #define ATH12K_RX_DESC_COUNT		(12288)
+ #define DP_RX_BUFFER_SIZE	2048
+@@ -229,8 +233,6 @@ struct ath12k_pdev_dp {
+ #define DP_RX_BUFFER_SIZE_LITE	1024
+ #define DP_RX_BUFFER_ALIGN_SIZE	128
+ 
+-#define DP_PPE2TCL_RING_SIZE 2048
+-#define DP_PPE_WBM2SW_RING_SIZE 8192
+ #define HAL_REO2PPE_DST_IND 6
+ #define DP_VALID_PREFETCH_ENTRY 3
+ 

@@ -26,7 +26,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -1191,7 +1191,10 @@ static int ath12k_mac_monitor_vdev_creat
+@@ -1328,7 +1328,10 @@ static int ath12k_mac_monitor_vdev_creat
  		return -ENOMEM;
  	}
  
@@ -37,7 +37,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  
  	ar->monitor_vdev_id = bit;
  
-@@ -1215,6 +1218,9 @@ static int ath12k_mac_monitor_vdev_creat
+@@ -1354,6 +1357,9 @@ static int ath12k_mac_monitor_vdev_creat
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to request monitor vdev %i creation: %d\n",
  			    ar->monitor_vdev_id, ret);
@@ -47,7 +47,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  		ar->monitor_vdev_id = -1;
  		return ret;
  	}
-@@ -1233,7 +1239,6 @@ static int ath12k_mac_monitor_vdev_creat
+@@ -1372,7 +1378,6 @@ static int ath12k_mac_monitor_vdev_creat
  		return ret;
  
  	ar->allocated_vdev_map |= 1LL << ar->monitor_vdev_id;
@@ -55,19 +55,19 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  	ar->num_created_vdevs++;
  	set_bit(MONITOR_VDEV_CREATED, &ar->monitor_flags);
  
-@@ -1268,9 +1273,11 @@ static int ath12k_mac_monitor_vdev_delet
- 		ath12k_warn(ar->ab, "Timeout in receiving vdev delete response\n");
- 	} else {
- 		ar->allocated_vdev_map &= ~(1LL << ar->monitor_vdev_id);
-+		spin_lock_bh(&ar->ab->base_lock);
- 		ar->ab->free_vdev_map |= 1LL << (ar->monitor_vdev_id);
- 		ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac monitor vdev %d deleted\n",
- 			   ar->monitor_vdev_id);
-+		spin_unlock_bh(&ar->ab->base_lock);
- 		ar->num_created_vdevs--;
- 		ar->monitor_vdev_id = -1;
- 		clear_bit(MONITOR_VDEV_CREATED, &ar->monitor_flags);
-@@ -4701,7 +4708,10 @@ static int ath12k_mac_vdev_delete(struct
+@@ -1409,9 +1414,11 @@ static int ath12k_mac_monitor_vdev_delet
+ 	}
+ 
+ 	ar->allocated_vdev_map &= ~(1LL << ar->monitor_vdev_id);
++	spin_lock_bh(&ar->ab->base_lock);
+ 	ar->ab->free_vdev_map |= 1LL << (ar->monitor_vdev_id);
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac monitor vdev %d deleted\n",
+ 		   ar->monitor_vdev_id);
++	spin_unlock_bh(&ar->ab->base_lock);
+ 	ar->num_created_vdevs--;
+ 	ar->monitor_vdev_id = -1;
+ 	clear_bit(MONITOR_VDEV_CREATED, &ar->monitor_flags);
+@@ -4747,7 +4754,10 @@ static int ath12k_mac_vdev_delete(struct
  		goto clean_up;
  	}
  
@@ -78,7 +78,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
  	ar->ab->free_vdev_stats_id_map &= ~(1LL << arvif->vdev_stats_id);
  	ar->num_created_vdevs--;
-@@ -9461,13 +9471,18 @@ static int ath12k_mac_vdev_create(struct
+@@ -9531,13 +9541,18 @@ static int ath12k_mac_vdev_create(struct
  		}
  	}
  
@@ -97,7 +97,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  
  	arvif->vdev_id = vdev_id;
  	/* Assume it as non-mbssid initially, well overwrite it later.
-@@ -9522,6 +9537,10 @@ static int ath12k_mac_vdev_create(struct
+@@ -9593,6 +9608,10 @@ static int ath12k_mac_vdev_create(struct
  	if (ret) {
  		ath12k_warn(ab, "failed to create WMI vdev %d: %d\n",
  			    arvif->vdev_id, ret);
@@ -108,7 +108,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  		goto err;
  	}
  
-@@ -9532,7 +9551,6 @@ static int ath12k_mac_vdev_create(struct
+@@ -9603,7 +9622,6 @@ static int ath12k_mac_vdev_create(struct
  		   link_addr, arvif->vdev_id);
  
  	ar->allocated_vdev_map |= 1LL << arvif->vdev_id;
@@ -116,7 +116,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  
  	spin_lock_bh(&ar->data_lock);
  	list_add(&arvif->list, &ar->arvifs);
-@@ -9666,7 +9684,9 @@ err_vdev_del:
+@@ -9737,7 +9755,9 @@ err_vdev_del:
  	ar->num_created_vdevs--;
  	arvif->is_created = false;
  	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
@@ -126,7 +126,7 @@ Signed-off-by: Harshitha Prem <quic_hprem@quicinc.com>
  	ab->free_vdev_stats_id_map &= ~(1LL << arvif->vdev_stats_id);
  	spin_lock_bh(&ar->data_lock);
  	list_del(&arvif->list);
-@@ -15095,7 +15115,10 @@ int ath12k_mac_allocate(struct ath12k_hw
+@@ -15253,7 +15273,10 @@ int ath12k_mac_allocate(struct ath12k_hw
  
  				/* Initialize channel counters frequency value in hertz */
  				ab->cc_freq_hz = 320000;

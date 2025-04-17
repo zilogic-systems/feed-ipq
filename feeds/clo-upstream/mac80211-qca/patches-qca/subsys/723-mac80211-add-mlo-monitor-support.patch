@@ -427,7 +427,7 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
  
  	if (!ieee80211_hw_check(&local->hw, WANT_MONITOR_VIF))
  		return 0;
-@@ -1154,106 +1161,128 @@ int ieee80211_add_virtual_monitor(struct
+@@ -1154,66 +1161,74 @@ int ieee80211_add_virtual_monitor(struct
  	ASSERT_RTNL();
  	lockdep_assert_wiphy(local->hw.wiphy);
  
@@ -465,6 +465,8 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
 -		kfree(sdata);
 -		return ret;
 -	}
+-
+-	set_bit(SDATA_STATE_RUNNING, &sdata->state);
 +		sdata = kzalloc(sizeof(*sdata) + local->hw.vif_data_size, GFP_KERNEL);
 +		if (!sdata)
 +			return -ENOMEM;
@@ -480,39 +482,28 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
 +		ieee80211_set_default_queues(sdata);
 +
 +		ret = drv_add_interface(local, sdata);
-+		if (WARN_ON(ret))
++		if (WARN_ON(ret)) {
 +			/* ok .. stupid driver, it asked for this! */
-+			goto free;
-+
-+		set_bit(SDATA_STATE_RUNNING, &sdata->state);
-+
-+		ret = ieee80211_check_queues(sdata, NL80211_IFTYPE_MONITOR);
-+		if (ret)
-+			goto free;
- 
--	set_bit(SDATA_STATE_RUNNING, &sdata->state);
-+		mutex_lock(&local->iflist_mtx);
-+		rcu_assign_pointer(local->monitor_sdata[i], sdata);
-+		local->monitor_sdata_created = true;
-+		mutex_unlock(&local->iflist_mtx);
++			kfree(sdata);
++			continue;
++		}
  
 -	ret = ieee80211_check_queues(sdata, NL80211_IFTYPE_MONITOR);
 -	if (ret) {
 -		kfree(sdata);
 -		return ret;
 -	}
-+		mutex_lock(&local->mtx);
-+		ret = ieee80211_link_use_channel(&sdata->deflink, &local->monitor_chandef[i],
-+				IEEE80211_CHANCTX_EXCLUSIVE);
-+		mutex_unlock(&local->mtx);
-+		if (ret)
-+			goto free;
++		set_bit(SDATA_STATE_RUNNING, &sdata->state);
  
 -	mutex_lock(&local->iflist_mtx);
 -	rcu_assign_pointer(local->monitor_sdata, sdata);
 -	mutex_unlock(&local->iflist_mtx);
-+		atomic_add(sizeof(*sdata) + local->hw.vif_data_size,
-+				&local->memory_stats.malloc_size);
++		ret = ieee80211_check_queues(sdata, NL80211_IFTYPE_MONITOR);
++		if (ret) {
++			drv_remove_interface(local, sdata);
++			kfree(sdata);
++			continue;
++		}
  
 -	sdata_lock(sdata);
 -	mutex_lock(&local->mtx);
@@ -521,22 +512,11 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
 -	mutex_unlock(&local->mtx);
 -	sdata_unlock(sdata);
 -	if (ret) {
--		mutex_lock(&local->iflist_mtx);
+ 		mutex_lock(&local->iflist_mtx);
 -		RCU_INIT_POINTER(local->monitor_sdata, NULL);
--		mutex_unlock(&local->iflist_mtx);
-+		skb_queue_head_init(&sdata->skb_queue);
-+		skb_queue_head_init(&sdata->status_queue);
-+		wiphy_work_init(&sdata->work, ieee80211_iface_work);
-+	} while (++i < local->hw.wiphy->num_hw);
-+
-+	return 0;
-+
-+
-+free:
-+	mutex_lock(&local->iflist_mtx);
-+	do {
-+		RCU_INIT_POINTER(local->monitor_sdata[i], NULL);
- 		synchronize_net();
++		rcu_assign_pointer(local->monitor_sdata[i], sdata);
+ 		mutex_unlock(&local->iflist_mtx);
+-		synchronize_net();
 -		drv_remove_interface(local, sdata);
 -		mutex_destroy(&sdata->wdev.mtx);
 -		kfree(sdata);
@@ -545,25 +525,35 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
  
 -	atomic_add(sizeof(*sdata) + local->hw.vif_data_size,
 -		   &local->memory_stats.malloc_size);
++		mutex_lock(&local->mtx);
++		ret = ieee80211_link_use_channel(&sdata->deflink, &local->monitor_chandef[i],
++				IEEE80211_CHANCTX_EXCLUSIVE);
++		mutex_unlock(&local->mtx);
++		if (ret) {
++			mutex_lock(&local->iflist_mtx);
++			RCU_INIT_POINTER(local->monitor_sdata[i], NULL);
++			mutex_unlock(&local->iflist_mtx);
++			synchronize_net();
++			drv_remove_interface(local, sdata);
++			kfree(sdata);
++			continue;
++		}
++		local->monitor_sdata_created = true;
++
++		atomic_add(sizeof(*sdata) + local->hw.vif_data_size,
++				&local->memory_stats.malloc_size);
  
 -	skb_queue_head_init(&sdata->skb_queue);
 -	skb_queue_head_init(&sdata->status_queue);
 -	wiphy_work_init(&sdata->work, ieee80211_iface_work);
-+		sdata = rcu_dereference_protected(local->monitor_sdata[i],
-+				lockdep_is_held(&local->iflist_mtx));
-+		if (!sdata)
-+			continue;
-+
-+		drv_remove_interface(local, sdata);
-+		kfree(sdata);
-+	} while (--i >= 0);
-+	mutex_unlock(&local->iflist_mtx);
-+	local->monitor_sdata_created = false;
-+	return ret;
++		skb_queue_head_init(&sdata->skb_queue);
++		skb_queue_head_init(&sdata->status_queue);
++		wiphy_work_init(&sdata->work, ieee80211_iface_work);
++	} while (++i < local->hw.wiphy->num_hw);
  
--	return 0;
+ 	return 0;
  }
- 
+@@ -1221,39 +1236,44 @@ int ieee80211_add_virtual_monitor(struct
  void ieee80211_del_virtual_monitor(struct ieee80211_local *local)
  {
  	struct ieee80211_sub_if_data *sdata;
@@ -627,7 +617,7 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
  }
  
  #ifdef CPTCFG_MAC80211_NSS_SUPPORT
-@@ -1865,8 +1894,10 @@ static void ieee80211_setup_sdata(struct
+@@ -1865,8 +1885,10 @@ static void ieee80211_setup_sdata(struct
  			ieee80211_mesh_init_sdata(sdata);
  		break;
  	case NL80211_IFTYPE_MONITOR:

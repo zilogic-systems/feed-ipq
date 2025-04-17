@@ -1,0 +1,59 @@
+From a260151db01efdbe46ab2760480d479cbb78b0b8 Mon Sep 17 00:00:00 2001
+From: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+Date: Thu, 23 Jan 2025 12:55:09 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: Reduce prefetch usage in IPQ5424
+ platform
+
+In the IPQ5424, the cache size is reduced. High use of prefetch leads to
+frequent cache maintenance operations. This may consume CPU cycles and
+cause performance degradation. Hence, remove the sw desc prefetch to
+improve the TBTC DL throughput ~300Mbps.
+
+patch-dependency: I6db423e (io coherency support changes)
+
+Signed-off-by: Thiraviyam Mariyappan <quic_tmariyap@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_tx.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index d8505e7..be03cca 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -1638,7 +1638,10 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 	int hal_ring_id = tx_ring->tcl_comp_ring.ring_id;
+ 	int data_ring_id = tx_ring->tcl_data_ring_id;
+ 	struct hal_srng *status_ring = &ab->hal.srng_list[hal_ring_id];
+-	struct ath12k_tx_desc_info *tx_desc, *last_pf_sw_desc = NULL;
++	struct ath12k_tx_desc_info *tx_desc;
++#ifndef CONFIG_IO_COHERENCY
++	struct ath12k_tx_desc_info *last_pf_sw_desc = NULL;
++#endif
+ 	struct list_head desc_free_list, *cur;
+ 	struct sk_buff *msdu;
+ 	u8 mac_id;
+@@ -1730,17 +1733,18 @@ int ath12k_dp_tx_completion_handler(struct ath12k_base *ab, int ring_id,
+ 			continue;
+ 		}
+ 
+-
++#ifndef CONFIG_IO_COHERENCY
+ 		if (last_pf_sw_desc) {
+ 			prefetch((u8 *)(last_pf_sw_desc->skb) + offsetof(struct sk_buff, headers));
+ 		}
+-
++#endif
+ 		if (last_pf_hw_desc) {
+ 			desc_va = ((u64)last_pf_hw_desc->buf_va_hi << 32 |
+ 					last_pf_hw_desc->buf_va_lo);
+ 			prefetch((void *)(uintptr_t)desc_va);
++#ifndef CONFIG_IO_COHERENCY
+ 			last_pf_sw_desc = (struct ath12k_tx_desc_info *)((unsigned long)desc_va);
+-
++#endif
+ 			tp = status_ring->u.dst_ring.tp;
+ 			hp = status_ring->u.dst_ring.cached_hp;
+ 
+-- 
+2.34.1
+

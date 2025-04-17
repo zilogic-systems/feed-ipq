@@ -32,7 +32,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -1763,7 +1763,7 @@ int ath12k_core_qmi_firmware_ready(struc
+@@ -1762,7 +1762,7 @@ int ath12k_core_qmi_firmware_ready(struc
  	}
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -43,7 +43,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  			ath12k_warn(ab,
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -463,8 +463,8 @@ struct ath12k_link_vif {
+@@ -464,8 +464,8 @@ struct ath12k_link_vif {
  	struct ath12k_prb_resp_tmpl_ml_info ml_info;
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -53,8 +53,8 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #endif
  
  };
-@@ -514,6 +514,7 @@ struct ath12k_vif {
- #endif /* CPTCFG_ATH12K_DEBUGFS */
+@@ -517,6 +517,7 @@ struct ath12k_vif {
+ 	u8 hw_link_id;
  	bool chanctx_peer_del_done;
  
 +	/* PPE mode independent variables */
@@ -152,7 +152,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		if (!rx_status) {
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -10867,7 +10867,7 @@ static void ath12k_mac_update_vif_offloa
+@@ -10916,7 +10916,7 @@ static void ath12k_mac_update_vif_offloa
  					IEEE80211_OFFLOAD_DECAP_ENABLED);
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -161,7 +161,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	if (test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags) &&
  	    vif->type == NL80211_IFTYPE_AP)
  		vif->offload_flags |= (IEEE80211_OFFLOAD_ENCAP_ENABLED |
-@@ -11449,8 +11449,14 @@ static int ath12k_mac_op_add_interface(s
+@@ -11501,8 +11501,14 @@ static int ath12k_mac_op_add_interface(s
  	 * and ppe_vp_num is maintained in sdata. Cleanup this with DS enablement in
  	 * WDS mode.
  	 */
@@ -177,7 +177,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	if (ppe_vp_type != ATH12K_INVALID_PPE_VP_TYPE) {
  		if (ppe_vp_num == ATH12K_INVALID_PPE_VP_NUM) {
-@@ -13703,6 +13709,10 @@ ath12k_mac_op_assign_vif_chanctx(struct
+@@ -13767,6 +13773,10 @@ ath12k_mac_op_assign_vif_chanctx(struct
  
  	ab = ar->ab;
  
@@ -188,7 +188,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	mutex_lock(&ar->conf_mutex);
  
  	ath12k_dbg(ab, ATH12K_DBG_MAC,
-@@ -14028,6 +14038,9 @@ stop_primary:
+@@ -14092,6 +14102,9 @@ stop_primary:
  	}
  
  	mutex_unlock(&ar->conf_mutex);
@@ -210,7 +210,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  struct ath12k_hw;
 --- a/drivers/net/wireless/ath/ath12k/peer.c
 +++ b/drivers/net/wireless/ath/ath12k/peer.c
-@@ -835,8 +835,8 @@ int ath12k_peer_create(struct ath12k *ar
+@@ -857,8 +857,8 @@ int ath12k_peer_create(struct ath12k *ar
  		peer->ppe_vp_num = peer->vif->ppe_vp_num;
  #endif
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -373,7 +373,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	return 0;
  }
  
-@@ -1270,10 +1266,9 @@ int ath12k_change_core_mask_for_ppe_rfs(
+@@ -1271,10 +1267,9 @@ int ath12k_change_core_mask_for_ppe_rfs(
  	if (!ath12k_ppe_rfs_support)
  		return 0;
  
@@ -387,7 +387,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	}
  
  	if (core_mask < 0) {
-@@ -1296,6 +1291,30 @@ int ath12k_change_core_mask_for_ppe_rfs(
+@@ -1297,6 +1292,30 @@ int ath12k_change_core_mask_for_ppe_rfs(
  	return 0;
  }
  
@@ -418,7 +418,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  void ath12k_vif_free_vp(struct ath12k_vif *ahvif)
  {
  	struct wireless_dev *wdev = ieee80211_vif_to_wdev(ahvif->vif);
-@@ -1327,10 +1346,22 @@ int ath12k_vif_alloc_vp(struct ath12k_vi
+@@ -1328,10 +1347,22 @@ int ath12k_vif_alloc_vp(struct ath12k_vi
  	if (ppe_vp_type == PPE_VP_USER_TYPE_PASSIVE && !ath12k_ppe_rfs_support)
  		return 0;
  
@@ -443,7 +443,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	ahvif->ppe_vp_num = ATH12K_INVALID_PPE_VP_NUM;
  
  	memset(&vpai, 0, sizeof(struct ppe_vp_ai));
-@@ -1338,18 +1369,32 @@ int ath12k_vif_alloc_vp(struct ath12k_vi
+@@ -1339,18 +1370,32 @@ int ath12k_vif_alloc_vp(struct ath12k_vi
  	vpai.net_dev_type = PPE_VP_NET_DEV_TYPE_WIFI;
  
  	/* RFS */
@@ -485,7 +485,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		return -ENOSR;
  	}
  
-@@ -1365,20 +1410,143 @@ int ath12k_vif_alloc_vp(struct ath12k_vi
+@@ -1366,20 +1411,143 @@ int ath12k_vif_alloc_vp(struct ath12k_vi
  	return 0;
  }
  
@@ -636,7 +636,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  }
  
  void ath12k_dp_rx_ppe_fse_register(void)
-@@ -1389,8 +1557,8 @@ void ath12k_dp_rx_ppe_fse_register(void)
+@@ -1390,8 +1558,8 @@ void ath12k_dp_rx_ppe_fse_register(void)
  	if (!ath12k_fse_enable)
  		return;
  
@@ -691,7 +691,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  }
 --- a/drivers/net/wireless/ath/ath12k/vendor.c
 +++ b/drivers/net/wireless/ath/ath12k/vendor.c
-@@ -1003,7 +1003,8 @@ static int ath12k_vendor_ds_handler(stru
+@@ -1016,7 +1016,8 @@ static int ath12k_vendor_ds_handler(stru
  	int ml_netdev = 0;
  
  	/* TODO: DS: This function to be reused for per VAP PPE VP
@@ -713,7 +713,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	struct wmi_mac_addr peer_macaddr;
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -2777,17 +2777,96 @@ void ath12k_fst_debugfs_init(struct ath1
+@@ -2785,17 +2785,96 @@ void ath12k_fst_debugfs_init(struct ath1
  			    &fops_fse);
  }
  
@@ -813,7 +813,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	buf = kzalloc(size, GFP_KERNEL);
  	if (!buf)
  		return -ENOMEM;
-@@ -2822,6 +2901,93 @@ static ssize_t ath12k_debugfs_dump_ppeds
+@@ -2830,6 +2909,95 @@ static ssize_t ath12k_debugfs_dump_ppeds
  			 ppeds_stats->num_rx_desc_freed);
  	len += scnprintf(buf + len, size - len, "num_rx_desc_realloc %u\n",
  			 ppeds_stats->num_rx_desc_realloc);
@@ -861,6 +861,8 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 +			interface_found = false;
 +			ahvif = arvif->ahvif;
 +			wdev = ieee80211_vif_to_wdev(ahvif->vif);
++			if (!wdev || !wdev->netdev)
++				continue;
 +
 +			index = wdev->netdev->ifindex;
 +
@@ -909,7 +911,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  		len = size;
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
-@@ -1325,6 +1325,8 @@ static void ath12k_ppeds_tx_update_stats
+@@ -1324,6 +1324,8 @@ static void ath12k_ppeds_tx_update_stats
  					  ts.ack_rssi;
  		info->status.flags = IEEE80211_TX_STATUS_ACK_SIGNAL_VALID;
  	}

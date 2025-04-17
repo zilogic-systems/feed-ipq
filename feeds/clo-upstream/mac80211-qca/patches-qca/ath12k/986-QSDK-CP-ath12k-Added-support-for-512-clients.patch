@@ -30,7 +30,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  /* Num of Bridge vdevs per radio */
  #define TARGET_NUM_BRIDGE_VDEVS	0
  #define ATH12K_MAX_NUM_VDEVS_NLINK	TARGET_NUM_BRIDGE_VDEVS
-@@ -32,27 +36,28 @@ struct ath12k_cfr_peer_tx_param;
+@@ -32,28 +36,29 @@ struct ath12k_cfr_peer_tx_param;
  #define ATH12K_MAX_NUM_VDEVS_NLINK	TARGET_NUM_VDEVS + \
  					TARGET_NUM_BRIDGE_VDEVS
  #define ATH12K_QMI_TARGET_MEM_MODE	ATH12K_QMI_TARGET_MEM_MODE_DEFAULT
@@ -40,6 +40,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
 +#define TARGET_NUM_STATIONS(ab)	((ath12k_max_clients > ab->hw_params->max_clients_supported) ? ab->hw_params->max_clients_supported : ath12k_max_clients)
  #endif
  
+ #define TARGET_NUM_BRIDGE_SELF_PEER	TARGET_NUM_BRIDGE_VDEVS
  /* ToDo: do we need to include self peer of bridge vdev also here? */
 -#define TARGET_NUM_PEERS_PDEV	(TARGET_NUM_STATIONS + TARGET_NUM_VDEVS)
 +#define TARGET_NUM_PEERS_PDEV(ab)	(TARGET_NUM_STATIONS(ab) + TARGET_NUM_VDEVS)
@@ -68,7 +69,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  				 4 * TARGET_NUM_VDEVS + 8)
  
  #define TARGET_AST_SKID_LIMIT	16
-@@ -196,6 +201,9 @@ struct ath12k_hw_params {
+@@ -197,6 +202,9 @@ struct ath12k_hw_params {
  		size_t cal_offset;
  	} fw;
  
@@ -80,7 +81,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  	u32 qmi_service_ins_id;
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -39,6 +39,12 @@ static unsigned int ath12k_crypto_mode;
+@@ -41,6 +41,12 @@ static unsigned int ath12k_crypto_mode;
  module_param_named(crypto_mode, ath12k_crypto_mode, uint, 0644);
  MODULE_PARM_DESC(crypto_mode, "crypto mode: 0-hardware, 1-software");
  
@@ -95,7 +96,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  module_param_named(frame_mode, ath12k_frame_mode, uint, 0644);
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -57,6 +57,9 @@ extern bool ath12k_erp_support;
+@@ -61,6 +61,9 @@ extern bool ath12k_erp_support;
  extern unsigned int ath12k_ppe_ds_enabled;
  extern bool ath12k_rx_nwifi_err_dump;
  extern bool ath12k_fse_3_tuple_enabled;
@@ -141,7 +142,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  		.idle_ps = false,
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -19592,8 +19592,8 @@ static int __ath12k_mac_register(struct
+@@ -19876,8 +19876,8 @@ static int __ath12k_mac_register(struct
  
  	ath12k_pdev_caps_update(ar);
  
@@ -150,11 +151,11 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
 +	ar->max_num_stations = TARGET_NUM_STATIONS(ar->ab);
 +	ar->max_num_peers = TARGET_NUM_PEERS_PDEV(ar->ab);
  
- 	if (cap->nss_ratio_enabled)
- 		ieee80211_hw_set(hw, SUPPORTS_VHT_EXT_NSS_BW);
+ 	total_vdevs = ath12k_core_get_total_num_vdevs(ar->ab);
+ 	if (total_vdevs == ATH12K_MAX_NUM_VDEVS_NLINK)
 --- a/drivers/net/wireless/ath/ath12k/peer.c
 +++ b/drivers/net/wireless/ath/ath12k/peer.c
-@@ -1104,7 +1104,7 @@ static int ath12k_peer_rhash_addr_tbl_in
+@@ -1098,7 +1098,7 @@ static int ath12k_peer_rhash_addr_tbl_in
  	param->head_offset = offsetof(struct ath12k_peer, rhash_addr);
  	param->key_len = sizeof_field(struct ath12k_peer, addr);
  	param->automatic_shrinking = true;
@@ -165,7 +166,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  	if (ret) {
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -255,15 +255,15 @@ void ath12k_wmi_init_qcn9274(struct ath1
+@@ -281,15 +281,15 @@ void ath12k_wmi_init_qcn9274(struct ath1
  	config->num_vdevs = ab->num_radios * total_vdevs;
  
  	if (ab->num_radios == 2) {
@@ -187,7 +188,7 @@ Signed-off-by: Harish Rachakonda <quic_rachakon@quicinc.com>
  	}
  	config->num_offload_peers = TARGET_NUM_OFFLD_PEERS;
  	config->num_offload_reorder_buffs = TARGET_NUM_OFFLD_REORDER_BUFFS;
-@@ -324,15 +324,15 @@ void ath12k_wmi_init_ipq5332(struct ath1
+@@ -350,15 +350,15 @@ void ath12k_wmi_init_ipq5332(struct ath1
  	config->num_vdevs = ab->num_radios * total_vdevs;
  
  	if (ab->num_radios == 2) {

@@ -1,0 +1,39 @@
+From c294ba59d1d70a1f57a60780f55c8ae3c3334b4c Mon Sep 17 00:00:00 2001
+From: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
+Date: Tue, 8 Oct 2024 23:12:10 +0530
+Subject: [PATCH] wifi: cfg80211: cancel CAC process when leaving Mesh
+
+When the mesh interface starts with a DFS channel (100),
+mac80211 start the CAC worker process. If the mesh interface
+is removeed and started with a non-DFS channel (like channel 36)
+before CAC completion, the CAC worker continues running,
+causing a crash in the mac80211 driver after CAC completion.
+
+Cancel the DFS CAC worker in mac80211 when leaving
+the mesh interface if cac_started is true
+
+Signed-off-by: Ramasamy Kaliappan <quic_rkaliapp@quicinc.com>
+---
+ net/wireless/mesh.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/net/wireless/mesh.c b/net/wireless/mesh.c
+index 59a3c5c..c1dc235 100644
+--- a/net/wireless/mesh.c
++++ b/net/wireless/mesh.c
+@@ -271,8 +271,11 @@ int __cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
+ 	if (!rdev->ops->leave_mesh)
+ 		return -EOPNOTSUPP;
+ 
+-	if (!wdev->u.mesh.id_len)
++	if (!wdev->u.mesh.id_len) {
++		if (wdev->links[0].cac_started)
++			rdev_end_cac(rdev, wdev->netdev, 0);
+ 		return -ENOTCONN;
++	}
+ 
+ 	err = rdev_leave_mesh(rdev, dev);
+ 	if (!err) {
+-- 
+2.34.1
+

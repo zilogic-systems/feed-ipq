@@ -59,7 +59,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  #include <linux/module.h>
  #include <linux/if_vlan.h>
  
-@@ -88,8 +89,197 @@ unlock_n_fail:
+@@ -88,8 +89,184 @@ unlock_n_fail:
  	return false;
  }
  
@@ -130,6 +130,11 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
 +	if (!ahvif)
 +		return;
 +
++	if (vif->type == NL80211_IFTYPE_MESH_POINT) {
++		*link_id = 0;
++		return;
++	}
++
 +	if (ahvif->vdev_type != WMI_VDEV_TYPE_STA &&
 +	    ahvif->vdev_type != WMI_VDEV_TYPE_AP)
 +		return;
@@ -164,32 +169,14 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
 +	    !test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
 +		goto unlock;
 +
-+	/*
-+	 * In splitphy mlo case, the vp number might get mapped to
-+	 * wrong lmac_id causing a traffic halt. Address this issue
-+	 * by adding a work around to fallback to sfe mode, in case
-+	 * the requested peer has a pdev with incompatible primary lmac id
-+	 */
-+	if (ab->num_radios > 1) {
-+		int idx = arvif->ppe_vp_profile_idx;
-+		int link_id;
-+		struct ath12k_link_vif *iter_arvif;
-+
-+		for_each_set_bit(link_id, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
-+			iter_arvif = ahvif->link[link_id];
-+			if (!iter_arvif || iter_arvif == arvif || ab != iter_arvif->ab)
-+				continue;
-+			if (iter_arvif->ppe_vp_profile_idx < idx) {
-+				ab->ppe.ppeds_stats.splitphy_fallbacks++;
-+				goto unlock;
-+			}
-+		}
-+	}
-+
 +	*node_id = ab->ppe.ds_node_id;
 +
 +unlock:
 +	rcu_read_unlock();
++
++	ath12k_dbg(ab, ATH12K_DBG_MAC,
++		   "Wifi-classifer mark peer %pM link_id %x node_id %x\n",
++		   peer_mac, *link_id, *node_id);
 +	return;
 +}
 +
@@ -259,7 +246,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  /**
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -94,6 +94,26 @@ extern bool ath12k_debug_critical;
+@@ -96,6 +96,26 @@ extern bool ath12k_debug_critical;
  #define ATH12K_SSR_PREPARE_SHUTDOWN QCOM_SSR_NOTIFY_CRASH
  #endif
  
@@ -286,7 +273,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  enum ath12k_bdf_search {
      ATH12K_BDF_SEARCH_DEFAULT,
      ATH12K_BDF_SEARCH_BUS_AND_BOARD,
-@@ -1893,6 +1913,16 @@ struct ath12k_dcs_wlan_interference {
+@@ -1924,6 +1944,16 @@ struct ath12k_dcs_wlan_interference {
  	struct wmi_dcs_wlan_interference_stats info;
  };
  
@@ -317,15 +304,19 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  
  	tcl_metadata = u32_encode_bits(HTT_TCL_META_DATA_TYPE_SVC_ID_BASED,
  				       HTT_TCL_META_DATA_TYPE_MISSION) |
-@@ -297,7 +296,6 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+@@ -296,8 +295,10 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 	int ret, len;
+ 	bool is_from_recycler;
  
- 	ring_id = smp_processor_id();
+-	ring_id = smp_processor_id();
++	if (unlikely(test_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags)))
++		return -EINVAL;
  
--
++	ring_id = smp_processor_id();
+ 
  	tx_desc = ath12k_dp_tx_assign_buffer(dp, ring_id);
  	if (unlikely(!tx_desc)) {
- 		ab->soc_stats.tx_err.txbuf_na[ring_id]++;
-@@ -331,38 +329,46 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+@@ -332,38 +333,46 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
          tcl_desc.info5 = 0;
  #ifdef CPTCFG_ATH12K_SAWF
          /* SAWF */
@@ -393,7 +384,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
          }
  #endif
  
-@@ -501,11 +507,23 @@ int ath12k_dp_tx(struct ath12k *ar, stru
+@@ -502,11 +511,23 @@ int ath12k_dp_tx(struct ath12k *ar, stru
  	 * Global Seq Number - Multicast, SAWF - Unicast
  	 */
  #ifdef CPTCFG_ATH12K_SAWF
@@ -421,7 +412,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  		}
  	} else if (gsn_valid && !skip_meta_data_flag) {
  #else
-@@ -699,7 +717,7 @@ skip_htt_meta:
+@@ -700,7 +721,7 @@ skip_htt_meta:
  
  #ifdef CPTCFG_ATH12K_SAWF
  	/* SAWF */
@@ -430,7 +421,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
  
  		if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
-@@ -725,7 +743,7 @@ skip_htt_meta:
+@@ -726,7 +747,7 @@ skip_htt_meta:
  		 */
  		if (info->sawf.nw_delay > SAWF_NW_DELAY_MAX)
  			info->sawf.nw_delay = SAWF_NW_DELAY_MAX;
@@ -441,7 +432,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -11188,7 +11188,7 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -11444,7 +11444,7 @@ static void ath12k_mac_op_tx(struct ieee
  	info = IEEE80211_SKB_CB(skb);
  	vif = info->control.vif;
  	info_flags = info->flags;
@@ -450,35 +441,139 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  	ahvif = ath12k_vif_to_ahvif(vif);
  
  	if (ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR) {
-@@ -11201,12 +11201,11 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -11457,60 +11457,21 @@ static void ath12k_mac_op_tx(struct ieee
  	memset(skb_cb, 0, sizeof(*skb_cb));
  	skb_cb->vif = vif;
  
 -	if (control)
-+        if (control)
-                 sta = control->sta;
- 
- 	/* handle only for MLO case, use deflink for non MLO case */
- 	if (vif->valid_links) {
+-                sta = control->sta;
+-
+-	/* handle only for MLO case, use deflink for non MLO case */
+-	if (vif->valid_links) {
 -		link = u32_get_bits(info->control.flags, IEEE80211_TX_CTRL_MLO_LINK);
- 		link = ath12k_mac_get_tx_link(sta, vif, link, skb, info_flags);
+-		link = ath12k_mac_get_tx_link(sta, vif, link, skb, info_flags);
++#ifdef CPTCFG_MAC80211_SFE_SUPPORT
++	if (skb->mark & ATH12K_MLO_METADATA_VALID_MASK) {
++		link_id =  u32_get_bits(skb->mark, ATH12K_MLO_METADATA_LINKID_MASK);
++		rcu_read_lock();
++		arvif = rcu_dereference(ahvif->link[link_id]);
++		skb_cb->link_id = link_id;
  
- 		if (link >= ATH12K_NUM_MAX_LINKS ||
-@@ -11229,10 +11228,10 @@ static void ath12k_mac_op_tx(struct ieee
- 	 *   Place this structure as the first member of arvif.
- 	 *   For example,
- 	 *   struct ath12k_link_vif_fast {
+-		if (link >= ATH12K_NUM_MAX_LINKS ||
+-		    link == IEEE80211_MLD_MAX_NUM_LINKS) {
++		if (!arvif || !arvif->ar) {
++			rcu_read_unlock();
+ 			ieee80211_free_txskb(hw, skb);
+ 			return;
+ 		}
+-	} else {
+-		link = 0;
+-	}
+ 
+-	/* TODO: Holding RCU lock for such a big function is not required, may
+-	 * have some performance impact when high throughput is expected.
+-	 * One possible improvement:
+-	 * For arvif: Few members are accessed in this path
+-	 * - False Sharing
+-	 * - Optimize the arvif structure for cache alignment
+-	 *   Create a new structure for frequently accessed members
+-	 *   Align this new structure to a cache line
+-	 *   Place this structure as the first member of arvif.
+-	 *   For example,
+-	 *   struct ath12k_link_vif_fast {
 -	 *   	u8 addr[ETH_LEN];
 -	 *   	u8 pad[2];
 -	 *   	u64 tbtt_offset;
 -	 *	Ensure the total size is a multiple of typical cache line size, 64
+-	 *   } ____cacheline_aligned;
+-	 */
+-	rcu_read_lock();
+-	arvif = rcu_dereference(ahvif->link[link]);
+-	skb_cb->link_id = link;
+-
+-	if (!arvif || !arvif->ar) {
+-		rcu_read_unlock();
+-		ieee80211_free_txskb(hw, skb);
+-		return;
+-	}
+-
+-	ar = arvif->ar;
++		ar = arvif->ar;
+ 
+-	if (unlikely(test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags))) {
+-		rcu_read_unlock();
+-		ieee80211_free_txskb(hw, skb);
+-		return;
+-	}
+-
+-#ifdef CPTCFG_MAC80211_SFE_SUPPORT
+-	if (skb->fast_xmit) {
+ 		ret = ath12k_mac_tx_check_max_limit(ar, skb);
+ 		if (ret) {
+ 			rcu_read_unlock();
+@@ -11552,12 +11513,62 @@ static void ath12k_mac_op_tx(struct ieee
+ 		return;
+ 	}
+ #endif
++	if (control)
++		sta = control->sta;
+ 
+ 	if (key) {
+ 		skb_cb->cipher = key->cipher;
+ 		skb_cb->flags |= ATH12K_SKB_CIPHER_SET;
+ 	}
+ 
++	/* handle only for MLO case, use deflink for non MLO case */
++	if (vif->valid_links) {
++		link = ath12k_mac_get_tx_link(sta, vif, link, skb, info_flags);
++
++		if (link >= ATH12K_NUM_MAX_LINKS ||
++		    link == IEEE80211_MLD_MAX_NUM_LINKS) {
++			ieee80211_free_txskb(hw, skb);
++			return;
++		}
++	} else {
++		link = 0;
++	}
++
++	/* TODO: Holding RCU lock for such a big function is not required, may
++	 * have some performance impact when high throughput is expected.
++	 * One possible improvement:
++	 * For arvif: Few members are accessed in this path
++	 * - False Sharing
++	 * - Optimize the arvif structure for cache alignment
++	 *   Create a new structure for frequently accessed members
++	 *   Align this new structure to a cache line
++	 *   Place this structure as the first member of arvif.
++	 *   For example,
++	 *   struct ath12k_link_vif_fast {
 +	 *      u8 addr[ETH_LEN];
 +	 *      u8 pad[2];
 +	 *      u64 tbtt_offset;
 +	 *      Ensure the total size is a multiple of typical cache line size, 64
- 	 *   } ____cacheline_aligned;
- 	 */
- 	rcu_read_lock();
++	 *   } ____cacheline_aligned;
++	 */
++	rcu_read_lock();
++	arvif = rcu_dereference(ahvif->link[link]);
++	skb_cb->link_id = link;
++
++	if (!arvif || !arvif->ar) {
++		rcu_read_unlock();
++		ieee80211_free_txskb(hw, skb);
++		return;
++	}
++
++	ar = arvif->ar;
++
++	if (unlikely(test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags))) {
++		rcu_read_unlock();
++		ieee80211_free_txskb(hw, skb);
++		return;
++	}
++
+ 	hdr = (struct ieee80211_hdr *)skb->data;
+ 
+ 	eth = (struct ethhdr *)skb->data;
 --- a/drivers/net/wireless/ath/ath12k/ppe.h
 +++ b/drivers/net/wireless/ath/ath12k/ppe.h
 @@ -57,6 +57,7 @@ struct ath12k_ppeds_stats {
@@ -710,7 +805,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  	struct net_device *src_dev;
 --- a/net/mac80211/tx.c
 +++ b/net/mac80211/tx.c
-@@ -4950,8 +4950,6 @@ netdev_tx_t ieee80211_subif_start_xmit_8
+@@ -4989,8 +4989,6 @@ netdev_tx_t ieee80211_subif_start_xmit_8
  	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev), *orig_sdata;
  	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
  	struct ieee80211_tx_control control = {};
@@ -719,7 +814,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  	bool perf_mode = sdata->local->hw.perf_mode;
  
  #ifdef CPTCFG_MAC80211_ATHMEMDEBUG
-@@ -4969,25 +4967,8 @@ netdev_tx_t ieee80211_subif_start_xmit_8
+@@ -5008,25 +5006,8 @@ netdev_tx_t ieee80211_subif_start_xmit_8
  						      IEEE80211_TX_CTRL_MLO_LINK);
  		info->flags = IEEE80211_TX_CTL_HW_80211_ENCAP;
  

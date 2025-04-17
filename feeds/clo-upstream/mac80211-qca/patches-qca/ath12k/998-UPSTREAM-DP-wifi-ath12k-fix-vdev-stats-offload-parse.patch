@@ -1,0 +1,303 @@
+From b48780ed742e58a5173717aff62840854c826049 Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Thu, 23 Jan 2025 15:19:41 +0530
+Subject: [PATCH] Upstream:DP:wifi: ath12k: fix vdev stats offload parser
+ handler
+
+htt_t2h_vdev_txrx_stats_hw_stats_tlv, ath12k_fw_vdev_ol_stats
+and htt_t2h_vdev_txrx_stats_ind structures are misaligned with
+the FW struct, causing improper stats updates.
+
+Fix: Align these structures with the FW struct by adding the
+missing stats and enabling them in debugfs print.
+
+HTT_T2H_VDEV_STATS_PERIODIC_PAYLOAD_BYTES is extracted for a
+23-bit message, which is incorrect.
+
+Fix: Update it for 32-bit message extraction.
+
+TLV tag values are currently extracted incorrectly, resulting
+in invalid tlv_len, tlv_tag, and vdev_id. This causes the
+access invalid memory location and leads to crash.
+
+Fix: Correctly parse the TLV data to fetch tlv_len, tlv_tag
+and vdev_id by using the new variables HAL_STATS_TLV_HDR_TAG
+and HAL_STATS_TLV_HDR_LEN.
+
+Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h        | 12 ++--
+ .../wireless/ath/ath12k/debugfs_htt_stats.h   | 20 ++++--
+ drivers/net/wireless/ath/ath12k/dp.h          | 32 ++++-----
+ drivers/net/wireless/ath/ath12k/dp_rx.c       | 67 +++++++++++++------
+ drivers/net/wireless/ath/ath12k/wmi.c         | 16 +++--
+ 5 files changed, 95 insertions(+), 52 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -336,12 +336,14 @@ struct ath12k_fw_vdev_ol_stats {
+ 	u64 rx_msdu_pkt_cnt;
+ 	u64 tx_msdu_byte_cnt;
+ 	u64 tx_msdu_pkt_cnt;
+-	u64 tx_retry_byte_cnt;
+ 	u64 tx_retry_pkt_cnt;
+-	u64 tx_drop_byte_cnt;
+-	u64 tx_drop_pkt_cnt;
+-	u64 tx_msdu_ttl_byte_cnt;
+-	u64 tx_msdu_ttl_pkt_cnt;
++	u64 tx_retry_byte_cnt;
++	u64 tx_cong_ctrl_drop_pkt_cnt;
++	u64 tx_cong_ctrl_drop_byte_cnt;
++	u64 tx_msdu_ttl_expire_byte_cnt;
++	u64 tx_msdu_ttl_expire_pkt_cnt;
++	u64 tqm_bypass_byte_cnt;
++	u64 tqm_bypass_frame_cnt;
+ };
+ 
+ /**
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.h
+@@ -4482,20 +4482,26 @@ struct htt_t2h_soc_txrx_stats_common_tlv
+ 
+ struct htt_t2h_vdev_txrx_stats_hw_stats_tlv {
+ 	u32 vdev_id;
+-	u32 rx_msdu_byte_cnt_hi;
+ 	u32 rx_msdu_byte_cnt_lo;
+-	u32 rx_msdu_cnt_hi;
++	u32 rx_msdu_byte_cnt_hi;
+ 	u32 rx_msdu_cnt_lo;
+-	u32 tx_msdu_byte_cnt_hi;
++	u32 rx_msdu_cnt_hi;
+ 	u32 tx_msdu_byte_cnt_lo;
+-	u32 tx_msdu_cnt_hi;
++	u32 tx_msdu_byte_cnt_hi;
+ 	u32 tx_msdu_cnt_lo;
+-	u32 tx_msdu_excessive_retry_discard_cnt_hi;
++	u32 tx_msdu_cnt_hi;
+ 	u32 tx_msdu_excessive_retry_discard_cnt_lo;
+-	u32 tx_msdu_cong_ctrl_drop_cnt_hi;
++	u32 tx_msdu_excessive_retry_discard_cnt_hi;
+ 	u32 tx_msdu_cong_ctrl_drop_cnt_lo;
+-	u32 tx_msdu_ttl_expire_drop_cnt_hi;
++	u32 tx_msdu_cong_ctrl_drop_cnt_hi;
+ 	u32 tx_msdu_ttl_expire_drop_cnt_lo;
++	u32 tx_msdu_ttl_expire_drop_cnt_hi;
++	u32 tx_msdu_excessive_retry_discard_byte_cnt_lo;
++	u32 tx_msdu_excessive_retry_discard_byte_cnt_hi;
++	u32 tx_msdu_cong_ctrl_drop_byte_cnt_lo;
++	u32 tx_msdu_cong_ctrl_drop_byte_cnt_hi;
++	u32 tx_msdu_ttl_expire_drop_byte_cnt_lo;
++	u32 tx_msdu_ttl_expire_drop_byte_cnt_hi;
+ 	u32 tqm_bypass_frame_cnt_lo;
+ 	u32 tqm_bypass_frame_cnt_hi;
+ 	u32 tqm_bypass_byte_cnt_lo;
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -1543,9 +1543,7 @@ struct htt_resp_msg {
+ 	(((u64)__le32_to_cpu(msg_u32) << 32) | (__le32_to_cpu(msg_l32)))
+ #define HTT_T2H_VDEV_STATS_PERIODIC_MSG_TYPE		GENMASK(7, 0)
+ #define HTT_T2H_VDEV_STATS_PERIODIC_PDEV_ID		GENMASK(15, 8)
+-#define HTT_T2H_VDEV_STATS_PERIODIC_PAYLOAD_BYTES	GENMASK(23, 16)
+-#define HTT_VDEV_TXRX_STATS_COMMON_TLV		0
+-#define HTT_VDEV_TXRX_STATS_HW_STATS_TLV	1
++#define HTT_T2H_VDEV_STATS_PERIODIC_PAYLOAD_BYTES	GENMASK(31, 16)
+ 
+ struct htt_t2h_vdev_txrx_stats_ind {
+ 	__le32 vdev_id;
+@@ -1557,18 +1555,22 @@ struct htt_t2h_vdev_txrx_stats_ind {
+ 	__le32 tx_msdu_byte_cnt_hi;
+ 	__le32 tx_msdu_cnt_lo;
+ 	__le32 tx_msdu_cnt_hi;
+-	__le32 tx_retry_cnt_lo;
+-	__le32 tx_retry_cnt_hi;
+-	__le32 tx_retry_byte_cnt_lo;
+-	__le32 tx_retry_byte_cnt_hi;
+-	__le32 tx_drop_cnt_lo;
+-	__le32 tx_drop_cnt_hi;
+-	__le32 tx_drop_byte_cnt_lo;
+-	__le32 tx_drop_byte_cnt_hi;
+-	__le32 msdu_ttl_cnt_lo;
+-	__le32 msdu_ttl_cnt_hi;
+-	__le32 msdu_ttl_byte_cnt_lo;
+-	__le32 msdu_ttl_byte_cnt_hi;
++	__le32 tx_msdu_excessive_retry_discard_cnt_lo;
++	__le32 tx_msdu_excessive_retry_discard_cnt_hi;
++	__le32 tx_msdu_cong_ctrl_drop_cnt_lo;
++	__le32 tx_msdu_cong_ctrl_drop_cnt_hi;
++	__le32 tx_msdu_ttl_expire_drop_cnt_lo;
++	__le32 tx_msdu_ttl_expire_drop_cnt_hi;
++	__le32 tx_msdu_excessive_retry_discard_byte_cnt_lo;
++	__le32 tx_msdu_excessive_retry_discard_byte_cnt_hi;
++	__le32 tx_msdu_cong_ctrl_drop_byte_cnt_lo;
++	__le32 tx_msdu_cong_ctrl_drop_byte_cnt_hi;
++	__le32 tx_msdu_ttl_expire_drop_byte_cnt_lo;
++	__le32 tx_msdu_ttl_expire_drop_byte_cnt_hi;
++	__le32 tqm_bypass_frame_cnt_lo;
++	__le32 tqm_bypass_frame_cnt_hi;
++	__le32 tqm_bypass_byte_cnt_lo;
++	__le32 tqm_bypass_byte_cnt_hi;
+ } __packed;
+ 
+ struct htt_t2h_vdev_common_stats_tlv {
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -2425,6 +2425,9 @@ exit:
+ 	rcu_read_unlock();
+ }
+ 
++#define HAL_STATS_TLV_HDR_TAG	GENMASK(11, 0)
++#define HAL_STATS_TLV_HDR_LEN	GENMASK(23, 12)
++
+ static void ath12k_htt_vdev_txrx_stats_handler(struct ath12k_base *ab,
+ 					       struct sk_buff *skb)
+ {
+@@ -2436,21 +2439,30 @@ static void ath12k_htt_vdev_txrx_stats_h
+ 	u16 payload_bytes, tlv_tag, tlv_len;
+ 
+ 	payload_bytes = u32_get_bits(*data, HTT_T2H_VDEV_STATS_PERIODIC_PAYLOAD_BYTES);
+-	data += 3;
+-
+ 	if (payload_bytes > skb->len)
+ 		return;
+ 
++	/* Adjust msg_word to point to the first TLV in buffer */
++	data += 4;
++
+ 	rcu_read_lock();
+ 	while (payload_bytes > 0) {
+-		tlv_tag = u32_get_bits(*data, HAL_TLV_HDR_TAG);
+-		tlv_len = u32_get_bits(*data, HAL_TLV_HDR_LEN);
++		tlv_tag = u32_get_bits(*data, HAL_STATS_TLV_HDR_TAG);
++		tlv_len = u32_get_bits(*data, HAL_STATS_TLV_HDR_LEN);
++
++		/* Adjust data to point to the data value after TLV header */
+ 		data++;
+ 
+-		if (tlv_tag == HTT_VDEV_TXRX_STATS_HW_STATS_TLV) {
++		if (tlv_tag == HTT_STATS_VDEV_TXRX_STATS_HW_STATS_TAG) {
+ 			vdev_tlv = (struct htt_t2h_vdev_txrx_stats_ind *)data;
+ 			vdev_id = __le32_to_cpu(vdev_tlv->vdev_id);
+ 			arvif = ath12k_mac_get_arvif_by_vdev_id(ab, vdev_id);
++			if (!arvif || !arvif->ar) {
++				ath12k_err(ab,
++					   "ol vdev stats error in getting arvif from vdev id:%d\n",
++					   vdev_id);
++				goto next;
++			}
+ 
+ 			arvif->vdev_stats.rx_msdu_byte_cnt =
+ 				HTT_VDEV_GET_STATS_U64(vdev_tlv->rx_msdu_byte_cnt_lo,
+@@ -2464,30 +2476,43 @@ static void ath12k_htt_vdev_txrx_stats_h
+ 			arvif->vdev_stats.tx_msdu_pkt_cnt =
+ 				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_cnt_lo,
+ 						       vdev_tlv->tx_msdu_cnt_hi);
+-			arvif->vdev_stats.tx_retry_byte_cnt =
+-				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_retry_byte_cnt_lo,
+-						       vdev_tlv->tx_retry_byte_cnt_hi);
+ 			arvif->vdev_stats.tx_retry_pkt_cnt =
+-				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_retry_cnt_lo,
+-						       vdev_tlv->tx_retry_cnt_hi);
+-			arvif->vdev_stats.tx_drop_byte_cnt =
+-				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_drop_byte_cnt_lo,
+-						       vdev_tlv->tx_drop_byte_cnt_hi);
+-			arvif->vdev_stats.tx_msdu_ttl_byte_cnt =
+-				HTT_VDEV_GET_STATS_U64(vdev_tlv->msdu_ttl_byte_cnt_lo,
+-						       vdev_tlv->msdu_ttl_byte_cnt_hi);
+-			arvif->vdev_stats.tx_msdu_ttl_pkt_cnt =
+-				HTT_VDEV_GET_STATS_U64(vdev_tlv->msdu_ttl_cnt_lo,
+-						       vdev_tlv->msdu_ttl_cnt_hi);
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_excessive_retry_discard_cnt_lo,
++						       vdev_tlv->tx_msdu_excessive_retry_discard_cnt_hi);
++			arvif->vdev_stats.tx_cong_ctrl_drop_pkt_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_cong_ctrl_drop_cnt_lo,
++						       vdev_tlv->tx_msdu_cong_ctrl_drop_cnt_hi);
++			arvif->vdev_stats.tx_msdu_ttl_expire_pkt_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_ttl_expire_drop_cnt_lo,
++						       vdev_tlv->tx_msdu_ttl_expire_drop_cnt_hi);
++			arvif->vdev_stats.tx_retry_byte_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_excessive_retry_discard_byte_cnt_lo,
++						       vdev_tlv->tx_msdu_excessive_retry_discard_byte_cnt_hi);
++			arvif->vdev_stats.tx_cong_ctrl_drop_byte_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_cong_ctrl_drop_byte_cnt_lo,
++						       vdev_tlv->tx_msdu_cong_ctrl_drop_byte_cnt_hi);
++			arvif->vdev_stats.tx_msdu_ttl_expire_byte_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tx_msdu_ttl_expire_drop_byte_cnt_lo,
++						       vdev_tlv->tx_msdu_ttl_expire_drop_byte_cnt_hi);
++			arvif->vdev_stats.tqm_bypass_frame_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tqm_bypass_frame_cnt_lo,
++						       vdev_tlv->tqm_bypass_frame_cnt_hi);
++			arvif->vdev_stats.tqm_bypass_byte_cnt =
++				HTT_VDEV_GET_STATS_U64(vdev_tlv->tqm_bypass_byte_cnt_lo,
++						       vdev_tlv->tqm_bypass_byte_cnt_hi);
+ 		}
+ 
+-		if (tlv_tag == HTT_VDEV_TXRX_STATS_COMMON_TLV) {
++		if (tlv_tag == HTT_STATS_SOC_TXRX_STATS_COMMON_TAG) {
+ 			soc_tlv = (struct htt_t2h_vdev_common_stats_tlv *)data;
+ 			ab->fw_soc_drop_count =
+ 				HTT_VDEV_GET_STATS_U64(soc_tlv->soc_drop_count_lo,
+ 						       soc_tlv->soc_drop_count_hi);
+ 		}
++
++next:
+ 		data += tlv_len >> 2;
++		/* Add header size to tlv length*/
++		tlv_len += 4;
+ 		payload_bytes -= tlv_len;
+ 	}
+ 	rcu_read_unlock();
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -9996,15 +9996,23 @@ ath12k_wmi_fw_vdev_stats_fill(struct ath
+ 	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
+ 			 "retry pkt cnt", arvif->vdev_stats.tx_retry_pkt_cnt);
+ 	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
+-			 "drop byte cnt", arvif->vdev_stats.tx_drop_byte_cnt);
++			 "tx msdu cong ctrl drop pkt cnt"
++			 ,arvif->vdev_stats.tx_cong_ctrl_drop_pkt_cnt);
+ 	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
+-			 "drop pkt cnt", arvif->vdev_stats.tx_drop_pkt_cnt);
++			 "tx msdu cong ctrl drop byte cnt"
++			 ,arvif->vdev_stats.tx_cong_ctrl_drop_byte_cnt);
+ 	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
+ 			 "age out drop byte cnt",
+-			 arvif->vdev_stats.tx_msdu_ttl_byte_cnt);
++			 arvif->vdev_stats.tx_msdu_ttl_expire_byte_cnt);
+ 	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
+ 			 "age out drop pkt cnt",
+-			 arvif->vdev_stats.tx_msdu_ttl_pkt_cnt);
++			 arvif->vdev_stats.tx_msdu_ttl_expire_pkt_cnt);
++	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
++			 "tqm bypass frame cnt",
++			 arvif->vdev_stats.tqm_bypass_frame_cnt);
++	len += scnprintf(buf + len, buf_len - len, "%30s %llu\n",
++			 "tqm bypass frame cnt",
++			 arvif->vdev_stats.tqm_bypass_byte_cnt);
+ 
+ 	for (i = 0 ; i < ARRAY_SIZE(vdev->num_tx_frames); i++)
+ 		len += scnprintf(buf + len, buf_len - len,
+--- a/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_htt_stats.c
+@@ -9106,6 +9106,21 @@ htt_print_vdev_txrx_stats_hw_tlv(const v
+ 			 htt_stats_buf->tx_msdu_ttl_expire_drop_cnt_lo);
+ 
+ 	len += scnprintf(buf + len, buf_len - len,
++			 "tx_msdu_excessive_retry_discard_byte_cnt = 0x%08x%08x\n",
++			 htt_stats_buf->tx_msdu_excessive_retry_discard_byte_cnt_hi,
++			 htt_stats_buf->tx_msdu_excessive_retry_discard_byte_cnt_lo);
++
++	len += scnprintf(buf + len, buf_len - len,
++			 "tx_msdu_cong_ctrl_drop_byte_cnt = 0x%08x%08x\n",
++			 htt_stats_buf->tx_msdu_cong_ctrl_drop_byte_cnt_hi,
++			 htt_stats_buf->tx_msdu_cong_ctrl_drop_byte_cnt_lo);
++
++	len += scnprintf(buf + len, buf_len - len,
++			 "tx_msdu_ttl_expire_drop_byte_cnt = 0x%08x%08x\n",
++			 htt_stats_buf->tx_msdu_ttl_expire_drop_byte_cnt_hi,
++			 htt_stats_buf->tx_msdu_ttl_expire_drop_byte_cnt_lo);
++
++	len += scnprintf(buf + len, buf_len - len,
+ 			 "tqm_bypass_frame_cnt = 0x%08x%08x\n",
+ 			 htt_stats_buf->tqm_bypass_frame_cnt_hi,
+ 			 htt_stats_buf->tqm_bypass_frame_cnt_lo);

@@ -19,77 +19,132 @@ Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
 
 --- a/net/mac80211/tx.c
 +++ b/net/mac80211/tx.c
-@@ -1760,6 +1760,16 @@ static bool ieee80211_tx_frags(struct ie
- 				 * later transmission from the tx-pending
- 				 * tasklet when the queue is woken again.
+@@ -1784,7 +1784,7 @@ static bool ieee80211_tx_frags(struct ie
  				 */
-+				if ((skb_queue_len(&local->pending[q]) +
-+				    skb_queue_len(skbs)) >= IEEE80211_PENDING_QUEUE_MAX_LENGTH) {
-+					spin_unlock_irqrestore(
-+						&local->queue_stop_reason_lock,
-+						flags);
-+					ieee80211_purge_tx_queue(&local->hw,
-+								 skbs);
-+					return true;
-+				}
-+
- 				if (txpending)
- 					skb_queue_splice_init(skbs,
- 							      &local->pending[q]);
-@@ -4688,6 +4698,12 @@ static bool __ieee80211_tx_8023(struct i
+ 				if ((skb_queue_len(pcpu_pending) +
+ 							skb_queue_len(skbs)) >=
+-						IEEE80211_PENDING_QUEUE_MAX_LENGTH) {
++						local->max_skb_queue_length) {
+ 					spin_unlock_irqrestore(pcpu_queue_stop_reason_lock,
+ 							flags);
+ 					ieee80211_purge_tx_queue(&local->hw,
+@@ -4733,6 +4733,12 @@ static bool __ieee80211_tx_8023(struct i
  
- 	if (local->queue_stop_reasons[q] ||
- 	    (!txpending && !skb_queue_empty(&local->pending[q]))) {
-+		if (skb_queue_len(&local->pending[q]) >=
-+		    (IEEE80211_PENDING_QUEUE_MAX_LENGTH -1)) {
+ 	if (*queue_stop_reasons ||
+ 	    (!txpending && !skb_queue_empty(pending))) {
++		if (skb_queue_len(pending) >=
++		    (local->max_skb_queue_length -1)) {
 +			ieee80211_free_txskb(&local->hw, skb);
-+			spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
++			spin_unlock_irqrestore(queue_stop_reason_lock, flags);
 +			return true;
 +		}
  		if (txpending)
- 			skb_queue_head(&local->pending[q], skb);
+ 			skb_queue_head(pending, skb);
  		else
-@@ -4902,6 +4918,13 @@ void ieee80211_8023_xmit_ap(struct ieee8
- 	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
+@@ -4953,6 +4959,12 @@ void ieee80211_8023_xmit_ap(struct ieee8
  
- 	if (local->queue_stop_reasons[q] || !skb_queue_empty(&local->pending[q])) {
-+		if (skb_queue_len(&local->pending[q]) >=
-+		    (IEEE80211_PENDING_QUEUE_MAX_LENGTH -1)) {
+ 	if (*queue_stop_reasons ||
+ 			!skb_queue_empty(pending)) {
++		if (skb_queue_len(pending) >=
++		    (local->max_skb_queue_length -1)) {
 +			ieee80211_free_txskb(&local->hw, skb);
-+			spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
++			spin_unlock_irqrestore(queue_stop_reason_lock, flags);
 +			return;
 +		}
-+
- 		skb_queue_tail(&local->pending[q], skb);
- 		spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
+ 		skb_queue_tail(pending, skb);
+ 		spin_unlock_irqrestore(queue_stop_reason_lock, flags);
  		return;
 --- a/net/mac80211/ieee80211_i.h
 +++ b/net/mac80211/ieee80211_i.h
-@@ -47,6 +47,8 @@ extern const struct cfg80211_ops mac8021
+@@ -48,6 +48,11 @@ extern const struct cfg80211_ops mac8021
  struct ieee80211_local;
  struct ieee80211_mesh_fast_tx;
  
++/* Maximum number of skbs that can be held
++ * by a percpu SW queue
++ */
 +#define IEEE80211_PENDING_QUEUE_MAX_LENGTH 5000
 +
  /* Maximum number of broadcast/multicast frames to buffer when some of the
   * associated stations are using power saving. */
  #define AP_MAX_BC_BUFFER 128
+@@ -1409,6 +1414,7 @@ struct ieee80211_local {
+ 		*q_stop_reasons[IEEE80211_MAX_QUEUES][IEEE80211_QUEUE_STOP_REASONS];
+ 	/* also used to protect ampdu_ac_queue and amdpu_ac_stop_refcnt */
+ 	spinlock_t __percpu *queue_stop_reason_lock;
++	unsigned int max_skb_queue_length;
+ 
+ 	int open_count;
+ 	int monitors, cooked_mntrs;
 --- a/net/mac80211/util.c
 +++ b/net/mac80211/util.c
-@@ -543,6 +543,10 @@ void ieee80211_add_pending_skb(struct ie
- 	}
+@@ -493,10 +493,12 @@ void ieee80211_wake_queue_by_reason(stru
+ {
+ 	struct ieee80211_local *local = hw_to_local(hw);
+ 	unsigned long flags;
++	spinlock_t *pcpu_queue_stop_reason_lock;
  
- 	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
-+	if (skb_queue_len(&local->pending[queue]) >=
-+			(IEEE80211_PENDING_QUEUE_MAX_LENGTH -1))
-+		ieee80211_free_txskb(&local->hw, skb_dequeue(&local->pending[queue]));
+-	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
++	pcpu_queue_stop_reason_lock = this_cpu_ptr(local->queue_stop_reason_lock);
++	spin_lock_irqsave(pcpu_queue_stop_reason_lock, flags);
+ 	__ieee80211_wake_queue(hw, queue, reason, refcounted);
+-	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
++	spin_unlock_irqrestore(pcpu_queue_stop_reason_lock, flags);
+ }
+ 
+ void ieee80211_wake_queue(struct ieee80211_hw *hw, int queue)
+@@ -536,10 +538,12 @@ void ieee80211_stop_queue_by_reason(stru
+ {
+ 	struct ieee80211_local *local = hw_to_local(hw);
+ 	unsigned long flags;
++	spinlock_t *pcpu_queue_stop_reason_lock;
+ 
+-	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
++	pcpu_queue_stop_reason_lock = this_cpu_ptr(local->queue_stop_reason_lock);
++	spin_lock_irqsave(pcpu_queue_stop_reason_lock, flags);
+ 	__ieee80211_stop_queue(hw, queue, reason, refcounted);
+-	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
++	spin_unlock_irqrestore(pcpu_queue_stop_reason_lock, flags);
+ }
+ 
+ void ieee80211_stop_queue(struct ieee80211_hw *hw, int queue)
+@@ -568,6 +572,11 @@ void ieee80211_add_pending_skb(struct ie
+ 	pcpu_queue_stop_reason_lock = this_cpu_ptr(local->queue_stop_reason_lock);
+ 	pcpu_pending = this_cpu_ptr(local->pending[queue]);
+ 	spin_lock_irqsave(pcpu_queue_stop_reason_lock, flags);
++
++	if (skb_queue_len(pcpu_pending) >=
++			(local->max_skb_queue_length -1))
++		ieee80211_free_txskb(&local->hw, skb_dequeue(pcpu_pending));
 +
  	__ieee80211_stop_queue(hw, queue, IEEE80211_QUEUE_STOP_REASON_SKB_ADD,
  			       false);
- 	__skb_queue_tail(&local->pending[queue], skb);
+ 	__skb_queue_tail(pcpu_pending, skb);
+@@ -689,14 +698,18 @@ int ieee80211_queue_stopped(struct ieee8
+ 	struct ieee80211_local *local = hw_to_local(hw);
+ 	unsigned long flags;
+ 	int ret;
++	spinlock_t *pcpu_queue_stop_reason_lock;
++	unsigned long *queue_stop_reasons;
+ 
+ 	if (WARN_ON(queue >= hw->queues))
+ 		return true;
+ 
+-	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
++	pcpu_queue_stop_reason_lock = this_cpu_ptr(local->queue_stop_reason_lock);
++	spin_lock_irqsave(pcpu_queue_stop_reason_lock, flags);
++	queue_stop_reasons = this_cpu_ptr(local->queue_stop_reasons[queue]);
+ 	ret = test_bit(IEEE80211_QUEUE_STOP_REASON_DRIVER,
+-		       &local->queue_stop_reasons[queue]);
+-	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
++		       queue_stop_reasons);
++	spin_unlock_irqrestore(pcpu_queue_stop_reason_lock, flags);
+ 	return ret;
+ }
+ EXPORT_SYMBOL(ieee80211_queue_stopped);
 --- a/net/mac80211/rx.c
 +++ b/net/mac80211/rx.c
-@@ -288,6 +288,10 @@ static void __ieee80211_queue_skb_to_ifa
+@@ -289,6 +289,10 @@ static void __ieee80211_queue_skb_to_ifa
  		status->link_valid = 0;
  	}
  
@@ -100,3 +155,30 @@ Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
  	skb_queue_tail(&sdata->skb_queue, skb);
  	wiphy_work_queue(sdata->local->hw.wiphy, &sdata->work);
  	if (sta)
+--- a/net/mac80211/main.c
++++ b/net/mac80211/main.c
+@@ -655,6 +655,7 @@ struct ieee80211_hw *ieee80211_alloc_hw_
+ 	struct wiphy *wiphy;
+ 	bool use_chanctx;
+ 	int cpu = 0;
++	int num_cores = num_online_cpus();
+ 
+ 	if (WARN_ON(!ops->tx || !ops->start || !ops->stop || !ops->config ||
+ 		    !ops->add_interface || !ops->remove_interface ||
+@@ -918,6 +919,16 @@ struct ieee80211_hw *ieee80211_alloc_hw_
+ 		tasklet_setup(&tasklet_data->tasklet, ieee80211_tx_pending);
+ 		spin_lock_init(per_cpu_ptr(local->queue_stop_reason_lock, cpu));
+ 	}
++	/* Based on the number of cores specify
++	 * the skb queue length for each
++	 * percpu pending queue
++	 * Assumption is there should be atleast one core online
++	 */
++	if (num_cores > 1)
++		local->max_skb_queue_length =
++			 IEEE80211_PENDING_QUEUE_MAX_LENGTH / num_cores;
++	else
++		local->max_skb_queue_length = IEEE80211_PENDING_QUEUE_MAX_LENGTH;
+ 
+ 	if (!ieee80211_hw_check(&local->hw, HAS_TX_QUEUE))
+ 		tasklet_setup(&local->wake_txqs_tasklet, ieee80211_wake_txqs);

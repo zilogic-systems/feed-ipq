@@ -1,0 +1,674 @@
+From 12754176abeb56120498ede39daa3a81801dc545 Mon Sep 17 00:00:00 2001
+From: Bhagavathi Perumal S <quic_bperumal@quicinc.com>
+Date: Sat, 8 Feb 2025 14:34:02 +0530
+Subject: [PATCH] UPSTREAM:DP:wifi:ath12k: Clean up soc dp stats
+
+Clean up soc stats for better readability and debugability.
+
+Add timestamp for rate calculation.
+Add ch freq to see radio where soc stats collected.
+Reorganize tx and rx stats seperately.
+remove unwanted spaces to avoid large dump in logs.
+remove unused variables eg tx_enqueued and bp stats.
+
+example stats:
+SOC DP STATS (timestamp: 931357ms):
+radio_0 centre freq:6195
+SOC TX STATS:
+tx_enqueued: 0:28003297 1:28069643 2:27802346 3:14
+tx_completed: 0:28003297 1:28069643 2:27802346 3:14
+tx_wbm_rel_source: 0:82977386 1:0 2:0 3:160 4:0
+tqm_rel_reason: 0:30750 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0
+fw_tx_status: 0:160 1:0 2:0 3:0 4:0 5:0 6:0
+tx_unicast: 0:198 1:204 2:177 3:0
+tx_fast_unicast: 0:28002941 1:28069428 2:27802168 3:0
+tx_multicast: 0:158 1:11 2:1 3:11
+tx_eapol: 0:0 1:0 2:0 3:3
+tx_null_frame: 0:0 1:0 2:0 3:0
+null tx complete: 0:0 1:0 2:0 3:0
+TCL Ring Full Failures: 0: 0 1: 0 2: 0 3: 0
+TCL Ring Buffer Alloc Failures: 0: 0 1: 0 2: 0 3: 0
+Tx Threshold limit: 0
+Group Tx Threshold limit: 0
+Misc Transmit Failures: 0
+ag tx_pending: 0
+ar tx_pending [1]: 0
+Tx Peers Not Present: 0
+
+SOC RX STATS:
+REO Rx Received:
+Ring1: 0:0      1:12017209      2:0
+Ring2: 0:0      1:12087471      2:0
+Ring3: 0:0      1:12099767      2:0
+Ring4: 0:0      1:3519  2:0
+REO SFE Rx:
+Ring1: 0:0      1:12017123      2:0
+Ring2: 0:0      1:12087456      2:0
+Ring3: 0:0      1:12099743      2:0
+Ring4: 0:0      1:3519  2:0
+
+Patch-dependency: 504-ath12k-add-debugfs-support.patch
+Patch-work: None
+
+Signed-off-by: Bhagavathi Perumal S <quic_bperumal@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h    |   6 +-
+ drivers/net/wireless/ath/ath12k/debugfs.c | 392 +++++++++-------------
+ drivers/net/wireless/ath/ath12k/dp_tx.c   |   2 +-
+ drivers/net/wireless/ath/ath12k/vendor.c  |   1 -
+ 4 files changed, 168 insertions(+), 233 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 21cf562..98a0b44 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1470,8 +1470,9 @@ struct ath12k_soc_dp_tx_err_stats {
+ struct ath12k_soc_dp_stats {
+ 	u32 tx_wbm_rel_source[HAL_WBM_REL_SRC_MODULE_MAX];
+ 	u32 tx_completed[MAX_TCL_RING];
++	u32 tx_fast_unicast[MAX_TCL_RING];
+ 	u32 tqm_rel_reason[MAX_TQM_RELEASE_REASON];
+-	u32 ppe_vp_mode_update_fail;
++	u32 fw_tx_status[MAX_FW_TX_STATUS];
+ 	u32 err_ring_pkts;
+ 	u32 invalid_rbm;
+ 	u32 rxdma_error[HAL_REO_ENTR_RING_RXDMA_ECODE_MAX];
+@@ -1483,9 +1484,6 @@ struct ath12k_soc_dp_stats {
+ 	u32 reo_cmd_cache_error;
+ 	u32 mcast_enqueued;
+ 	u32 ucast_enqueued;
+-	u32 mcast_reinject;
+-	u32 fw_tx_status[MAX_FW_TX_STATUS];
+-	u32 tx_enqueued[MAX_TCL_RING];
+ 	u32 null_tx_complete[MAX_TCL_RING];
+ 	u32 reo_rx[DP_REO_DST_RING_MAX] [ATH12K_MAX_SOCS];
+ 	u32 ppe_vp_rx[DP_REO_DST_RING_MAX] [ATH12K_MAX_SOCS];
+diff --git a/drivers/net/wireless/ath/ath12k/debugfs.c b/drivers/net/wireless/ath/ath12k/debugfs.c
+index 710c5d7..d00e579 100644
+--- a/drivers/net/wireless/ath/ath12k/debugfs.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs.c
+@@ -23,43 +23,6 @@
+ 
+ static struct dentry *debugfs_ath12k;
+ 
+-static const char *htt_bp_umac_ring[HTT_SW_UMAC_RING_IDX_MAX] = {
+-	"REO2SW1_RING",
+-	"REO2SW2_RING",
+-	"REO2SW3_RING",
+-	"REO2SW4_RING",
+-	"WBM2REO_LINK_RING",
+-	"REO2TCL_RING",
+-	"REO2FW_RING",
+-	"RELEASE_RING",
+-	"PPE_RELEASE_RING",
+-	"TCL2TQM_RING",
+-	"TQM_RELEASE_RING",
+-	"REO_RELEASE_RING",
+-	"WBM2SW0_RELEASE_RING",
+-	"WBM2SW1_RELEASE_RING",
+-	"WBM2SW2_RELEASE_RING",
+-	"WBM2SW3_RELEASE_RING",
+-	"REO_CMD_RING",
+-	"REO_STATUS_RING",
+-};
+-
+-static const char *htt_bp_lmac_ring[HTT_SW_LMAC_RING_IDX_MAX] = {
+-	"FW2RXDMA_BUF_RING",
+-	"FW2RXDMA_STATUS_RING",
+-	"FW2RXDMA_LINK_RING",
+-	"SW2RXDMA_BUF_RING",
+-	"WBM2RXDMA_LINK_RING",
+-	"RXDMA2FW_RING",
+-	"RXDMA2SW_RING",
+-	"RXDMA2RELEASE_RING",
+-	"RXDMA2REO_RING",
+-	"MONITOR_STATUS_RING",
+-	"MONITOR_BUF_RING",
+-	"MONITOR_DESC_RING",
+-	"MONITOR_DEST_RING",
+-};
+-
+ static void ath12k_debugfs_fw_stats_reset(struct ath12k *ar)
+ {
+ 	spin_lock_bh(&ar->data_lock);
+@@ -1857,72 +1820,6 @@ static const struct file_operations fops_wmm_stats = {
+ 	.open = simple_open,
+ };
+ 
+-static int ath12k_fill_bp_stats(struct ath12k_base *ab,
+-				struct ath12k_bp_stats *bp_stats,
+-				char *buf, int len, int size)
+-{
+-	lockdep_assert_held(&ab->base_lock);
+-
+-	len += scnprintf(buf + len, size - len, "count: %u\n",
+-			 bp_stats->count);
+-	len += scnprintf(buf + len, size - len, "hp: %u\n",
+-			 bp_stats->hp);
+-	len += scnprintf(buf + len, size - len, "tp: %u\n",
+-			 bp_stats->tp);
+-	len += scnprintf(buf + len, size - len, "seen before: %ums\n\n",
+-			 jiffies_to_msecs(jiffies - bp_stats->jiffies));
+-	return len;
+-}
+-
+-static ssize_t ath12k_debugfs_dump_soc_ring_bp_stats(struct ath12k_base *ab,
+-						     char *buf, int size)
+-{
+-	struct ath12k_bp_stats *bp_stats;
+-	bool stats_rxd = false;
+-	u8 i, pdev_idx;
+-	int len = 0;
+-
+-	len += scnprintf(buf + len, size - len, "\nBackpressure Stats\n");
+-	len += scnprintf(buf + len, size - len, "==================\n");
+-
+-	spin_lock_bh(&ab->base_lock);
+-	for (i = 0; i < HTT_SW_UMAC_RING_IDX_MAX; i++) {
+-		bp_stats = &ab->soc_stats.bp_stats.umac_ring_bp_stats[i];
+-
+-		if (!bp_stats->count)
+-			continue;
+-
+-		len += scnprintf(buf + len, size - len, "Ring: %s\n",
+-				 htt_bp_umac_ring[i]);
+-		len = ath12k_fill_bp_stats(ab, bp_stats, buf, len, size);
+-		stats_rxd = true;
+-	}
+-
+-	for (i = 0; i < HTT_SW_LMAC_RING_IDX_MAX; i++) {
+-		for (pdev_idx = 0; pdev_idx < MAX_RADIOS; pdev_idx++) {
+-			bp_stats =
+-				&ab->soc_stats.bp_stats.lmac_ring_bp_stats[i][pdev_idx];
+-
+-			if (!bp_stats->count)
+-				continue;
+-
+-			len += scnprintf(buf + len, size - len, "Ring: %s\n",
+-					 htt_bp_lmac_ring[i]);
+-			len += scnprintf(buf + len, size - len, "pdev: %d\n",
+-					 pdev_idx);
+-			len = ath12k_fill_bp_stats(ab, bp_stats, buf, len, size);
+-			stats_rxd = true;
+-		}
+-	}
+-	spin_unlock_bh(&ab->base_lock);
+-
+-	if (!stats_rxd)
+-		len += scnprintf(buf + len, size - len,
+-				 "No Ring Backpressure stats received\n\n");
+-
+-	return len;
+-}
+-
+ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 						char __user *user_buf,
+ 						size_t count, loff_t *ppos)
+@@ -1949,14 +1846,19 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 	static const char *wbm_rel_src[HAL_WBM_REL_SRC_MODULE_MAX] = {
+ 				"TQM", "Rxdma", "Reo", "FW", "SW" };
+ 	char *buf;
++	struct ath12k_pdev *pdev;
++	u32 center_freq;
+ 
+ 	buf = kzalloc(size, GFP_KERNEL);
+ 	if (!buf)
+ 		return -ENOMEM;
+ 
+ 	for (i = 0; i < DP_TCL_NUM_RING_MAX; i++)
+-		tx_enqueued[i] = soc_stats->tx_mcast[i] + soc_stats->tx_unicast[i] +
+-				 soc_stats->tx_eapol[i] + soc_stats->tx_null_frame[i];
++		tx_enqueued[i] = soc_stats->tx_mcast[i] +
++					soc_stats->tx_unicast[i] +
++					soc_stats->tx_eapol[i] +
++					soc_stats->tx_null_frame[i] +
++					soc_stats->tx_fast_unicast[i];
+ 
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++) {
+ 		for (j = 0; j < ATH12K_MAX_SOCS; j++)
+@@ -1965,77 +1867,42 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 					    soc_stats->eapol_rx[i][j];
+ 	}
+ 
+-	len += scnprintf(buf + len, size - len, "SOC RX STATS:\n\n");
+-	len += scnprintf(buf + len, size - len, "ppe vp mode update failure: %u\n",
+-			 soc_stats->ppe_vp_mode_update_fail);
+-	len += scnprintf(buf + len, size - len, "err ring pkts: %u\n",
+-			 soc_stats->err_ring_pkts);
+-	len += scnprintf(buf + len, size - len, "Invalid RBM: %u\n\n",
+-			 soc_stats->invalid_rbm);
+-	len += scnprintf(buf + len, size - len, "RXDMA errors:\n");
+-	for (i = 0; i < HAL_REO_ENTR_RING_RXDMA_ECODE_MAX; i++)
+-		len += scnprintf(buf + len, size - len, "%s: handled %u dropped %u\n",
+-				 rxdma_err[i], soc_stats->rxdma_error[i],
+-				 soc_stats->rxdma_error_drop[i]);
+-
+-	len += scnprintf(buf + len, size - len, "\nREO errors:\n");
+-	for (i = 0; i < HAL_REO_DEST_RING_ERROR_CODE_MAX; i++)
+-		len += scnprintf(buf + len, size - len, "%s: handled %u dropped %u\n",
+-				 reo_err[i], soc_stats->reo_error[i],
+-				 soc_stats->reo_error_drop[i]);
+-	len += scnprintf(buf + len, size - len, "REO excep MSDU buf type:%u\n",
+-			soc_stats->reo_excep_msdu_buf_type);
+-
+-	len += scnprintf(buf + len, size - len, "\nHAL REO errors:\n");
+-	len += scnprintf(buf + len, size - len,
+-			 "ring0: %u\nring1: %u\nring2: %u\nring3: %u\n",
+-			 soc_stats->hal_reo_error[0],
+-			 soc_stats->hal_reo_error[1],
+-			 soc_stats->hal_reo_error[2],
+-			 soc_stats->hal_reo_error[3]);
+-
+-	len += scnprintf(buf + len, size - len, "\nSOC TX STATS:\n");
+-	len += scnprintf(buf + len, size - len, "\nTCL Ring Full Failures:\n");
+-
+-	for (i = 0; i < DP_TCL_NUM_RING_MAX; i++)
+-		len += scnprintf(buf + len, size - len, "ring%d: %u\n",
+-				 i, soc_stats->tx_err.desc_na[i]);
+-
+-	len += scnprintf(buf + len, size - len, "\nTCL Ring Buffer Alloc Failures:\n");
+-	for (i = 0; i < DP_TCL_NUM_RING_MAX; i++)
+-		len += scnprintf(buf + len, size - len, "ring%d: %u\n",
+-				 i, soc_stats->tx_err.txbuf_na[i]);
+-
+-	len += scnprintf(buf + len, size - len,
+-			 "\nTx Threshold limit: %d\n",
+-			 soc_stats->tx_err.pdev_threshold_limit);
+-
+-	len += scnprintf(buf + len, size - len,
+-			 "\nGroup Tx Threshold limit: %u\n",
+-			 soc_stats->tx_err.group_threshold_limit);
+-
+ 	len += scnprintf(buf + len, size - len,
+-			 "\nMisc Transmit Failures: %d\n",
+-			 atomic_read(&soc_stats->tx_err.misc_fail));
++			"SOC DP STATS (timestamp: %llums):\n",
++						ktime_to_ms(ktime_get()));
++	for (i = 0; i < ab->num_radios; i++) {
++		pdev = &ab->pdevs[i];
++		ar = pdev->ar;
++		if (ar) {
++			spin_lock_bh(&ar->data_lock);
++			if (ar->rx_channel)
++				center_freq = ar->rx_channel->center_freq;
++			spin_unlock_bh(&ar->data_lock);
++			len += scnprintf(buf + len, size - len,
++					"radio_%u centre freq:%u\n",
++					i, center_freq);
++		}
++	}
+ 
+-	len += scnprintf(buf + len, size - len,
+-			"\nHAL_REO_CMD_DRAIN Counter: %u\n",
+-			soc_stats->hal_reo_cmd_drain);
+ 
+-	len += scnprintf(buf + len, size - len,
+-			"\nREO_CMD_CACHE_FLUSH Failure: %u\n",
+-			soc_stats->reo_cmd_cache_error);
++	len += scnprintf(buf + len, size - len, "SOC TX STATS:\n");
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\nREO_CMD_UPDATE_RX_QUEUE Failure: %u\n",
+-			soc_stats->reo_cmd_update_rx_queue_error);
++			"tx_enqueued: 0:%u 1:%u 2:%u 3:%u\n",
++			tx_enqueued[0],
++			tx_enqueued[1],
++			tx_enqueued[2],
++			tx_enqueued[3]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\nmcast reinject: %u\n",
+-			soc_stats->mcast_reinject);
++			"tx_completed: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->tx_completed[0],
++			soc_stats->tx_completed[1],
++			soc_stats->tx_completed[2],
++			soc_stats->tx_completed[3]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\ntx_wbm_rel_source: 0:%u 1:%u 2:%u 3:%u 4:%u\n",
++			"tx_wbm_rel_source: 0:%u 1:%u 2:%u 3:%u 4:%u\n",
+ 			soc_stats->tx_wbm_rel_source[0],
+ 			soc_stats->tx_wbm_rel_source[1],
+ 			soc_stats->tx_wbm_rel_source[2],
+@@ -2043,7 +1910,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 			soc_stats->tx_wbm_rel_source[4]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\ntqm_rel_reason: 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u 8:%u 9:%u 10:%u 11:%u 12:%u 13:%u 14:%u\n",
++			"tqm_rel_reason: 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u 8:%u 9:%u 10:%u 11:%u 12:%u 13:%u 14:%u\n",
+ 			soc_stats->tqm_rel_reason[0],
+ 			soc_stats->tqm_rel_reason[1],
+ 			soc_stats->tqm_rel_reason[2],
+@@ -2061,7 +1928,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 			soc_stats->tqm_rel_reason[14]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\nfw_tx_status: 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u\n",
++			"fw_tx_status: 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u\n",
+ 			soc_stats->fw_tx_status[0],
+ 			soc_stats->fw_tx_status[1],
+ 			soc_stats->fw_tx_status[2],
+@@ -2071,44 +1938,88 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 			soc_stats->fw_tx_status[6]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\ntx_enqueued: 0:%u 1:%u 2:%u 3:%u\n",
+-			tx_enqueued[0],
+-			tx_enqueued[1],
+-			tx_enqueued[2],
+-			tx_enqueued[3]);
++			"tx_unicast: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->tx_unicast[0],
++			soc_stats->tx_unicast[1],
++			soc_stats->tx_unicast[2],
++			soc_stats->tx_unicast[3]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			 "\nTx Peers Not Present: %d\n",
+-			 soc_stats->tx_err.peers_not_present);
++			"tx_fast_unicast: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->tx_fast_unicast[0],
++			soc_stats->tx_fast_unicast[1],
++			soc_stats->tx_fast_unicast[2],
++			soc_stats->tx_fast_unicast[3]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\nnull tx complete: 0:%u 1:%u 2:%u 3:%u\n",
++			"tx_multicast: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->tx_mcast[0],
++			soc_stats->tx_mcast[1],
++			soc_stats->tx_mcast[2],
++			soc_stats->tx_mcast[3]);
++
++	len += scnprintf(buf + len, size - len,
++			"tx_eapol: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->tx_eapol[0],
++			soc_stats->tx_eapol[1],
++			soc_stats->tx_eapol[2],
++			soc_stats->tx_eapol[3]);
++
++	len += scnprintf(buf + len, size - len,
++			"tx_null_frame: 0:%u 1:%u 2:%u 3:%u\n",
++			soc_stats->tx_null_frame[0],
++			soc_stats->tx_null_frame[1],
++			soc_stats->tx_null_frame[2],
++			soc_stats->tx_null_frame[3]);
++	len += scnprintf(buf + len, size - len,
++			"null tx complete: 0:%u 1:%u 2:%u 3:%u\n",
+ 			soc_stats->null_tx_complete[0],
+ 			soc_stats->null_tx_complete[1],
+ 			soc_stats->null_tx_complete[2],
+ 			soc_stats->null_tx_complete[3]);
+ 
++	len += scnprintf(buf + len, size - len, "TCL Ring Full Failures: ");
++
++	for (i = 0; i < DP_TCL_NUM_RING_MAX; i++)
++		len += scnprintf(buf + len, size - len, "%d: %u ",
++				 i, soc_stats->tx_err.desc_na[i]);
++
++	len += scnprintf(buf + len, size - len, "\nTCL Ring Buffer Alloc Failures: ");
++	for (i = 0; i < DP_TCL_NUM_RING_MAX; i++)
++		len += scnprintf(buf + len, size - len, "%d: %u ",
++				 i, soc_stats->tx_err.txbuf_na[i]);
++
+ 	len += scnprintf(buf + len, size - len,
+-			"\ntx_completed: 0:%u 1:%u 2:%u 3:%u\n",
+-			soc_stats->tx_completed[0],
+-			soc_stats->tx_completed[1],
+-			soc_stats->tx_completed[2],
+-			soc_stats->tx_completed[3]);
++			 "\nTx Threshold limit: %d\n",
++			 soc_stats->tx_err.pdev_threshold_limit);
++
++	len += scnprintf(buf + len, size - len,
++			 "Group Tx Threshold limit: %u\n",
++			 soc_stats->tx_err.group_threshold_limit);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			 "\nag tx_pending: %u\n",
++			 "Misc Transmit Failures: %d\n",
++			 atomic_read(&soc_stats->tx_err.misc_fail));
++
++	len += scnprintf(buf + len, size - len,
++			 "ag tx_pending: %u\n",
+ 			 atomic_read(&ab->ag->num_dp_tx_pending));
+ 
+ 	for (i = 1; i <= ab->num_radios; i++) {
+  		ar = ath12k_mac_get_ar_by_pdev_id(ab, i);
+  		if (ar) {
+  			len += scnprintf(buf + len, size - len,
+-					 "\nar tx_pending [%d]: %u\n", i,
++					 "ar tx_pending [%d]: %u\n", i,
+ 					 atomic_read(&ar->dp.num_tx_pending));
+  		}
+  	}
++	len += scnprintf(buf + len, size - len,
++			 "Tx Peers Not Present: %d\n",
++			 soc_stats->tx_err.peers_not_present);
+ 
+-	len += scnprintf(buf + len, size - len, "\nREO Rx Received:\n");
++
++	len += scnprintf(buf + len, size - len, "\nSOC RX STATS:\n");
++	len += scnprintf(buf + len, size - len, "REO Rx Received:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2117,7 +2028,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 soc_stats->reo_rx[i][1],
+ 				 soc_stats->reo_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nREO SFE Rx:\n");
++	len += scnprintf(buf + len, size - len, "REO SFE Rx:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2126,7 +2037,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 soc_stats->sfe_rx[i][1],
+ 				 soc_stats->sfe_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nREO PPE VP Rx:\n");
++	len += scnprintf(buf + len, size - len, "REO PPE VP Rx:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2135,7 +2046,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 soc_stats->ppe_vp_rx[i][1],
+ 				 soc_stats->ppe_vp_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nREO Non-Fast Rx:\n");
++	len += scnprintf(buf + len, size - len, "REO Non-Fast Rx:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2144,7 +2055,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 non_fast_rx[i][1],
+ 				 non_fast_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nMcast Non-Fast Rx:\n");
++	len += scnprintf(buf + len, size - len, "Mcast Non-Fast Rx:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2153,7 +2064,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 soc_stats->non_fast_mcast_rx[i][1],
+ 				 soc_stats->non_fast_mcast_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nUnicast Non-Fast Rx:\n");
++	len += scnprintf(buf + len, size - len, "Unicast Non-Fast Rx:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2162,7 +2073,7 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 soc_stats->non_fast_unicast_rx[i][1],
+ 				 soc_stats->non_fast_unicast_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nEapol Rx:\n");
++	len += scnprintf(buf + len, size - len, "Eapol Rx:\n");
+ 	for (i = 0; i < DP_REO_DST_RING_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				 "Ring%d: 0:%u\t1:%u\t2:%u\n",
+@@ -2171,11 +2082,51 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				 soc_stats->eapol_rx[i][1],
+ 				 soc_stats->eapol_rx[i][2]);
+ 
+-	len += scnprintf(buf + len, size - len, "\nNull frame Rx: %u Rx dropped: %u\n",
++	len += scnprintf(buf + len, size - len, "err ring pkts: %u\n",
++			 soc_stats->err_ring_pkts);
++
++	len += scnprintf(buf + len, size - len, "Invalid RBM: %u\n",
++			 soc_stats->invalid_rbm);
++
++	len += scnprintf(buf + len, size - len, "RXDMA errors:\n");
++	for (i = 0; i < HAL_REO_ENTR_RING_RXDMA_ECODE_MAX; i++)
++		len += scnprintf(buf + len, size - len, "%s: handled %u dropped %u\n",
++				 rxdma_err[i], soc_stats->rxdma_error[i],
++				 soc_stats->rxdma_error_drop[i]);
++
++	len += scnprintf(buf + len, size - len, "REO errors:\n");
++	for (i = 0; i < HAL_REO_DEST_RING_ERROR_CODE_MAX; i++)
++		len += scnprintf(buf + len, size - len, "%s: handled %u dropped %u\n",
++				 reo_err[i], soc_stats->reo_error[i],
++				 soc_stats->reo_error_drop[i]);
++
++	len += scnprintf(buf + len, size - len, "REO excep MSDU buf type:%u\n",
++			soc_stats->reo_excep_msdu_buf_type);
++	len += scnprintf(buf + len, size - len,
++			"HAL_REO_CMD_DRAIN Counter: %u\n",
++			soc_stats->hal_reo_cmd_drain);
++
++	len += scnprintf(buf + len, size - len,
++			"REO_CMD_CACHE_FLUSH Failure: %u\n",
++			soc_stats->reo_cmd_cache_error);
++
++	len += scnprintf(buf + len, size - len,
++			"REO_CMD_UPDATE_RX_QUEUE Failure: %u\n",
++			soc_stats->reo_cmd_update_rx_queue_error);
++
++	len += scnprintf(buf + len, size - len, "HAL REO errors:\n");
++	len += scnprintf(buf + len, size - len,
++			 "ring0: %u\nring1: %u\nring2: %u\nring3: %u\n",
++			 soc_stats->hal_reo_error[0],
++			 soc_stats->hal_reo_error[1],
++			 soc_stats->hal_reo_error[2],
++			 soc_stats->hal_reo_error[3]);
++
++	len += scnprintf(buf + len, size - len, "Null frame Rx: %u Rx dropped: %u\n",
+ 			 soc_stats->rx_pkt_null_frame_handled,
+ 			 soc_stats->rx_pkt_null_frame_dropped);
+ 
+-	len += scnprintf(buf + len, size - len, "\nRx WBM REL SRC Errors:\n");
++	len += scnprintf(buf + len, size - len, "Rx WBM REL SRC Errors:\n");
+ 	for (i = 0; i < HAL_WBM_REL_SRC_MODULE_MAX; i++)
+ 		len += scnprintf(buf + len, size - len,
+ 				"%s\t:0:%u\t1:%u\t2:%u\n",
+@@ -2185,45 +2136,16 @@ static ssize_t ath12k_debugfs_dump_soc_dp_stats(struct file *file,
+ 				soc_stats->rx_wbm_rel_source[i][2]);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			"\nFIRST/LAST MSDU BIT MISSING COUNT: %u\n",
++			"FIRST/LAST MSDU BIT MISSING COUNT: %u\n",
+ 			soc_stats->first_and_last_msdu_bit_miss);
+ 
+ 	len += scnprintf(buf + len, size - len,
+-			 "\nfree excess alloc skb: %u\n",
++			 "free excess alloc skb: %u\n",
+ 			 soc_stats->free_excess_alloc_skb);
+ 
+-	len += scnprintf(buf + len, size - len,
+-			"\ntx_multicast: 0:%u 1:%u 2:%u 3:%u",
+-			soc_stats->tx_mcast[0],
+-			soc_stats->tx_mcast[1],
+-			soc_stats->tx_mcast[2],
+-			soc_stats->tx_mcast[3]);
+-
+-	len += scnprintf(buf + len, size - len,
+-			"\ntx_unicast: 0:%u 1:%u 2:%u 3:%u",
+-			soc_stats->tx_unicast[0],
+-			soc_stats->tx_unicast[1],
+-			soc_stats->tx_unicast[2],
+-			soc_stats->tx_unicast[3]);
+-
+-	len += scnprintf(buf + len, size - len,
+-			"\ntx_eapol: 0:%u 1:%u 2:%u 3:%u",
+-			soc_stats->tx_eapol[0],
+-			soc_stats->tx_eapol[1],
+-			soc_stats->tx_eapol[2],
+-			soc_stats->tx_eapol[3]);
+-
+-	len += scnprintf(buf + len, size - len,
+-			"\ntx_null_frame: 0:%u 1:%u 2:%u 3:%u",
+-			soc_stats->tx_null_frame[0],
+-			soc_stats->tx_null_frame[1],
+-			soc_stats->tx_null_frame[2],
+-			soc_stats->tx_null_frame[3]);
+-
+-	len += ath12k_debugfs_dump_soc_ring_bp_stats(ab, buf + len, size - len);
+-
+ 	if (len > size)
+ 		len = size;
++
+ 	retval = simple_read_from_buffer(user_buf, count, ppos, buf, len);
+ 	kfree(buf);
+ 
+@@ -3536,14 +3458,30 @@ static ssize_t ath12k_debugfs_dump_ppeds_stats(struct file *file,
+ 	int len = 0,  retval;
+ 	const int size = PAGE_SIZE;
+ 	char *buf;
++	struct ath12k_pdev *pdev;
++	u32 center_freq;
+ 
+ 	memset(printed_if, 0, sizeof(printed_if));
+ 	buf = kzalloc(size, GFP_KERNEL);
+ 	if (!buf)
+ 		return -ENOMEM;
+ 
+-	len += scnprintf(buf + len, size - len, "PPEDS STATS\n");
+-	len += scnprintf(buf + len, size - len, "-----------\n");
++	len += scnprintf(buf + len, size - len,
++			"SOC PPEDS STATS (timestamp: %llums):\n",
++						ktime_to_ms(ktime_get()));
++	for (i = 0; i < ab->num_radios; i++) {
++		pdev = &ab->pdevs[i];
++		ar = pdev->ar;
++		if (ar) {
++			spin_lock_bh(&ar->data_lock);
++			if (ar->rx_channel)
++				center_freq = ar->rx_channel->center_freq;
++			spin_unlock_bh(&ar->data_lock);
++			len += scnprintf(buf + len, size - len,
++					"radio_%u centre freq:%u\n",
++					i, center_freq);
++		}
++	}
+ 	len += scnprintf(buf + len, size - len, "tcl_prod_cnt %u\n",
+ 			 ppeds_stats->tcl_prod_cnt);
+ 	len += scnprintf(buf + len, size - len, "tcl_cons_cnt %u\n",
+diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
+index 91ecd55..dff5d66 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -415,7 +415,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+ 		goto fail_remove_tx_buf;
+ 	}
+ 
+-	ab->soc_stats.tx_unicast[ring_id]++;
++	ab->soc_stats.tx_fast_unicast[ring_id]++;
+ 
+ 	memcpy(hal_tcl_desc, &tcl_desc, sizeof(tcl_desc));
+ 	dmb(oshst);
+diff --git a/drivers/net/wireless/ath/ath12k/vendor.c b/drivers/net/wireless/ath/ath12k/vendor.c
+index bfc54ae..c0f07d3 100644
+--- a/drivers/net/wireless/ath/ath12k/vendor.c
++++ b/drivers/net/wireless/ath/ath12k/vendor.c
+@@ -1952,7 +1952,6 @@ static int ath12k_vendor_wifi_config_handler(struct wiphy *wiphy,
+ 				return 0;
+ 			}
+ 
+-			ab->soc_stats.ppe_vp_mode_update_fail++;
+ 			ath12k_dbg(NULL, ATH12K_DBG_PPE, "ppe_vp mode config update failed\n");
+ 		} else {
+ 			wdev->ppe_vp_type = ppe_vp_type;
+-- 
+2.34.1
+

@@ -1,18 +1,19 @@
 From d2a87113336093274d199cbb950a0c48e57b527c Mon Sep 17 00:00:00 2001
 From: Girish Kumar M P <quic_gmp@quicinc.com>
 Date: Mon, 25 Nov 2024 10:35:40 +0530
-Subject: [PATCH] QSDK:DP:wifi:ath12k: apply rssi region offset in the
+Subject: [PATCH] UPSTREAM:DP:wifi:ath12k: apply rssi region offset in the
 rssi signal
 
 Currently, rssi_signal is calculated with rssi_combi,min_nf and
 rssi_temp_offset.
+
 To improve the accuracy of the signal. FW provide Rssi_region_offset
 and ath driver should fetch and update the calculation with this value
 if (ab->rssi_accuracy_support) is enabled through wmi event
 WMI_RSSI_ACCURACY_IMPROVEMENT_CAPABILITIES
 
 signal calculation :
-rssi signal = rssi_combi + min_nf + rssi_temp_offset + region_offset
+rssi signal = rssi_combi + rssi_offsets + region_offset + bw_offset
 
 Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
 ---
@@ -23,7 +24,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -1779,6 +1779,7 @@ struct ath12k_base {
+@@ -1798,6 +1798,7 @@ struct ath12k_base {
  	bool ce_pipe_init_done;
  	bool rxgainlut_support;
  	bool power_boost_support;
@@ -42,32 +43,126 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  		info[0] = __le32_to_cpu(rssi->info1);
  
  		/* TODO: Please note that the combined rssi will not be accurate
-@@ -1635,6 +1635,11 @@ ath12k_dp_mon_rx_parse_status_tlv(struct
+@@ -1635,6 +1635,16 @@ ath12k_dp_mon_rx_parse_status_tlv(struct
  			u32_get_bits(info[0],
  				     HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO1_RSSI_COMB);
  
++		ppdu_info->rssi_region_offset = 0;
++
 +		if (ab->rssi_accuracy_support) {
 +			ppdu_info->rssi_region_offset_support = true;
-+			ppdu_info->rssi_region_offset = u32_get_bits(rssi_region_offset,HAL_RX_PHYRX_RSSI_LEGACY_REGION_OFFSET);
++			ppdu_info->rssi_region_offset =
++				u32_get_bits(rssi_region_offset,
++					     HAL_RX_PHYRX_RSSI_LEGACY_REGION_OFFSET);
 +		}
++
 +
  		for (i = 0; i < HAL_RX_MAX_NSS; i++)
  			ppdu_info->rssi_chain_pri20[i] =
  				le32_get_bits(rssi->preamble[i].rssi_2040,
-@@ -2132,6 +2137,10 @@ static void ath12k_dp_mon_update_radiota
+@@ -2119,6 +2129,33 @@ ath12k_dp_mon_rx_update_radiotap_eht(str
+ 	}
+ }
  
- 	rxs->flag |= RX_FLAG_MACTIME_START;
- 	rxs->signal = ppduinfo->rssi_comb + ar->rssi_offsets.rssi_offset;
-+	if (ppduinfo->rssi_region_offset_support){
-+		rxs->signal += ppduinfo->rssi_region_offset;
++u8 ath12k_get_bw_offset(enum phyrx_rssi_legacy_bw bandwidth)
++{
++	u8 bw_offset;
++
++	switch (bandwidth) {
++	case PHYRX_RSSI_LEGACY_BW_20MHZ:
++		bw_offset = ATH12K_BW_GAIN_20MHZ;
++		break;
++	case PHYRX_RSSI_LEGACY_BW_40MHZ:
++		bw_offset = ATH12K_BW_GAIN_40MHZ;
++		break;
++	case PHYRX_RSSI_LEGACY_BW_80MHZ:
++		bw_offset = ATH12K_BW_GAIN_80MHZ;
++		break;
++	case PHYRX_RSSI_LEGACY_BW_160MHZ:
++		bw_offset = ATH12K_BW_GAIN_160MHZ;
++		break;
++	case PHYRX_RSSI_LEGACY_BW_320MHZ:
++		bw_offset = ATH12K_BW_GAIN_320MHZ;
++		break;
++	default:
++		bw_offset = ATH12K_BW_GAIN_20MHZ;
 +	}
++
++	return bw_offset;
++}
++
+ 
+ static void ath12k_dp_mon_update_radiotap(struct ath12k *ar,
+ 					  struct hal_rx_mon_ppdu_info *ppduinfo,
+@@ -2128,11 +2165,14 @@ static void ath12k_dp_mon_update_radiota
+ 	struct ieee80211_supported_band *sband;
+ 	u8 *ptr = NULL;
+ 	u16 ampdu_id = ppduinfo->ampdu_id[ppduinfo->userid];
+-	u32 ru_size;
++	u32 bw_offset, ru_size;
+ 	bool ampdu_present = ppduinfo->userstats[ppduinfo->userid].ampdu_present;
+ 
++	bw_offset = ath12k_get_bw_offset(ppduinfo->bw);
+ 	rxs->flag |= RX_FLAG_MACTIME_START;
+-	rxs->signal = ppduinfo->rssi_comb + ar->rssi_offsets.rssi_offset;
++	rxs->signal = ppduinfo->rssi_comb + ar->rssi_offsets.rssi_offset + bw_offset;
++	rxs->signal += ppduinfo->rssi_region_offset;
 +
  	rxs->nss = ppduinfo->nss + 1;
  
  	if (ampdu_present) {
+@@ -3486,14 +3526,18 @@ static void ath12k_dp_mon_rx_update_peer
+ {
+ 	struct ath12k_rx_peer_stats *rx_stats = arsta->rx_stats;
+ 	u32 num_msdu;
+-	u32 bw_offset;
+-	u8 i;
++	u8 bw_offset, i, region_offset = 0;
+ 
+ 	arsta->last_tx_pkt_bw = ppdu_info->bw;
+-	bw_offset = arsta->last_tx_pkt_bw * 3;
+ 	arsta->rssi_comb = ppdu_info->rssi_comb;
+ 	arsta->rx_retries  += ppdu_info->mpdu_retry;
+-	ewma_avg_rssi_add(&arsta->avg_rssi, ppdu_info->rssi_comb + bw_offset);
++	bw_offset = ath12k_get_bw_offset(ppdu_info->bw);
++
++	region_offset = ppdu_info->rssi_region_offset;
++
++	arsta->rssi_comb += bw_offset + region_offset;
++	ewma_avg_rssi_add(&arsta->avg_rssi, ppdu_info->rssi_comb + bw_offset + region_offset);
++
+ 	if (ppdu_info->errmap)
+ 		arsta->arvif->link_stats.rx_errors++;
+ 
+@@ -3691,6 +3735,9 @@ ath12k_dp_mon_rx_update_user_stats(struc
+ 		return;
+ 
+ 	arsta->rssi_comb = ppdu_info->rssi_comb;
++	arsta->rssi_comb += ath12k_get_bw_offset(ppdu_info->bw);
++
++	arsta->rssi_comb += ppdu_info->rssi_region_offset;
+ 
+ 	num_msdu = user_stats->tcp_msdu_count + user_stats->tcp_ack_msdu_count +
+ 		   user_stats->udp_msdu_count + user_stats->other_msdu_count;
 --- a/drivers/net/wireless/ath/ath12k/hal_rx.h
 +++ b/drivers/net/wireless/ath/ath12k/hal_rx.h
-@@ -266,6 +266,8 @@ struct hal_rx_mon_ppdu_info {
+@@ -66,6 +66,15 @@ enum hal_rx_bw {
+ 	HAL_RX_BW_MAX,
+ };
+ 
++enum phyrx_rssi_legacy_bw {
++	PHYRX_RSSI_LEGACY_BW_20MHZ,
++	PHYRX_RSSI_LEGACY_BW_40MHZ,
++	PHYRX_RSSI_LEGACY_BW_80MHZ,
++	PHYRX_RSSI_LEGACY_BW_160MHZ,
++	PHYRX_RSSI_LEGACY_BW_320MHZ,
++	PHYRX_RSSI_LEGACY_BW_MAX,
++};
++
+ enum hal_rx_preamble {
+ 	HAL_RX_PREAMBLE_11A,
+ 	HAL_RX_PREAMBLE_11B,
+@@ -267,6 +276,8 @@ struct hal_rx_mon_ppdu_info {
  	u8 ltf_size;
  	u8 rxpcu_filter_pass;
  	s8 rssi_chain[8][8];
@@ -76,7 +171,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  	u32 num_users;
  	u32 mpdu_fcs_ok_bitmap[HAL_RX_NUM_WORDS_PER_PPDU_BITMAP];
  	u8 addr1[ETH_ALEN];
-@@ -510,6 +512,7 @@ enum hal_rx_ul_reception_type {
+@@ -513,6 +524,7 @@ enum hal_rx_ul_reception_type {
  #define HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO0_RECEPTION   GENMASK(3, 0)
  #define HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO0_RX_BW	GENMASK(7, 5)
  #define HAL_RX_PHYRX_RSSI_LEGACY_INFO_INFO1_RSSI_COMB   GENMASK(15, 8)
@@ -84,7 +179,7 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  #define HAL_RX_PHYRX_RSSI_PREAMBLE_PRI20		GENMASK(7, 0)
  
  struct hal_rx_phyrx_chain_rssi {
-@@ -519,11 +522,13 @@ struct hal_rx_phyrx_chain_rssi {
+@@ -522,11 +534,13 @@ struct hal_rx_phyrx_chain_rssi {
  
  struct hal_rx_phyrx_rssi_legacy_info {
  	__le32 info0;

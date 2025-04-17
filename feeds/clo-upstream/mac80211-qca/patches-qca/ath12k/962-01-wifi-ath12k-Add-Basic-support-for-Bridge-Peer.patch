@@ -37,7 +37,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -2410,24 +2410,16 @@ static void ath12k_mac_peer_ab_disassoc(
+@@ -2391,24 +2391,16 @@ static void ath12k_mac_peer_ab_disassoc(
  			continue;
  
  		ahsta = (struct ath12k_sta *)sta->drv_priv;
@@ -72,7 +72,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  	}
  	spin_unlock_bh(&ab->base_lock);
  }
-@@ -2590,8 +2582,8 @@ key_add:
+@@ -2571,8 +2563,8 @@ key_add:
  			}
  
  			if (sta->mlo) {
@@ -83,7 +83,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  					arvif = ahvif->link[link_id];
  					arsta = ahsta->link[link_id];
  					if (WARN_ON(!arvif || !arsta))
-@@ -3049,23 +3041,8 @@ static void ath12k_core_peer_disassoc(st
+@@ -3030,23 +3022,8 @@ static void ath12k_core_peer_disassoc(st
  			 * discarded the management packet at this
  			 * sequence.
  			 */
@@ -109,7 +109,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		}
  	}
  }
-@@ -3311,9 +3288,6 @@ int ath12k_mode1_recovery_reconfig(struc
+@@ -3293,9 +3270,6 @@ int ath12k_mode1_recovery_reconfig(struc
  				if (!ahvif)
  					continue;
  
@@ -119,7 +119,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  				/* unlock ar mutex here as the iterator will be called
  				 * within rcu lock.
  				 */
-@@ -3321,6 +3295,9 @@ int ath12k_mode1_recovery_reconfig(struc
+@@ -3303,6 +3277,9 @@ int ath12k_mode1_recovery_reconfig(struc
  					ath12k_core_iterate_sta_list(ar, arvif);
  				}
  
@@ -129,7 +129,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  				for (key_idx = 0; key_idx < WMI_MAX_KEY_INDEX; key_idx++) {
  					key = arvif->keys[key_idx];
  					if (key) {
-@@ -4323,7 +4300,7 @@ int ath12k_core_sawf_ul_config(struct ne
+@@ -4309,7 +4286,7 @@ int ath12k_core_sawf_ul_config(struct ne
  	mutex_lock(&ahvif->ah->conf_mutex);
  	ahsta = ath12k_sta_to_ahsta(sta);
  	if (sta->mlo) {
@@ -140,7 +140,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			ret = ath12k_sawf_wmi_config_ul(arsta->arvif->ar, latency_info);
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -724,6 +724,7 @@ struct ath12k_link_sta {
+@@ -727,6 +727,7 @@ struct ath12k_link_sta {
  	/* For now the assoc link will be considered primary */
  	bool is_assoc_link;
  
@@ -148,7 +148,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  	/* For check disable fixed rate check for peer */
  	bool disable_fixed_rate;
  	u8 sawf_svc_id;
-@@ -739,7 +740,7 @@ struct ath12k_link_sta {
+@@ -742,7 +743,7 @@ struct ath12k_link_sta {
  	s8 per_chain_rssi[IEEE80211_MAX_CHAINS];
  };
  
@@ -157,7 +157,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  struct ath12k_sta {
  	struct ath12k_vif *ahvif;
-@@ -752,7 +753,7 @@ struct ath12k_sta {
+@@ -755,7 +756,7 @@ struct ath12k_sta {
  	enum hal_pn_type pn_type;
  
  	struct ath12k_link_sta deflink;
@@ -168,7 +168,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  	u16 ml_peer_id;
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -4848,6 +4848,81 @@ void ath12k_mac_bridge_vdev_up(struct at
+@@ -4880,6 +4880,81 @@ void ath12k_mac_bridge_vdev_up(struct at
  	arvif->is_up = true;
  }
  
@@ -250,7 +250,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  void ath12k_mac_bss_info_changed(struct ath12k *ar,
  				 struct ath12k_link_vif *arvif,
  				 struct ieee80211_bss_conf *info,
-@@ -6443,8 +6518,8 @@ static int ath12k_mac_op_set_key(struct
+@@ -6471,8 +6546,8 @@ static int ath12k_mac_op_set_key(struct
  	if (sta) {
  		ahsta = ath12k_sta_to_ahsta(sta);
  		if (sta->mlo) {
@@ -261,7 +261,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  				arvif = ahvif->link[link_id];
  				arsta = ahsta->link[link_id];
  				if (WARN_ON(!arvif || !arsta))
-@@ -7489,7 +7564,7 @@ static void ath12k_sta_set_4addr_wk(stru
+@@ -7517,7 +7592,7 @@ static void ath12k_sta_set_4addr_wk(stru
  	ahsta = container_of(wk, struct ath12k_sta, set_4addr_wk);
  	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
  
@@ -270,7 +270,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		arsta = ahsta->link[link_id];
  		arvif = arsta->arvif;
  		ahvif = arvif->ahvif;
-@@ -7702,7 +7777,13 @@ static int ath12k_mac_station_add(struct
+@@ -7730,7 +7805,13 @@ static int ath12k_mac_station_add(struct
  
  	peer_param.vdev_id = arvif->vdev_id;
  	peer_param.peer_addr = arsta->addr;
@@ -285,7 +285,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  	peer_param.ml_enabled = sta->mlo;
  
  	/*
-@@ -7851,10 +7932,11 @@ static int ath12k_mac_assign_link_sta(st
+@@ -7879,10 +7960,11 @@ static int ath12k_mac_assign_link_sta(st
  	struct ieee80211_link_sta *link_sta;
  	struct ieee80211_sta *sta;
  	struct ath12k_base *ab;
@@ -298,7 +298,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		return -EINVAL;
  
  	if (WARN_ON(!ahvif->link[link_id]))
-@@ -7864,14 +7946,23 @@ static int ath12k_mac_assign_link_sta(st
+@@ -7892,14 +7974,23 @@ static int ath12k_mac_assign_link_sta(st
  
  	memset(arsta, 0, sizeof(*arsta));
  
@@ -328,7 +328,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	/* logical index of the link sta in order of creation */
  	arsta->link_idx = ahsta->num_peer++;
-@@ -7884,6 +7975,7 @@ static int ath12k_mac_assign_link_sta(st
+@@ -7912,6 +8003,7 @@ static int ath12k_mac_assign_link_sta(st
  	arsta->ahsta = ahsta;
  	arsta->link_id = link_id;
  	arsta->state = IEEE80211_STA_NONE;
@@ -336,7 +336,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	return 0;
  }
-@@ -7897,7 +7989,7 @@ static int ath12k_mac_unassign_link_sta(
+@@ -7925,7 +8017,7 @@ static int ath12k_mac_unassign_link_sta(
  
  	lockdep_assert_held(&ah->conf_mutex);
  
@@ -345,7 +345,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		return -EINVAL;
  
  	ahsta->link[link_id] = NULL;
-@@ -7915,7 +8007,7 @@ ath12k_mac_alloc_assign_link_sta(struct
+@@ -7943,7 +8035,7 @@ ath12k_mac_alloc_assign_link_sta(struct
  
  	lockdep_assert_held(&ah->conf_mutex);
  
@@ -354,7 +354,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		return NULL;
  
  	if (ahsta->link[link_id]) {
-@@ -7946,7 +8038,7 @@ static int ath12k_mac_free_unassign_link
+@@ -7974,7 +8066,7 @@ static int ath12k_mac_free_unassign_link
  
  	lockdep_assert_held(&ah->conf_mutex);
  
@@ -363,7 +363,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		return -EINVAL;
  
  	arsta = ahsta->link[link_id];
-@@ -7961,6 +8053,92 @@ static int ath12k_mac_free_unassign_link
+@@ -7989,6 +8081,92 @@ static int ath12k_mac_free_unassign_link
  	return 0;
  }
  
@@ -456,7 +456,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  static void ath12k_mac_ml_station_remove(struct ath12k_vif *ahvif,
  				        struct ath12k_sta *ahsta)
  {
-@@ -7979,8 +8157,8 @@ static void ath12k_mac_ml_station_remove
+@@ -8007,8 +8185,8 @@ static void ath12k_mac_ml_station_remove
  	ath12k_ml_link_peers_delete(ahvif, ahsta);
  
  	/* validate link station removal and clear arsta links */
@@ -467,7 +467,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		arvif = ahvif->link[link_id];
  		arsta = ahsta->link[link_id];
  
-@@ -8054,7 +8232,7 @@ static int ath12k_mac_handle_link_sta_st
+@@ -8082,7 +8260,7 @@ static int ath12k_mac_handle_link_sta_st
  
  		ath12k_cfr_decrement_peer_count(ar, arsta);
  
@@ -476,7 +476,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			ath12k_mac_free_unassign_link_sta(arvif->ahvif->ah,
  							  arsta->ahsta, arsta->link_id);
  	} else if (old_state == IEEE80211_STA_AUTH &&
-@@ -8231,7 +8409,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+@@ -8259,7 +8437,7 @@ static int ath12k_mac_reconfig_ahsta_lin
  	}
  
  	for_each_set_bit(link, &links_to_unmap,
@@ -485,7 +485,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		arsta = ahsta->link[link];
  		arvif = ahvif->link[link];
  
-@@ -8244,7 +8422,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+@@ -8272,7 +8450,7 @@ static int ath12k_mac_reconfig_ahsta_lin
  	}
  
  	for_each_set_bit(link, &links_to_assign,
@@ -494,7 +494,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		ret = ath12k_mac_assign_link_sta(ah, ahsta,
  						 ahsta->link[link],
  						 ahvif, link);
-@@ -8268,7 +8446,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+@@ -8296,7 +8474,7 @@ static int ath12k_mac_reconfig_ahsta_lin
  	int ret;
  
  	for_each_set_bit(link, &ahsta->links_map,
@@ -503,7 +503,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		ret = ath12k_mac_assign_link_sta(ah, ahsta,
  						 ahsta->link[link],
  						 ahvif, link);
-@@ -8292,7 +8470,8 @@ int ath12k_mac_update_sta_state(struct i
+@@ -8320,7 +8498,8 @@ int ath12k_mac_update_sta_state(struct i
  	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
  	unsigned long links;
  	int ret = 0;
@@ -513,7 +513,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	mutex_lock(&ah->conf_mutex);
  
-@@ -8312,7 +8491,7 @@ int ath12k_mac_update_sta_state(struct i
+@@ -8340,7 +8519,7 @@ int ath12k_mac_update_sta_state(struct i
  		INIT_WORK(&ahsta->set_4addr_wk, ath12k_sta_set_4addr_wk);
  		if (!sta->mlo) {
  			ret = ath12k_mac_assign_link_sta(ah, ahsta, &ahsta->deflink,
@@ -522,7 +522,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			if (ret)
  				goto exit;
  		}
-@@ -8350,7 +8529,7 @@ int ath12k_mac_update_sta_state(struct i
+@@ -8378,7 +8557,7 @@ int ath12k_mac_update_sta_state(struct i
  		/* add case to prevent MLO assoc from happening when UMAC recovery
  		 * happens
  		 */
@@ -531,7 +531,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			arvif = ahvif->link[link];
  
  			if (!arvif || !arvif->ar ||
-@@ -8416,9 +8595,18 @@ int ath12k_mac_update_sta_state(struct i
+@@ -8444,9 +8623,18 @@ int ath12k_mac_update_sta_state(struct i
  			ieee80211_queue_work(ah->hw, &ahsta->set_4addr_wk);
  
  	}
@@ -551,7 +551,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		arvif = ahvif->link[link_id];
  		arsta = ahsta->link[link_id];
  
-@@ -8532,7 +8720,7 @@ void ath12k_mac_assign_middle_link_id(st
+@@ -8560,7 +8748,7 @@ void ath12k_mac_assign_middle_link_id(st
  	for_each_set_bit(link_id, &ahsta->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
  		arsta = ahsta->link[link_id];
  
@@ -560,7 +560,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			continue;
  
  		ab = arsta->arvif->ab;
-@@ -10335,7 +10523,8 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -10366,7 +10554,8 @@ static void ath12k_mac_op_tx(struct ieee
  	if (vif->valid_links) {
  		link = ath12k_mac_get_tx_link(sta, vif, link, skb, info_flags);
  
@@ -570,7 +570,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			ieee80211_free_txskb(hw, skb);
  			return;
  		}
-@@ -10405,6 +10594,13 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -10436,6 +10625,13 @@ static void ath12k_mac_op_tx(struct ieee
  			       sizeof(adjusted_tsf));
  		}
  		mgmt_stats = &ahvif->mgmt_stats;
@@ -584,7 +584,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		ret = ath12k_mac_mgmt_tx(ar, skb, is_prb_rsp);
  		if (ret) {
  			if (ret != -EBUSY)
-@@ -12349,7 +12545,7 @@ static int ath12k_mac_op_ampdu_action(st
+@@ -12387,7 +12583,7 @@ static int ath12k_mac_op_ampdu_action(st
  
  	mutex_lock(&ah->conf_mutex);
  
@@ -641,7 +641,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		arvif = ahvif->link[link_id];
  		arsta = ahsta->link[link_id];
  
-@@ -835,6 +852,7 @@ int ath12k_peer_create(struct ath12k *ar
+@@ -849,6 +866,7 @@ int ath12k_peer_create(struct ath12k *ar
  
  	peer->pdev_idx = ar->pdev_idx;
  	peer->sta = sta;
@@ -671,7 +671,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  						 struct ath12k_peer *peer)
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -1948,12 +1948,12 @@ int ath12k_wmi_send_peer_create_cmd(stru
+@@ -1955,12 +1955,12 @@ int ath12k_wmi_send_peer_create_cmd(stru
  	ml_param->tlv_header = FIELD_PREP(WMI_TLV_TAG, WMI_TAG_MLO_PEER_CREATE_PARAMS) |
  				FIELD_PREP(WMI_TLV_LEN, sizeof(*ml_param) - TLV_HDR_SIZE);
  
@@ -688,7 +688,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_PEER_CREATE_CMDID);
  	if (ret) {
-@@ -12504,7 +12504,7 @@ static void ath12k_mgmt_rx_event(struct
+@@ -12515,7 +12515,7 @@ static void ath12k_mgmt_rx_event(struct
  		peer = ath12k_peer_find_by_addr(ab, hdr->addr2);
  		if (!peer)
  			peer = ath12k_peer_find_by_addr(ab, hdr->addr4);
@@ -697,7 +697,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  			spin_unlock_bh(&ab->base_lock);
  			dev_kfree_skb(skb);
  			goto exit;
-@@ -12527,6 +12527,14 @@ static void ath12k_mgmt_rx_event(struct
+@@ -12538,6 +12538,14 @@ static void ath12k_mgmt_rx_event(struct
  			spin_unlock_bh(&ab->base_lock);
  			goto skip_mgmt_stats;
  		}
@@ -719,10 +719,10 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  #define ATH12K_WMI_FLAG_MLO_FORCED_INACTIVE		BIT(7)
  #define ATH12K_WMI_FLAG_MLO_LINK_ADD			BIT(8)
 +#define ATH12K_WMI_FLAG_MLO_BRIDGE_PEER			BIT(10)
+ #define ATH12K_WMI_FLAG_MLO_BRIDGE_LINK			BIT(14)
  
  struct wmi_vdev_start_mlo_params {
- 	u32 tlv_header;
-@@ -3681,6 +3682,7 @@ struct ath12k_wmi_peer_create_arg {
+@@ -3685,6 +3686,7 @@ struct ath12k_wmi_peer_create_arg {
  	u32 peer_type;
  	u32 vdev_id;
  	bool ml_enabled;
@@ -730,7 +730,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  };
  
  struct ath12k_wmi_pdev_set_regdomain_arg {
-@@ -3838,6 +3840,7 @@ enum wmi_peer_type {
+@@ -3842,6 +3844,7 @@ enum wmi_peer_type {
  	WMI_PEER_TYPE_DEFAULT = 0,
  	WMI_PEER_TYPE_BSS = 1,
  	WMI_PEER_TYPE_TDLS = 2,

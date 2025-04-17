@@ -1,0 +1,273 @@
+From fece0062936a94f372d97b646b18eb9ad0daea74 Mon Sep 17 00:00:00 2001
+From: Nagarajan Maran <quic_nmaran@quicinc.com>
+Date: Thu, 6 Feb 2025 08:05:08 +0530
+Subject: [PATCH] QSDK:CP: wifi: Add sdwf queue information display support
+
+Add support to display the SDWF queue information. The displayed queue
+information includes TID, htt_q_type, svc_id, msduq_id, and
+tgt_opaque_id. The tgt_opaque_id is stored with the queue information
+when the "HTT_T2H_MSG_TYPE_SAWF_MSDUQ_INFO_IND" event is
+received from the firmware. Remove rcu locking used to access the peer
+during this event processing, as the queue information is changed now
+in the peer.
+
+command:
+    1) When AP is MLO
+	cat /sys/kernel/debug/ieee80211/phyX/netdev:<interface_name>/
+stations/<sta_mac>/link-Y/sdwf_queue_info
+
+    2) When AP is non-MLO
+        cat /sys/kernel/debug/ieee80211/phyX/netdev:<interface_name>/
+stations/<sta_mac>/sdwf_queue_info
+
+Example output:
+
+    1) When AP is MLO
+
+/# cat ./sys/kernel/debug/ieee80211/phy00/netdev:wlan0/stations/
+00:03:8f:63:a2:72/link-0/sdwf_queue_info
+**********************
+TID: 6
+htt_q_type: 0
+svc_id: 2
+msduq_id: 22
+tgt_opaque_id: 0x80161
+**********************
+TID: 6
+htt_q_type: 1
+svc_id: 4
+msduq_id: 30
+tgt_opaque_id: 0x80162
+**********************
+TID: 7
+htt_q_type: 0
+svc_id: 1
+msduq_id: 23
+tgt_opaque_id: 0x80171
+/#
+
+/# cat ./sys/kernel/debug/ieee80211/phy00/netdev:wlan0/stations/
+00:03:8f:63:a2:72/link-1/sdwf_queue_info
+**********************
+TID: 6
+htt_q_type: 0
+svc_id: 2
+msduq_id: 22
+tgt_opaque_id: 0x80161
+**********************
+TID: 6
+htt_q_type: 1
+svc_id: 4
+msduq_id: 30
+tgt_opaque_id: 0x80162
+**********************
+TID: 7
+htt_q_type: 0
+svc_id: 1
+msduq_id: 23
+tgt_opaque_id: 0x80171
+/#
+
+    2) When AP is non-MLO
+
+/# cat ./sys/kernel/debug/ieee80211/phy00/netdev:phy00.1-0/stations
+/00:03:8f:63:a2:72/sdwf_queue_info
+**********************
+TID: 6
+htt_q_type: 0
+svc_id: 4
+msduq_id: 22
+tgt_opaque_id: 0x27
+/#
+
+Patch-dependency:
+	753-01-ath12k-sawf-update-the-TCL-Data-command-when-SKB-has.patch
+
+Signed-off-by: Nagarajan Maran <quic_nmaran@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/debugfs_sta.c | 102 ++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/dp_rx.c       |   3 +-
+ drivers/net/wireless/ath/ath12k/sawf.h        |   1 +
+ 3 files changed, 104 insertions(+), 2 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/debugfs_sta.c
++++ b/drivers/net/wireless/ath/ath12k/debugfs_sta.c
+@@ -1943,6 +1943,119 @@ static const struct file_operations fops
+ 	.owner = THIS_MODULE,
+ 	.llseek = default_llseek,
+ };
++
++static ssize_t ath12k_dbg_sta_sdwf_queue_info(struct file *file,
++					      char __user *user_buf,
++					      size_t count,
++					      loff_t *ppos)
++{
++	struct ieee80211_link_sta *link_sta = file->private_data;
++	struct ieee80211_sta *sta = link_sta->sta;
++	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
++	struct ath12k_link_sta *arsta;
++	struct ath12k_sawf_peer_ctx *peer_ctx = NULL;
++	struct ath12k_hw *ah = ahsta->ahvif->ah;
++	struct ath12k_sawf_ctx *sawf_ctx;
++	struct ath12k_msduq_map *msduq_table;
++	struct ath12k_peer *peer;
++	struct ath12k *ar;
++	struct ath12k_base *ab;
++	const int size = ATH12K_SAWF_STATS_SIZE;
++	int len = 0;
++	char *buf;
++	u8 q_id, tid, max_usr_def_q_sawf;
++	u8 link_id = link_sta->link_id;
++
++	mutex_lock(&ah->conf_mutex);
++
++	if (!(BIT(link_id) & ahsta->links_map)) {
++		mutex_unlock(&ah->conf_mutex);
++		return -ENOENT;
++	}
++
++	arsta = ahsta->link[ahsta->primary_link_id];
++
++	if (!arsta || !arsta->arvif->ar) {
++		mutex_unlock(&ah->conf_mutex);
++		return -ENOENT;
++	}
++
++	buf = kzalloc(size, GFP_KERNEL);
++	if (!buf) {
++		mutex_unlock(&ah->conf_mutex);
++		return -ENOMEM;
++	}
++
++	ar = arsta->arvif->ar;
++	mutex_lock(&ar->conf_mutex);
++
++	ab = ar->ab;
++	spin_lock_bh(&ab->base_lock);
++
++	peer = ath12k_peer_find(ab, arsta->arvif->vdev_id, arsta->addr);
++	if (!peer) {
++		spin_unlock_bh(&ab->base_lock);
++		ath12k_warn(ab, "peer %pM on vdev %i not present\n",
++			    arsta->addr, arsta->arvif->vdev_id);
++		len = -ENOENT;
++		goto unlock;
++	}
++
++	peer_ctx = &peer->sawf_ctx_peer;
++
++	sawf_ctx = ath12k_get_sawf_context();
++	if (!sawf_ctx || !peer_ctx) {
++		spin_unlock_bh(&ab->base_lock);
++		len = -EINVAL;
++		goto unlock;
++	}
++
++	max_usr_def_q_sawf = sawf_ctx->max_msduq_per_tid -
++				sawf_ctx->default_msduq_per_tid;
++
++	for (tid = 0; tid < ATH12K_SAWF_MAX_TID_SUPPORT; tid++) {
++		for (q_id = 0; q_id < max_usr_def_q_sawf; q_id++) {
++			if (peer_ctx->msduq_table[tid][q_id].is_reserved) {
++				len += scnprintf(buf + len, size - len,
++						 "**********************\n");
++				len += scnprintf(buf + len, size - len,
++						 "TID: %u\n", tid);
++				len += scnprintf(buf + len, size - len,
++						 "htt_q_type: %u\n", q_id);
++
++				msduq_table = &(peer_ctx->msduq_table[tid][q_id]);
++                                len += scnprintf(buf + len, size - len,
++                                                 "svc_id: %u\n",
++                                                 msduq_table->svc_id);
++				len += scnprintf(buf + len, size - len,
++						 "msduq_id: %u\n",
++						 msduq_table->msduq_id);
++				len += scnprintf(buf + len, size - len,
++						 "tgt_opaque_id: 0x%x\n",
++						 msduq_table->tgt_opaque_id);
++			}
++		}
++	}
++
++	spin_unlock_bh(&ab->base_lock);
++	if (len > size)
++		len = size;
++	if (len)
++		len = simple_read_from_buffer(user_buf, count, ppos, buf, len);
++
++unlock:
++	mutex_unlock(&ar->conf_mutex);
++	mutex_unlock(&ah->conf_mutex);
++	kfree(buf);
++	return len;
++}
++
++static const struct file_operations fops_sdwf_queue_info = {
++	.read = ath12k_dbg_sta_sdwf_queue_info,
++	.open = simple_open,
++	.owner = THIS_MODULE,
++	.llseek = default_llseek,
++};
+ #endif /* CPTCFG_ATH12K_SAWF */
+ 
+ #ifdef CPTCFG_ATH12K_CFR
+@@ -2208,6 +2321,8 @@ void ath12k_debugfs_link_sta_op_add(stru
+ 		debugfs_create_file("sawf_tx_delay_stats", 0400, dir, link_sta,
+ 				    &fops_sawf_tx_delay_stats);
+ 	}
++	debugfs_create_file("sdwf_queue_info", 0400, dir, link_sta,
++			    &fops_sdwf_queue_info);
+ #endif
+ #ifdef CPTCFG_ATH12K_CFR
+ 	if (test_bit(WMI_TLV_SERVICE_CFR_CAPTURE_SUPPORT,
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -2528,10 +2528,11 @@ static void ath12k_htt_sawf_info_ind_han
+ 					     struct sk_buff *skb)
+ {
+ 	struct htt_t2h_sawf_info_ind *resp = (struct htt_t2h_sawf_info_ind *)skb->data;
++	struct ath12k_sawf_peer_ctx *peer_ctx;
+ 	struct ath12k_peer *peer = NULL;
+ 	u32 htt_qtype, remapped_tid, peer_id, default_msduq_per_tid, default_msduq_max, sawf_msduq_per_tid;
+ 	u32 hlos_tid, flow_or, ast_idx, who_cl, tgt_opaque_id, sawf_msduq_max;
+-	u8 msduq_index;
++	u8 msduq_index, q_id;
+ 
+ 	htt_qtype = u32_get_bits(__le32_to_cpu(resp->info0),
+ 				 HTT_T2H_SAWF_MSDUQ_INFO_0_IND_HTT_QTYPE_ID);
+@@ -2575,15 +2576,22 @@ static void ath12k_htt_sawf_info_ind_han
+ 		      (flow_or * ATH12K_SAWF_MAX_TID_SUPPORT) + hlos_tid) -
+ 		      default_msduq_max;
+ 
+-	rcu_read_lock();
+ 	peer = ath12k_peer_find_by_id(ab, peer_id);
+ 	if ((msduq_index < sawf_msduq_max) && peer) {
++		q_id = htt_qtype - default_msduq_per_tid;
++
++		if (hlos_tid < ATH12K_SAWF_MAX_TID_SUPPORT &&
++		    q_id < MAX_Q_PER_TID) {
++			peer_ctx = &peer->sawf_ctx_peer;
++			peer_ctx->msduq_table[hlos_tid][q_id].tgt_opaque_id =
++							tgt_opaque_id;
++		}
++
+ 		if (peer->sawf_ctx_peer.telemetry_peer_ctx)
+ 			ath12k_telemetry_update_tid_msduq(peer->sawf_ctx_peer.telemetry_peer_ctx,
+ 							  msduq_index ,remapped_tid,
+ 							  (htt_qtype - default_msduq_per_tid));
+ 	}
+-	rcu_read_unlock();
+ 	spin_unlock_bh(&ab->base_lock);
+ }
+ #endif /* CPTCFG_ATH12K_SAWF */
+--- a/drivers/net/wireless/ath/ath12k/sawf.h
++++ b/drivers/net/wireless/ath/ath12k/sawf.h
+@@ -252,6 +252,7 @@ struct ath12k_msduq_map {
+ 	u8 svc_id;
+ 	bool is_reserved;
+ 	u16 msduq_id;
++	u32 tgt_opaque_id;
+ };
+ 
+ /**

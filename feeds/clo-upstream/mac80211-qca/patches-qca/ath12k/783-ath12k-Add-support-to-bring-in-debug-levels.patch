@@ -24,10 +24,8 @@ Signed-off-by: Gunaal R <quic_gunar@quicinc.com>
  drivers/net/wireless/ath/ath12k/wmi.c   |  16 +--
  4 files changed, 171 insertions(+), 33 deletions(-)
 
-Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/debug.c
-===================================================================
---- backports-20220822-5.4.213-ef7197996efe.orig/drivers/net/wireless/ath/ath12k/debug.c
-+++ backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/debug.c
+--- a/drivers/net/wireless/ath/ath12k/debug.c
++++ b/drivers/net/wireless/ath/ath12k/debug.c
 @@ -62,26 +62,33 @@ void ath12k_warn(struct ath12k_base *ab,
  #ifdef CPTCFG_ATH12K_DEBUG
  
@@ -78,10 +76,8 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/d
  }
  
  void ath12k_dbg_dump(struct ath12k_base *ab,
-Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/debug.h
-===================================================================
---- backports-20220822-5.4.213-ef7197996efe.orig/drivers/net/wireless/ath/ath12k/debug.h
-+++ backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/debug.h
+--- a/drivers/net/wireless/ath/ath12k/debug.h
++++ b/drivers/net/wireless/ath/ath12k/debug.h
 @@ -31,11 +31,18 @@ enum ath12k_debug_mask {
  	ATH12K_DBG_PEER		= 0x00020000,
  
@@ -103,7 +99,7 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/d
  __printf(2, 3) void ath12k_info(struct ath12k_base *ab, const char *fmt, ...);
  __printf(2, 3) void ath12k_err(struct ath12k_base *ab, const char *fmt, ...);
  __printf(2, 3) void ath12k_warn(struct ath12k_base *ab, const char *fmt, ...);
-@@ -76,6 +83,8 @@ static inline void ath12k_err_dump(struc
+@@ -75,6 +82,8 @@ static inline void ath12k_err_dump(struc
  }
  #endif /* CPTCFG_ATH12K_DEBUG */
  
@@ -112,11 +108,9 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/d
  #define ath12k_dbg(ar, dbg_mask, fmt, ...)			\
  do {								\
  	typeof(dbg_mask) mask = (dbg_mask);			\
-Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/mac.c
-===================================================================
---- backports-20220822-5.4.213-ef7197996efe.orig/drivers/net/wireless/ath/ath12k/mac.c
-+++ backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/mac.c
-@@ -4776,6 +4776,7 @@ static void ath12k_mac_op_bss_info_chang
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -4846,6 +4846,7 @@ static void ath12k_mac_op_bss_info_chang
  
  static int ath12k_mac_vdev_delete(struct ath12k *ar, struct ath12k_link_vif *arvif)
  {
@@ -124,17 +118,17 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/m
  	unsigned long time_left;
  	int ret = 0;
  
-@@ -4814,6 +4815,9 @@ static int ath12k_mac_vdev_delete(struct
- 	arvif->ahvif->num_vdev_created--;
+@@ -4891,6 +4892,9 @@ static int ath12k_mac_vdev_delete(struct
  	arvif->is_created = false;
+ 	arvif->ar = NULL;
  
 +	ath12k_dbg(ar->ab, ATH12K_DBG_SET(MAC, L1), "mac vdev delete id %d type %d subtype %d map %llx\n",
 +		   arvif->vdev_id, ahvif->vdev_type, ahvif->vdev_subtype,
 +		   ar->ab->free_vdev_map);
  clean_up:
- #ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
- 	if (arvif->link_id != ATH12K_DEFAULT_SCAN_LINK && arvif->ndev_pvt)
-@@ -10133,7 +10137,7 @@ static int ath12k_mac_vdev_create(struct
+ 	spin_lock_bh(&ar->data_lock);
+ 	list_del(&arvif->list);
+@@ -10303,7 +10307,7 @@ static int ath12k_mac_vdev_create(struct
  		break;
  	}
  
@@ -143,7 +137,7 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/m
  		   arvif->vdev_id, ahvif->vdev_type, ahvif->vdev_subtype,
  		   ab->free_vdev_map);
  
-@@ -12830,7 +12834,7 @@ ath12k_mac_op_unassign_vif_chanctx(struc
+@@ -13039,7 +13043,7 @@ ath12k_mac_op_unassign_vif_chanctx(struc
  	if (unlikely(test_bit(ATH12K_FLAG_CRASH_FLUSH, &ar->ab->dev_flags)))
  		goto out;
  
@@ -152,7 +146,7 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/m
  		   "mac chanctx unassign ptr %pK vdev_id %i\n",
  		   ctx, arvif->vdev_id);
  
-@@ -13027,7 +13031,7 @@ static void ath12k_mac_flush(struct ath1
+@@ -13245,7 +13249,7 @@ static void ath12k_mac_flush(struct ath1
  		return;
  	}
  
@@ -161,43 +155,68 @@ Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/m
  		   "mac tx flush pending mgmt %d data %d\n",
  		   atomic_read(&ar->num_pending_mgmt_tx),
  		   atomic_read(&ar->dp.num_tx_pending));
-Index: backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/wmi.c
-===================================================================
---- backports-20220822-5.4.213-ef7197996efe.orig/drivers/net/wireless/ath/ath12k/wmi.c
-+++ backports-20220822-5.4.213-ef7197996efe/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -1100,7 +1100,7 @@ int ath12k_wmi_vdev_stop(struct ath12k *
- 		dev_kfree_skb(skb);
- 	}
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -1348,7 +1348,7 @@ int ath12k_wmi_vdev_stop(struct ath12k *
+ 						 sizeof(*cmd));
+ 	cmd->vdev_id = cpu_to_le32(vdev_id);
  
 -	ath12k_dbg(ar->ab, ATH12K_DBG_WMI, "WMI vdev stop id 0x%x\n", vdev_id);
 +	ath12k_dbg(ar->ab, ATH12K_DBG_SET(WMI, L1), "WMI vdev stop id 0x%x\n", vdev_id);
  
- 	return ret;
- }
-@@ -1129,7 +1129,7 @@ int ath12k_wmi_vdev_down(struct ath12k *
- 		dev_kfree_skb(skb);
- 	}
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_VDEV_STOP_CMDID);
+ 	if (ret) {
+@@ -1376,7 +1376,7 @@ int ath12k_wmi_vdev_down(struct ath12k *
+ 						 sizeof(*cmd));
+ 	cmd->vdev_id = cpu_to_le32(vdev_id);
  
 -	ath12k_dbg(ar->ab, ATH12K_DBG_WMI, "WMI vdev down id 0x%x\n", vdev_id);
 +	ath12k_dbg(ar->ab, ATH12K_DBG_SET(WMI, L1), "WMI vdev down id 0x%x\n", vdev_id);
  
- 	return ret;
- }
-@@ -1746,7 +1746,7 @@ int ath12k_wmi_pdev_set_param(struct ath
- 		dev_kfree_skb(skb);
- 	}
+ 	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_VDEV_DOWN_CMDID);
+ 	if (ret) {
+@@ -2058,7 +2058,7 @@ int ath12k_wmi_pdev_set_param(struct ath
+ 	cmd->param_id = cpu_to_le32(param_id);
+ 	cmd->param_value = cpu_to_le32(param_value);
  
 -	ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +	ath12k_dbg(ar->ab, ATH12K_DBG_SET(WMI, L2),
  		   "WMI pdev set param %d pdev id %d value %d\n",
  		   param_id, pdev_id, param_value);
  
-@@ -3441,7 +3441,7 @@ int ath12k_wmi_send_wmm_update_cmd_tlv(s
- 		wmm_param->acm = wmi_wmm_arg->acm;
- 		wmm_param->no_ack = wmi_wmm_arg->no_ack;
+@@ -2576,7 +2576,7 @@ err_fill_ml_info:
+ 	ml_info->cu_vdev_map_cat2_hi =
+ 			   cpu_to_le32(ATH12K_GET_UPPER_32_BITS(vdev_map_cat2));
+ 
+-	ath12k_dbg(ab, ATH12K_DBG_WMI,
++	ath12k_dbg(ab, ATH12K_DBG_SET(WMI, L3),
+ 		   "wmi CU filled ml info cat1_lo=0x%x cat1_hi=0x%x cat2_lo=0x%x cat2_hi=0x%x non_tx_ml_bmap=%llu\n",
+ 		   ml_info->cu_vdev_map_cat1_lo, ml_info->cu_vdev_map_cat1_hi,
+ 		   ml_info->cu_vdev_map_cat2_lo, ml_info->cu_vdev_map_cat2_hi,
+@@ -2666,7 +2666,7 @@ ath12k_wmi_append_critical_update_params
+ 
+ 	ptr += TLV_HDR_SIZE + ml_info_len;
+ 
+-	ath12k_dbg(ar->ab, ATH12K_DBG_WMI, "wmi %ld bytes of additional data filled for CU\n",
++	ath12k_dbg(ar->ab, ATH12K_DBG_SET(WMI, L3), "wmi %ld bytes of additional data filled for CU\n",
+ 		    (unsigned long)(ptr - start));
+ 	return ptr;
+ }
+@@ -3773,7 +3773,7 @@ int ath12k_wmi_send_wmm_update_cmd(struc
+ 		wmm_param->acm = cpu_to_le32(wmi_wmm_arg->acm);
+ 		wmm_param->no_ack = cpu_to_le32(wmi_wmm_arg->no_ack);
  
 -		ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +		ath12k_dbg(ar->ab, ATH12K_DBG_SET(WMI, L3),
  			   "wmi wmm set ac %d aifs %d cwmin %d cwmax %d txop %d acm %d no_ack %d\n",
  			   ac, wmm_param->aifs, wmm_param->cwmin,
  			   wmm_param->cwmax, wmm_param->txoplimit,
+@@ -4745,7 +4745,7 @@ static void ath12k_wmi_ctrl_path_stats_e
+ 
+ 	if (!fixed_param->more) {
+ 		complete(&ar->debug.wmi_ctrl_path_stats_rcvd);
+-		ath12k_dbg(ab, ATH12K_DBG_WMI, "wmi ctrl path stats completed");
++		ath12k_dbg(ab, ATH12K_DBG_SET(WMI, L3), "wmi ctrl path stats completed");
+ 	}
+ free:
+ 	ath12k_wmi_crl_path_stats_list_free(ar, &param.list);

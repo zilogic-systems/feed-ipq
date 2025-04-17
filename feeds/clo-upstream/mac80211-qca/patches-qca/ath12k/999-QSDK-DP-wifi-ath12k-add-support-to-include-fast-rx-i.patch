@@ -1,0 +1,129 @@
+From c19a9cfada1eb5d26af74d03c99e20dd3c35012a Mon Sep 17 00:00:00 2001
+From: Hari Chandrakanthan <quic_haric@quicinc.com>
+Date: Wed, 22 Jan 2025 16:20:37 +0530
+Subject: [PATCH] QSDK:DP:wifi: ath12k: add support to include fast rx in
+ ath12k_dp_rx_process() for ppe vp
+
+Add ppe vp support for utilizing the fast rx support
+in ath12k_dp_rx_process().
+
+Also rearrange fields to avoid cache miss
+and add a hal ops under peer structure to avoid multiple deference.
+
+This change provides 3-5% cpu improvement in ppe vp 6G SU UL case.
+
+Patch-depdendency: 971-04-QSDK-ath12k-add-simple-fast-rx-support.patch
+Patch-work: None
+
+Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 25 +++++++++++++++++++++----
+ drivers/net/wireless/ath/ath12k/mac.c   |  1 +
+ drivers/net/wireless/ath/ath12k/peer.c  |  1 +
+ drivers/net/wireless/ath/ath12k/peer.h  |  9 +++++----
+ 4 files changed, 28 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index 12f0eac..2798d36 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3446,8 +3446,8 @@ static bool ath12k_dp_rx_check_fast_rx(struct ath12k *ar,
+ 
+ 	rxcb = ATH12K_SKB_RXCB(msdu);
+ 
+-	if (unlikely(peer->stats_disable != ATH12K_PEER_STATS_DSBL_PPE ||
+-	    decap != DP_RX_DECAP_TYPE_ETHERNET2_DIX))
++	if (unlikely(!peer->stats_disable ||
++		     decap != DP_RX_DECAP_TYPE_ETHERNET2_DIX))
+ 		return false;
+ 
+ 	/* mcbc packets go through mac80211 for PN validation */
+@@ -4366,8 +4366,7 @@ try_again:
+ 			rcu_read_lock();
+ 			peer = ath12k_peer_find_by_peer_list_index(rxcb->ar,
+ 								   rxcb->peer_id);
+-			if (likely(peer &&
+-				  (peer->stats_disable == ATH12K_PEER_STATS_DSBL_SFE))) {
++			if (likely(peer && peer->stats_disable)) {
+ 				intra_bss = u32_get_bits(rxcb->msdu_info,
+ 							 RX_MSDU_DESC_INFO0_INTRA_BSS);
+ 				is_mcbc = (u32_get_bits(rxcb->msdu_info,
+@@ -4400,6 +4399,24 @@ try_again:
+ 					msdu->ip_summed =
+ 						(ip_csum_fail || l4_csum_fail) ?
+ 						 CHECKSUM_NONE : CHECKSUM_UNNECESSARY;
++
++#if defined(CPTCFG_MAC80211_PPE_SUPPORT) || defined(CPTCFG_ATH12K_PPE_DS_SUPPORT)
++					if (unlikely(peer->ppe_vp_num > 0)) {
++						prefetch(next_msdu->data);
++						rx_desc = (u32 *)(msdu->data - (hal_rx_desc_sz + l3_pad));
++						peer->hal_ops->rx_desc_get_fse_info((struct hal_rx_desc *)rx_desc, &rx_info);
++						if (!rx_info.flow_idx_timeout &&
++						    !rx_info.flow_idx_invalid &&
++						    (rx_info.flow_metadata != ATH12K_RX_FSE_FLOW_MATCH_SFE)) {
++							msdu->dev = peer->dev;
++							if (ppe_vp_tx_to_ppe(peer->ppe_vp_num, msdu)) {
++								rcu_read_unlock();
++								continue;
++							}
++						}
++					}
++#endif
++
+ 					msdu->protocol = eth_type_trans(msdu, peer->dev);
+ 					rcu_read_unlock();
+ 					prefetch(skb_shinfo(msdu));
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 63859ac..31a4621 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -8218,6 +8218,7 @@ static void ath12k_sta_set_4addr_wk(struct work_struct *wk)
+ 			}
+ 
+ 			spin_unlock_bh(&ar->ab->base_lock);
++			peer->hal_ops = ar->ab->hw_params->hal_ops;
+ 		}
+ 		ath12k_dp_peer_ppeds_route_setup(ar, arvif, arsta);
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/peer.c b/drivers/net/wireless/ath/ath12k/peer.c
+index 04cb712..9c4a66c 100644
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -995,6 +995,7 @@ int ath12k_peer_create(struct ath12k *ar, struct ath12k_link_vif *arvif,
+ 	if (arvif->ahvif->ppe_vp_type == PPE_VP_USER_TYPE_DS)
+ 		peer->ppe_vp_num = arvif->ahvif->ppe_vp_num;
+ #endif
++	peer->hal_ops = ar->ab->hw_params->hal_ops;
+ 
+ 	if ((ab->stats_disable) && ((peer->vif->type == NL80211_IFTYPE_AP) ||
+ 	     (peer->vif->type == NL80211_IFTYPE_STATION))) {
+diff --git a/drivers/net/wireless/ath/ath12k/peer.h b/drivers/net/wireless/ath/ath12k/peer.h
+index f85a9cf..1383f93 100644
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -58,6 +58,11 @@ struct ath12k_peer {
+ 	struct net_device *dev;
+ 	struct ieee80211_sta *sta;
+ 	struct ieee80211_vif *vif;
++#if defined(CPTCFG_MAC80211_PPE_SUPPORT) || defined(CPTCFG_ATH12K_PPE_DS_SUPPORT)
++	/* Duplicate PPE port number to avoid link vif lookup in rx data path */
++	int ppe_vp_num;
++	const struct hal_ops *hal_ops;
++#endif
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	struct ath12k_sawf_peer_ctx sawf_ctx_peer;
+ 	struct ath12k_sawf_stats sawf_stats;
+@@ -115,10 +120,6 @@ struct ath12k_peer {
+ 	 */
+ 	u8 ml_addr[ETH_ALEN];
+ 	struct rcu_head rcu;
+-#if defined(CPTCFG_MAC80211_PPE_SUPPORT) || defined(CPTCFG_ATH12K_PPE_DS_SUPPORT)
+-	/* Duplicate PPE port number to avoid link vif lookup in rx data path */
+-	int ppe_vp_num;
+-#endif
+ 	bool assoc_success; /* information on peer assoc status from firmware */
+ 	u32 flow_cnt[ATH12K_DATA_TID_MAX];
+ 	u8 tid_weight[ATH12K_DATA_TID_MAX];
+-- 
+2.34.1
+

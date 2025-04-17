@@ -17,23 +17,19 @@ Signed-off-by: Maharaja Kennadyrajan <quic_mkenna@quicinc.com>
  drivers/net/wireless/ath/ath12k/mac.c  | 35 ++++++++++++++++++++++++--
  2 files changed, 34 insertions(+), 2 deletions(-)
 
-Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/core.h
-===================================================================
---- backports-6.5-rc3.orig/drivers/net/wireless/ath/ath12k/core.h
-+++ backports-6.5-rc3/drivers/net/wireless/ath/ath12k/core.h
-@@ -502,6 +502,7 @@ struct ath12k_vif {
- 	struct dentry *debugfs_primary_link;
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -510,6 +510,7 @@ struct ath12k_vif {
  #endif /* CPTCFG_ATH12K_DEBUGFS */
  	bool mcast_to_ucast_en;
+ 	u8 hw_link_id;
 +	bool chanctx_peer_del_done;
   };
  
  struct ath12k_vif_iter {
-Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
-===================================================================
---- backports-6.5-rc3.orig/drivers/net/wireless/ath/ath12k/mac.c
-+++ backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
-@@ -13356,9 +13356,13 @@ ath12k_mac_op_assign_vif_chanctx(struct
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -13370,9 +13370,13 @@ ath12k_mac_op_assign_vif_chanctx(struct
  	struct ath12k_base *ab;
  	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
  	struct ath12k_link_vif *arvif;
@@ -47,7 +43,7 @@ Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
  
  	u8 link_id = link_conf->link_id;
  
-@@ -13502,6 +13506,32 @@ ath12k_mac_op_assign_vif_chanctx(struct
+@@ -13518,6 +13522,32 @@ ath12k_mac_op_assign_vif_chanctx(struct
  		}
  	}
  
@@ -80,7 +76,7 @@ Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
  	if (ahvif->vdev_type == WMI_VDEV_TYPE_MONITOR) {
  		ret = ath12k_mac_monitor_start(ar);
  		if (ret)
-@@ -13714,14 +13744,16 @@ stop_primary:
+@@ -13730,14 +13760,16 @@ stop_primary:
  		if ((ab->hw_params->vdev_start_delay && !sta && !peer->sta) ||
  		     !ab->hw_params->vdev_start_delay) {
  			ret = ath12k_peer_delete(ar, arvif->vdev_id, arvif->bssid);

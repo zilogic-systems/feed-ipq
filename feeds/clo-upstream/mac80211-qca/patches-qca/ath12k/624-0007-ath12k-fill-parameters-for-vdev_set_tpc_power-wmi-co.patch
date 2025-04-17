@@ -14,7 +14,7 @@ Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -7542,6 +7542,291 @@ static u8 ath12k_mac_get_num_pwr_levels(
+@@ -7542,6 +7542,301 @@ static u8 ath12k_mac_get_num_pwr_levels(
          return num_pwr_levels;
  }
  
@@ -95,7 +95,12 @@ Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
 +        */
 +       *center_freq = *start_freq + i * step_freq;
 +       *temp_chan = ieee80211_get_channel(ar->hw->wiphy, *center_freq);
-+       *tx_power = (*temp_chan)->max_reg_power;
++	if (*temp_chan) {
++		*tx_power = (*temp_chan)->max_reg_power;
++	} else {
++		ath12k_err(ar->ab, "failed to get channel definition for center freq: %d\n", *center_freq);
++		*tx_power = ATH12K_MIN_TX_POWER;
++	}
 +}
 +
 +static void ath12k_mac_get_eirp_power(struct ath12k *ar,
@@ -122,7 +127,12 @@ Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
 +       *center_freq = ath12k_mac_get_seg_freq(def, *start_freq, i);
 +       *center_freq += 10;
 +       *temp_chan = ieee80211_get_channel(ar->hw->wiphy, *center_freq);
-+       *tx_power = (*temp_chan)->max_reg_power;
++	if (*temp_chan) {
++		*tx_power = (*temp_chan)->max_reg_power;
++	} else {
++		ath12k_err(ar->ab, "failed to get channel definition for center freq: %d\n", *center_freq);
++		*tx_power = ATH12K_MIN_TX_POWER;
++	}
 +}
 +
 +void ath12k_mac_fill_reg_tpc_info(struct ath12k *ar,

@@ -1,0 +1,679 @@
+From c9c92be047ed0b22f50710967da647a583ff7efc Mon Sep 17 00:00:00 2001
+From: Sidhanta Sahu <quic_sidhanta@quicinc.com>
+Date: Tue, 5 Nov 2024 04:35:36 -0800
+Subject: [PATCH 3/5] QSDK CP: wifi: Implement telemetry agent interfaces
+ for Energy Service
+
+Implement the interface to provide resources and telemetry stats for
+the telemetry agent module running the 1-second periodic work.
+During initialization, provide psoc, pdev, and peer resources from the host.
+Provide pdev and peer telemetry stats to telemetry agent to further process,
+and write the data to a relayFs buffer.
+
+Provide these stats to the QCA-specific user space application via relayFs.
+
+Patch-dependency: 982-02-UPSTREAM-CP-DP-wifi-ath12k-Add-telemetry-stats-for-QCA-.patch
+Patch-work: None
+
+Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c        |  18 +-
+ drivers/net/wireless/ath/ath12k/peer.c        |  10 +
+ .../wireless/ath/ath12k/telemetry_agent_if.c  | 371 +++++++++++++++++-
+ .../wireless/ath/ath12k/telemetry_agent_if.h  |  22 ++
+ 4 files changed, 411 insertions(+), 10 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -25,6 +25,8 @@
+ #include "ahb.h"
+ #include "telemetry.h"
+ #include "peer.h"
++#include "rm.h"
++#include "telemetry_agent_if.h"
+ 
+ #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
+ extern struct ath12k_ps_context ath12k_global_ps_ctx;
+@@ -1765,6 +1767,7 @@ static int ath12k_core_hw_group_start(st
+ 
+ 		set_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags);
+ 
++		ath12k_core_pdev_enable_telemetry_stats(ab);
+ 		mutex_unlock(&ab->core_lock);
+ 	}
+ 
+@@ -1802,7 +1805,7 @@ err_pdev_destroy:
+ 	}
+ 
+ 	ath12k_mac_destroy(ag);
+- 	return ret;
++	return ret;
+ }
+ 
+ static int ath12k_core_start_firmware(struct ath12k_base *ab,
+@@ -3810,7 +3813,6 @@ static int ath12k_core_hw_group_create(s
+ 		mutex_unlock(&ab->core_lock);
+ 
+ 		ath12k_qmi_fwreset_from_cold_boot(ab);
+-
+ 	}
+ 
+ out:
+@@ -3879,6 +3881,10 @@ int ath12k_core_init(struct ath12k_base
+ 
+ 	ag->mgmt_rx_reorder = ath12k_mgmt_rx_reordering;
+ 
++	ret = ath12k_telemetry_ab_agent_create_handler(ab);
++	if (ret)
++		ath12k_err(ab, "Unable to create telemetry psoc agent object: %d\n", ret);
++
+ 	return 0;
+ 
+ err_hw_group:
+@@ -4016,6 +4022,9 @@ void ath12k_core_deinit(struct ath12k_ba
+ 	 */
+ 	mutex_unlock(&ag->mutex_lock);
+ 
++	if (ath12k_telemetry_ab_agent_delete_handler(ab))
++		ath12k_warn(ab, "failed to destroy soc agent\n");
++
+ 	ath12k_core_put_hw_group(ab);
+ }
+ 
+@@ -4368,6 +4377,32 @@ void ath12k_wsi_load_info_wsiorder_updat
+ 	}
+ }
+ 
++int ath12k_core_pdev_enable_telemetry_stats(struct ath12k_base *ab)
++{
++	struct ath12k_pdev *pdev;
++	struct ath12k *ar;
++	int ret, i;
++
++	for (i = 0; i < ab->num_radios; i++) {
++		pdev = &ab->pdevs[i];
++		if (pdev) {
++			ar = pdev->ar;
++			ret = ath12k_wmi_pdev_enable_telemetry_stats(ab, ar);
++			if (ret) {
++				ath12k_err(ab,
++					   "Failed to enable pdev telemetry stats for pdev id:%d\n",
++					   pdev->pdev_id);
++			} else {
++				ath12k_info(ab,
++					    "Enable pdev telemetry stats for pdev id: %d\n",
++					    pdev->pdev_id);
++			}
++		}
++	}
++
++	return 0;
++}
++
+ static int ath12k_rddm_notifier(struct notifier_block *this,
+ 				 unsigned long event, void *ptr)
+ {
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -587,6 +587,16 @@ int ath12k_peer_delete_send(struct ath12
+ 			   peer->addr, ml_peer_id);
+ 	}
+ 
++	if (!peer->is_bridge_peer) {
++		ret = ath12k_telemetry_peer_agent_delete_handler(ar, vdev_id,
++								 addr);
++		if (ret && ret != -ENOTSUPP) {
++			ath12k_dbg(ab, ATH12K_DBG_PEER,
++				    "failed to delete peer reference in TA for vdev_id %d addr %pM ret %d\n",
++				    vdev_id, addr, ret);
++		}
++	}
++
+ 	spin_unlock_bh(&ab->base_lock);
+ 
+ 	synchronize_rcu();
+@@ -905,6 +915,17 @@ int ath12k_peer_create(struct ath12k *ar
+ 		arsta->ast_hash = peer->ast_hash;
+ 		arsta->ast_idx = peer->hw_peer_id;
+ 
++		if (!peer->is_bridge_peer) {
++			ret = ath12k_telemetry_peer_agent_create_handler(ar,
++									 arg->vdev_id,
++									 arg->peer_addr);
++			if (ret && ret != -ENOTSUPP) {
++				ath12k_dbg(ab, ATH12K_DBG_PEER,
++					    "failed to create peer reference in TA for vdev_id %d addr %pM ret %d\n",
++					    arg->vdev_id, arg->peer_addr, ret);
++			}
++		}
++
+ 		/* Fill ML info into created peer */
+ 		if (sta->mlo) {
+ 			ml_peer_id = ahsta->ml_peer_id;
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
+@@ -6,9 +6,15 @@
+ #include "core.h"
+ #include "debug.h"
+ #include "sawf.h"
++#include "rm.h"
++#include "peer.h"
++#include "dp.h"
++#include "dp_mon.h"
++#include "mac.h"
+ #include <linux/export.h>
+ #include "telemetry.h"
+ #include "telemetry_agent_if.h"
++#include "telemetry_agent.h"
+ #include "telemetry_agent_wifi_driver_if.h"
+ #include <linux/module.h>
+ 
+@@ -17,9 +23,18 @@ int ath12k_get_peer_info(void *obj, stru
+ int ath12k_get_pdev_info(void *obj, struct agent_pdev_iface_init_obj *stats);
+ int ath12k_get_peer_stats(void *obj, struct agent_peer_iface_stats_obj *stats);
+ int ath12k_get_psoc_info(void *obj, struct agent_psoc_iface_init_obj *stats);
++void ath12k_telemetry_notify_rm(enum agent_notification_event event,
++				enum rm_services id,
++				uint8_t category);
+ 
+ struct telemetry_agent_ops *g_agent_ops;
+ EXPORT_SYMBOL(g_agent_ops);
++/* Exporting
++ * breaks encapsulation,
++ * allow other modules to directly modify the ops pointer
++ * create potential race conditions
++ * Make the code harder to maintain
++ */
+ 
+ int register_telemetry_agent_ops(struct telemetry_agent_ops *agent_ops);
+ int unregister_telemetry_agent_ops(struct telemetry_agent_ops *agent_ops);
+@@ -41,7 +56,9 @@ int register_telemetry_agent_ops(struct
+ 	g_agent_ops->sawf_get_drop_stats = ath12k_sawf_get_drop_stats;
+ 	g_agent_ops->sawf_notify_breach = ath12k_sawf_notify_breach;
+ 
++	g_agent_ops->agent_notify_host_event = ath12k_telemetry_notify_rm;
+ 	ath12k_info(NULL, "registered telemetry agent ops: %p", g_agent_ops);
++
+ 	return 0;
+ }
+ EXPORT_SYMBOL(register_telemetry_agent_ops);
+@@ -54,6 +71,11 @@ int unregister_telemetry_agent_ops(struc
+ }
+ EXPORT_SYMBOL(unregister_telemetry_agent_ops);
+ 
++bool ath12k_telemetry_is_agent_loaded(void)
++{
++	return (g_agent_ops) ? true : false;
++}
++
+ u32 ath12k_telemetry_agent_init(void)
+ {
+ 	int status = 0;
+@@ -72,32 +94,200 @@ u32 ath12k_telemetry_agent_deinit(void)
+ 
+ int ath12k_get_pdev_stats(void *obj, struct agent_link_iface_stats_obj *stats)
+ {
+-	ath12k_warn(NULL, "ath12k_get_pdev_stats - not implemented \n");
+-	return -1;
++	struct ath12k_pdev *pdev = (struct ath12k_pdev *)obj;
++	struct ath12k_pdev_telemetry_stats dp_stats;
++	struct ath12k_pdev_ctrl_path_stats *pdev_stats;
++	struct ieee80211_chanctx_conf *ctx;
++	struct ath12k_base *ab;
++	struct ath12k *ar;
++	int ac;
++
++	if (!pdev)
++		return -EINVAL;
++
++	ar = pdev->ar;
++	if (!ar) {
++		ath12k_warn(NULL, "Failed to get ar from telemetry agent object pdev\n");
++		return -EINVAL;
++	}
++
++	ab = ath12k_pdev_to_ab(pdev);
++	if (!ab) {
++		ath12k_warn(NULL, "Failed to get ab from telemetry agent object pdev\n");
++		return -ENOENT;
++	}
++
++	pdev_stats = &ar->stats;
++	if (!pdev_stats ||
++	    ath12k_dp_get_pdev_telemetry_stats(ab, pdev->pdev_id, &dp_stats)) {
++		return -EINVAL;
++	}
++
++	memset(stats, 0, sizeof(*stats));
++	if (test_bit(MONITOR_VDEV_STARTED, &ar->monitor_flags))
++		stats->is_mon_enabled  = true;
++
++	ctx = ath12k_mac_get_chan_ctx(ar);
++	if (!ctx)
++		return -ENOENT;
++
++	stats->freq = ctx->def.chan->center_freq;
++	stats->link_id = pdev->hw_link_id;
++	stats->soc_id = ath12k_get_ab_chip_id(ab);
++
++	stats->available_airtime[0] = pdev_stats->telemetry_stats.estimated_air_time_ac_be;
++	stats->available_airtime[1] = pdev_stats->telemetry_stats.estimated_air_time_ac_bk;
++	stats->available_airtime[2] = pdev_stats->telemetry_stats.estimated_air_time_ac_vi;
++	stats->available_airtime[3] = pdev_stats->telemetry_stats.estimated_air_time_ac_vo;
++
++	stats->freetime = pdev_stats->pdev_freetime_per_sec;
++	for (ac = 0; ac < ATH12K_DP_WLAN_MAX_AC; ac++) {
++		stats->link_airtime[ac] = dp_stats.link_airtime[ac];
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "pdev stats soc id : %d pdev id: %d link id: %d freq: %d AC: %d Available Airtime: %d Link Airtime: %d\n",
++			   stats->soc_id, pdev_stats->telemetry_stats.pdev_id,
++			   stats->link_id, stats->freq,
++			   ac, stats->available_airtime[ac], stats->link_airtime[ac]);
++	}
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "pdev stats soc id : %d link id: %d freetime: %d is_mon_enabled: %d",
++		   stats->soc_id, stats->link_id, stats->freetime,
++		   stats->is_mon_enabled);
++
++	return 0;
+ }
+ 
+ int ath12k_get_peer_info(void *obj, struct agent_peer_iface_init_obj *stats)
+ {
+-	ath12k_warn(NULL, "ath12k_get_peer_info - not implemented \n");
+-	return -1;
++	struct ath12k_peer *peer = (struct ath12k_peer *)obj;
++
++	if (!peer)
++		return -EINVAL;
++
++	if (peer->is_bridge_peer)
++		return -EINVAL;
++
++	memset(stats, 0, sizeof(*stats));
++	ether_addr_copy(stats->peer_mld_mac, peer->ml_addr);
++	ether_addr_copy(stats->peer_link_mac, peer->addr);
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "peer info peer: %p addr: %pM ml addr: %pM\n",
++		   peer, peer->addr, peer->ml_addr);
++
++	return 0;
+ }
+ 
+ int ath12k_get_pdev_info(void *obj, struct agent_pdev_iface_init_obj *stats)
+ {
+-	ath12k_warn(NULL, "ath12k_get_pdev_info - not implemented \n");
+-	return -1;
++	struct ath12k_pdev *pdev = (struct ath12k_pdev *)obj;
++	struct ath12k_base *ab = NULL;
++
++	if (!pdev)
++		return -EINVAL;
++
++	ab = ath12k_pdev_to_ab(pdev);
++	if (!ab)
++		return -EINVAL;
++
++	memset(stats, 0, sizeof(struct agent_pdev_iface_init_obj));
++	stats->link_id = pdev->hw_link_id;
++	/* To-Do: stats->link_id = (ml_grp_id << 8) | stats->link_id; */
++	stats->soc_id = ath12k_get_ab_chip_id(ab);
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Pdev Info: link_id:%d soc_id:%d band:%d\n",
++		   stats->link_id, stats->soc_id, stats->band);
++
++	return 0;
+ }
+ 
+ int ath12k_get_peer_stats(void *obj, struct agent_peer_iface_stats_obj *stats)
+ {
+-	ath12k_warn(NULL, "ath12k_get_peer_stats - not implemented \n");
+-	return -1;
++	struct agent_peer_db *peer_db = (struct agent_peer_db *)obj;
++	struct ath12k_peer *peer = peer_db->peer_obj_ptr;
++	struct ath12k_pdev *pdev = peer_db->pdev_obj_ptr;
++	struct ath12k_base *ab = peer_db->psoc_obj_ptr;
++	struct ath12k_peer_telemetry_stats dp_stats;
++	u8 ac;
++
++	/* Telemetry agent is expected to hold lock while fetching this stats
++	 */
++	if (!pdev || !ab) {
++		ath12k_warn(NULL, "Invalid peer object received from telemetry agent object\n");
++		return -EINVAL;
++	}
++
++	if (!pdev->ar) {
++		return -EINVAL;
++	}
++
++	rcu_read_lock();
++	peer = ath12k_peer_find_by_peer_list_index(pdev->ar, peer_db->peer_id);
++	if (!peer) {
++		rcu_read_unlock();
++		return -EINVAL;
++	}
++
++	if (peer->is_bridge_peer) {
++		rcu_read_unlock();
++		return -EINVAL;
++	}
++
++	if (!peer->assoc_success) {
++		rcu_read_unlock();
++		return -EINVAL;
++	}
++
++	memset(stats, 0, sizeof(*stats));
++	ether_addr_copy(stats->peer_mld_mac, peer->ml_addr);
++	ether_addr_copy(stats->peer_link_mac, peer->addr);
++
++	if (ath12k_dp_get_peer_telemetry_stats(ab, peer->addr, &dp_stats)) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "Failed to get telemetry peer stats for %pM\n",
++			   peer->addr);
++	}
++
++	rcu_read_unlock();
++	for (ac = 0; ac < ATH12K_DP_WLAN_MAX_AC; ac++) {
++		stats->airtime_consumption[ac] =
++			(u8)(dp_stats.tx_airtime_consumption[ac] +
++			     dp_stats.rx_airtime_consumption[ac]);
++
++		stats->tx_airtime_consumption[ac] =
++			dp_stats.tx_airtime_consumption[ac];
++
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "TA peer: %pM soc: %d pdev: %d link: %d ac: %d airtime_consumption: %d tx: %d rx: %d\n",
++			   peer->addr, ab->chip_id, pdev->pdev_id, peer->link_id,
++			   ac, stats->airtime_consumption[ac],
++			   dp_stats.tx_airtime_consumption[ac],
++			   dp_stats.rx_airtime_consumption[ac]);
++	}
++	/* To-Do: Implement a way to get rssi */
++	stats->rssi = 0;
++
++	return 0;
+ }
+ 
+ int ath12k_get_psoc_info(void *obj, struct agent_psoc_iface_init_obj *stats)
+ {
+-	ath12k_warn(NULL, "ath12k_get_peer_stats - not implemented \n");
+-	return -1;
++	struct ath12k_base *ab = (struct ath12k_base *)obj;
++
++	if (!ab || !stats)
++		return -EINVAL;
++	memset(stats, 0, sizeof(*stats));
++	stats->soc_id = ath12k_get_ab_chip_id(ab);
++	stats->max_peers = ath12k_get_peer_count(ab, true);
++	stats->num_peers = ath12k_get_peer_count(ab, false);
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Psoc info: id:%d max_peers:%d num_peer:%d\n",
++		   stats->soc_id, stats->max_peers, stats->num_peers);
++
++	return 0;
+ }
+ 
+ void *ath12k_telemetry_peer_ctx_alloc(void *peer, void *sawf_stats,
+@@ -346,3 +536,219 @@ void ath12k_sawf_notify_breach(u8 *mac_a
+ {
+ 	ath12k_telemetry_breach_indication(mac_addr, svc_id, param, set_clear, tid);
+ }
++
++int ath12k_telemetry_notify_rm_app_event(u8 init, u8 id, u64 service_data)
++{
++	enum agent_notification_event event = init;
++
++	if (!g_agent_ops)
++		return -EOPNOTSUPP;
++	g_agent_ops->agent_notify_app_event(event, id, service_data);
++
++	return 0;
++}
++
++int ath12k_telemetry_dynamic_app_init_deinit_notify(u8 init, u8 id, u64 service_data)
++{
++	enum agent_notification_event event = init;
++
++	if (!g_agent_ops)
++		return -EOPNOTSUPP;
++
++	g_agent_ops->agent_dynamic_app_init_deinit_notify(event, id, service_data);
++
++	return 0;
++}
++
++void ath12k_telemetry_notify_rm(enum agent_notification_event event,
++				enum rm_services id,
++				uint8_t category)
++{
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "Handshake received from telemetry for Event:%d id:%d category:%d\n",
++		   event, id, category);
++	ath12k_telemetry_rm_callback(event, id, category);
++}
++
++int ath12k_telemetry_ab_agent_create_handler(struct ath12k_base *ab)
++{
++	struct agent_psoc_obj psoc_obj;
++
++	if (!ab || !g_agent_ops ||
++	    !g_agent_ops->agent_psoc_create_handler)
++		return -EINVAL;
++
++	memset(&psoc_obj, 0, sizeof(psoc_obj));
++
++	psoc_obj.psoc_id = ab->chip_id;
++	psoc_obj.psoc_back_pointer = ab;
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "back ptr ab: %p (ab: %p) id: %d (ab chip id: %d)\n",
++		   psoc_obj.psoc_back_pointer, ab,
++		   psoc_obj.psoc_id, ab->chip_id);
++	g_agent_ops->agent_psoc_create_handler(ab, &psoc_obj);
++
++	return 0;
++}
++
++int ath12k_telemetry_ab_agent_delete_handler(struct ath12k_base *ab)
++{
++	struct agent_psoc_obj psoc_obj;
++
++	if (!ab || !g_agent_ops ||
++	    !g_agent_ops->agent_psoc_create_handler)
++		return -EINVAL;
++
++	psoc_obj.psoc_id = ab->chip_id;
++	psoc_obj.psoc_back_pointer = ab;
++
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "back ptr ab: %p (ab: %p) id: %d (ab chip id: %d)\n",
++		   psoc_obj.psoc_back_pointer, ab,
++		   psoc_obj.psoc_id, ab->chip_id);
++
++	g_agent_ops->agent_psoc_destroy_handler(ab, &psoc_obj);
++
++	return 0;
++}
++
++int ath12k_telemetry_pdev_agent_create_handler(struct ath12k_pdev *pdev)
++{
++	struct agent_pdev_obj pdev_obj;
++	struct ath12k_base *ab;
++
++	if (!pdev || !g_agent_ops ||
++	    !g_agent_ops->agent_pdev_create_handler)
++		return -EINVAL;
++
++	memset(&pdev_obj, 0, sizeof(pdev_obj));
++
++	ab = ath12k_pdev_to_ab(pdev);
++	pdev_obj.psoc_back_pointer = ab;
++	pdev_obj.pdev_back_pointer = pdev;
++	pdev_obj.psoc_id = ath12k_get_ab_chip_id(ab);
++	pdev_obj.pdev_id = ath12k_get_pdev_id(pdev);
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "back ptr pdev: %p (pdev: %p) id: %d (pdev id: %d)\n",
++		   pdev_obj.pdev_back_pointer, pdev,
++		   pdev_obj.pdev_id, pdev->pdev_id);
++	g_agent_ops->agent_pdev_create_handler(pdev, &pdev_obj);
++
++	return 0;
++}
++
++int ath12k_telemetry_pdev_agent_delete_handler(struct ath12k_pdev *pdev)
++{
++	struct agent_pdev_obj pdev_obj;
++	struct ath12k_base *ab;
++
++	if (!pdev || !g_agent_ops ||
++	    !g_agent_ops->agent_pdev_create_handler)
++		return -EINVAL;
++
++	memset(&pdev_obj, 0, sizeof(pdev_obj));
++
++	ab = ath12k_pdev_to_ab(pdev);
++	pdev_obj.psoc_back_pointer = ab;
++	pdev_obj.pdev_back_pointer = pdev;
++	pdev_obj.psoc_id = ath12k_get_ab_chip_id(ab);
++	pdev_obj.pdev_id = ath12k_get_pdev_id(pdev);
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "back ptr pdev: %p (pdev: %p) id: %d (pdev id: %d)\n",
++		   pdev_obj.pdev_back_pointer, pdev,
++		   pdev_obj.pdev_id, pdev->pdev_id);
++	g_agent_ops->agent_pdev_destroy_handler(pdev, &pdev_obj);
++
++	return 0;
++}
++
++int ath12k_telemetry_peer_agent_create_handler(struct ath12k *ar,
++					       const int vdev_id,
++					       const u8 *addr)
++{
++	struct agent_peer_obj peer_obj;
++	struct ath12k_base *ab = ar->ab;
++	struct ath12k_pdev *pdev = ar->pdev;
++	struct ath12k_peer *peer = NULL;
++
++	if (!pdev || !g_agent_ops ||
++	    !g_agent_ops->agent_peer_create_handler)
++		return -EINVAL;
++
++	peer = ath12k_peer_find(ab, vdev_id, addr);
++	if (!peer)
++		return -EINVAL;
++
++	/* Create only for STA type */
++	if (ath12k_peer_get_peer_type(peer) != NL80211_IFTYPE_AP)
++		return -ENOTSUPP;
++
++	memset(&peer_obj, 0, sizeof(peer_obj));
++	memset(&peer->stats, 0,
++	       sizeof(struct ath12k_dp_mon_peer_stats));
++	peer_obj.peer_back_pointer = peer;
++	peer_obj.psoc_back_pointer = ab;
++	peer_obj.pdev_back_pointer = pdev;
++
++	peer_obj.psoc_id = ath12k_get_ab_chip_id(ab);
++	peer_obj.pdev_id = ath12k_get_pdev_id(pdev);
++	ether_addr_copy(peer_obj.peer_mac_addr, peer->addr);
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "peer: %p (ab:%p - pdev:%p) soc id: %d (pdev id: %d)\n",
++		   peer_obj.peer_back_pointer, ab, pdev,
++		   peer_obj.psoc_id, peer_obj.pdev_id);
++
++	g_agent_ops->agent_peer_create_handler(peer, &peer_obj);
++
++	return 0;
++}
++
++int ath12k_telemetry_peer_agent_delete_handler(struct ath12k *ar,
++					       const int vdev_id,
++					       const u8 *addr)
++{
++	struct agent_peer_obj peer_obj;
++	struct ath12k_base *ab = ar->ab;
++	struct ath12k_pdev *pdev = ar->pdev;
++	struct ath12k_peer *peer = NULL;
++
++	if (!pdev || !g_agent_ops ||
++	    !g_agent_ops->agent_peer_destroy_handler) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "Invalid peer parameters received \n");
++		return -ENOTSUPP;
++	}
++
++	peer = ath12k_peer_find(ab, vdev_id, addr);
++	if (!peer) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "No peer found while deleting peer back reference in TA \n");
++		return -EINVAL;
++	}
++
++	/* Create only for STA type */
++	if (ath12k_peer_get_peer_type(peer) != NL80211_IFTYPE_AP) {
++		ath12k_dbg(NULL, ATH12K_DBG_RM,
++			   "Peer reference for non sta type is not supported \n");
++		return -ENOTSUPP;
++	}
++
++	memset(&peer_obj, 0, sizeof(peer_obj));
++
++	peer_obj.peer_back_pointer = peer;
++	peer_obj.psoc_back_pointer = ab;
++	peer_obj.pdev_back_pointer = pdev;
++
++	peer_obj.psoc_id = ath12k_get_ab_chip_id(ab);
++	peer_obj.pdev_id = ath12k_get_pdev_id(pdev);
++	ether_addr_copy(&peer_obj.peer_mac_addr, peer->addr);
++	ath12k_dbg(NULL, ATH12K_DBG_RM,
++		   "peer: %p (ab:%p - pdev:%p) soc id: %d (pdev id: %d)\n",
++		   peer_obj.peer_back_pointer, ab, pdev,
++		   peer_obj.psoc_id, peer_obj.pdev_id);
++	g_agent_ops->agent_peer_destroy_handler(peer, &peer_obj);
++
++	return 0;
++}
++
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
+@@ -6,6 +6,10 @@
+ #ifndef ATH12K_TELEMETRY_AGENT_IF_H
+ #define ATH12K_TELEMETRY_AGENT_IF_H
+ 
++struct ath12k_base;
++struct ath12k_pdev;
++struct ath12k_peer;
++
+ u32 ath12k_telemetry_agent_init(void);
+ u32 ath12k_telemetry_agent_deinit(void);
+ 
+@@ -64,4 +68,23 @@ bool ath12k_telemetry_get_mov_avg(void *
+ 				  u32 *nwdelay_avg, u32 *swdelay_avg,
+ 				  u32 *hwdelay_avg);
+ int ath12k_telemetry_reset_peer_stats(u8 *peer_mac);
++int ath12k_telemetry_notify_rm_app_event(u8 init, u8 id, u64 service_data);
++int ath12k_telemetry_dynamic_app_init_deinit_notify(u8 init, u8 id, u64 service_data);
++void ath12k_telemetry_rm_callback(u8 init, u8 id, u8 category);
++
++bool ath12k_telemetry_is_agent_loaded(void);
++
++int ath12k_telemetry_ab_agent_create_handler(struct ath12k_base *ab);
++int ath12k_telemetry_ab_agent_delete_handler(struct ath12k_base *ab);
++
++int ath12k_telemetry_pdev_agent_create_handler(struct ath12k_pdev *pdev);
++int ath12k_telemetry_pdev_agent_delete_handler(struct ath12k_pdev *pdev);
++
++int ath12k_telemetry_peer_agent_create_handler(struct ath12k *ar,
++					       const int vdev_id,
++					       const u8 *addr);
++int ath12k_telemetry_peer_agent_delete_handler(struct ath12k *ar,
++					       const int vdev_id,
++					       const u8 *addr);
++
+ #endif /* ATH12K_TELEMETRY_AGENT_IF_H */

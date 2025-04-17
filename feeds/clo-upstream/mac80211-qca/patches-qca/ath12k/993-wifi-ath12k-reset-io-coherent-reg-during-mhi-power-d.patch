@@ -1,0 +1,200 @@
+From 001e6cce1596c134a483ac4a5e8016d5e5bc6d13 Mon Sep 17 00:00:00 2001
+From: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+Date: Tue, 3 Dec 2024 18:04:25 +0530
+Subject: [PATCH] wifi: ath12k: reset io-coherent reg during mhi power down
+
+io-coherent register need to be reset during mhi power down. Hence
+reset of secure register done before mhi power done on pci
+interface.
+
+MHI SOC reset not required when MHI already in RDDM mode. So
+flag got added in the MHI callback.
+
+Corrected the index parsing logic of 'secure-reg' when reset the
+register.
+
+TODO: Increase the MHI_SOC_RESET to 3sec as temporarily WAR to avoid
+the tmelcom error during the io-coherent reset triggered. This has to be
+fixed once discussed with BSP and FW.
+
+Patch-dependency: 982-QSDK-wifi-ath12k-configure-secure-reg-for-io-coherency.patch
+Patch-work: None
+
+Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 19 +++++--------------
+ drivers/net/wireless/ath/ath12k/core.h |  4 ++++
+ drivers/net/wireless/ath/ath12k/mhi.c  |  7 +++++++
+ drivers/net/wireless/ath/ath12k/pci.c  | 13 +++++++++++--
+ drivers/net/wireless/ath/ath12k/qmi.c  |  4 ++++
+ 5 files changed, 31 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
+index 7f17d76..60ca7f4 100644
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -126,7 +126,7 @@ static struct list_head ath12k_hw_groups = LIST_HEAD_INIT(ath12k_hw_groups);
+ extern struct ath12k_coredump_info ath12k_coredump_ram_info;
+ 
+ #ifdef CONFIG_IO_COHERENCY
+-static int ath12k_core_config_iocoherency(struct ath12k_base *ab, bool enable)
++int ath12k_core_config_iocoherency(struct ath12k_base *ab, bool enable)
+ {
+ 	int ret, num_elem, idx = 0;
+ 	struct tmel_secure_io secure_reg;
+@@ -136,6 +136,9 @@ static int ath12k_core_config_iocoherency(struct ath12k_base *ab, bool enable)
+ 		return 0;
+ 	}
+ 
++	if (ab->in_coldboot_fwreset)
++		return 0;
++
+ 	num_elem = of_property_count_elems_of_size(ab->dev->of_node, "secure-reg",
+ 						   sizeof(u32));
+ 
+@@ -162,6 +165,7 @@ static int ath12k_core_config_iocoherency(struct ath12k_base *ab, bool enable)
+ 			}
+ 		} else {
+ 			secure_reg.reg_val = 0;
++			idx++;
+ 		}
+ 
+ 		ath12k_info(ab, "Configuring secure reg: 0x%x val: 0x%x\n",
+@@ -1158,14 +1162,6 @@ static void ath12k_core_stop(struct ath12k_base *ab)
+ 	lockdep_assert_held(&ab->ag->mutex_lock);
+ 	lockdep_assert_held(&ab->core_lock);
+ 
+-#ifdef CONFIG_IO_COHERENCY
+-	int ret;
+-
+-	ret = ath12k_core_config_iocoherency(ab, false);
+-	if (ret)
+-		ath12k_err(ab, "failed to configure IOCoherency: %d\n", ret);
+-#endif
+-
+ 	ab->ag->num_started--;
+ 
+ 	if (!test_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags))
+@@ -2100,11 +2096,6 @@ err_dp_free:
+ 	mutex_unlock(&ab->core_lock);
+ 	mutex_unlock(&ag->mutex_lock);
+ err_firmware_stop:
+-#ifdef CONFIG_IO_COHERENCY
+-	ret = ath12k_core_config_iocoherency(ab, false);
+-	if (ret)
+-		ath12k_err(ab, "failed to configure IOCoherency: %d\n", ret);
+-#endif
+ 	ath12k_qmi_firmware_stop(ab);
+ 
+ 	return ret;
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 477e7cc..b950872 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -1812,6 +1812,8 @@ struct ath12k_base {
+ 	/* Number of ML peers supported by firmware */
+ 	u32 max_ml_peer_supported;
+ 
++	bool in_coldboot_fwreset;
++
+ 	/* must be last */
+ 	u8 drv_priv[] __aligned(sizeof(void *));
+ };
+@@ -2245,4 +2247,6 @@ int ath12k_core_pdev_enable_telemetry_stats(struct ath12k_base *ab);
+ 
+ const struct ath12k_hw_group *ath12k_core_get_ag(void);
+ 
++int ath12k_core_config_iocoherency(struct ath12k_base *ab, bool enable);
++
+ #endif /* _CORE_H_ */
+diff --git a/drivers/net/wireless/ath/ath12k/mhi.c b/drivers/net/wireless/ath/ath12k/mhi.c
+index 0718fef..6c15b82 100644
+--- a/drivers/net/wireless/ath/ath12k/mhi.c
++++ b/drivers/net/wireless/ath/ath12k/mhi.c
+@@ -572,6 +572,9 @@ static void ath12k_mhi_set_state_bit(struct ath12k_pci *ab_pci,
+ 	case ATH12K_MHI_SOC_RESET:
+ 		set_bit(ATH12K_MHI_SOC_RESET, &ab_pci->mhi_state);
+                 break;
++	case ATH12K_MHI_RDDM:
++		set_bit(ATH12K_MHI_RDDM, &ab_pci->mhi_state);
++		break;
+ 	default:
+ 		ath12k_err(ab, "unhandled mhi state (%d)\n", mhi_state);
+ 	}
+@@ -616,6 +619,8 @@ static int ath12k_mhi_check_state_bit(struct ath12k_pci *ab_pci,
+ 		return 0;
+ 	case ATH12K_MHI_SOC_RESET:
+ 		return 0;
++	case ATH12K_MHI_RDDM:
++		return 0;
+ 	default:
+ 		ath12k_err(ab, "unhandled mhi state: %s(%d)\n",
+ 			   ath12k_mhi_state_to_str(mhi_state), mhi_state);
+@@ -674,6 +679,8 @@ int ath12k_mhi_set_state(struct ath12k_pci *ab_pci,
+ 	case ATH12K_MHI_SOC_RESET:
+ 		mhi_soc_reset(ab_pci->mhi_ctrl);
+ 		break;
++	case ATH12K_MHI_RDDM:
++		break;
+ 	default:
+ 		ath12k_err(ab, "unhandled MHI state (%d)\n", mhi_state);
+ 		ret = -EINVAL;
+diff --git a/drivers/net/wireless/ath/ath12k/pci.c b/drivers/net/wireless/ath/ath12k/pci.c
+index cd88bb8..c272cbc 100644
+--- a/drivers/net/wireless/ath/ath12k/pci.c
++++ b/drivers/net/wireless/ath/ath12k/pci.c
+@@ -815,10 +815,13 @@ int ath12k_pci_power_up(struct ath12k_base *ab)
+ void ath12k_pci_power_down(struct ath12k_base *ab)
+ {
+ 	struct ath12k_pci *ab_pci = ath12k_pci_priv(ab);
+-
++#ifdef CONFIG_IO_COHERENCY
++	int ret;
++#endif
+ 
+ 	ath12k_mhi_set_state(ab_pci, ATH12K_MHI_SOC_RESET);
+-	if (!wait_for_completion_timeout(&ab->rddm_reset_done, msecs_to_jiffies(200))) {
++	if (!wait_for_completion_timeout(&ab->rddm_reset_done,
++				msecs_to_jiffies(3000))) {
+ 		ath12k_warn(ab, "failed to set RDDM mode\n");
+ 		if (test_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags)) {
+ 			ath12k_warn(ab, "failed to clear MHI SOC RESET as mhi already in rddm state due to recovery in progress, clearing it here\n");
+@@ -827,6 +830,12 @@ void ath12k_pci_power_down(struct ath12k_base *ab)
+ 		}
+ 	}
+ 
++#ifdef CONFIG_IO_COHERENCY
++	ret = ath12k_core_config_iocoherency(ab, false);
++	if (ret)
++		ath12k_err(ab, "failed to configure IOCoherency: %d\n", ret);
++#endif
++
+ 	/* restore aspm in case firmware bootup fails */
+ 	ath12k_pci_aspm_restore(ab_pci);
+ 
+diff --git a/drivers/net/wireless/ath/ath12k/qmi.c b/drivers/net/wireless/ath/ath12k/qmi.c
+index 22ed241..68308d3 100644
+--- a/drivers/net/wireless/ath/ath12k/qmi.c
++++ b/drivers/net/wireless/ath/ath12k/qmi.c
+@@ -5503,6 +5503,8 @@ int ath12k_qmi_fwreset_from_cold_boot(struct ath12k_base *ab)
+ 		return 0;
+ 	}
+ 
++	ab->in_coldboot_fwreset = true;
++
+ 	ath12k_dbg(ab, ATH12K_DBG_QMI, "wait for cold boot done\n");
+ 
+ 	timeout = wait_event_timeout(ab->qmi.cold_boot_waitq,
+@@ -5522,7 +5524,9 @@ int ath12k_qmi_fwreset_from_cold_boot(struct ath12k_base *ab)
+ 	ath12k_info(ab, "power up to restart firmware in mission mode\n");
+ 	/* reset host fixed mem off to zero */
+ 	ab->host_ddr_fixed_mem_off = 0;
++
+ 	ath12k_hif_power_up(ab);
++	ab->in_coldboot_fwreset = false;
+ 	ath12k_dbg(ab, ATH12K_DBG_QMI, "exit wait for cold boot done\n");
+ 	return 0;
+ }
+-- 
+2.34.1
+

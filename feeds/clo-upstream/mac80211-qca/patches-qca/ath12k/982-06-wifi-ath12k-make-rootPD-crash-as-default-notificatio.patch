@@ -5,12 +5,18 @@ Subject: [PATCH] wifi: ath12k: make rootPD crash as default notification for
  mode0
 
 According to earlier design userPD crash was the default crash
-notification for both mode 0 and mode 1. But with mode 0 we see
-MLO memory region cached on the FW side is not flushed properly
-during recovery and hence we see a FW crash. To work around this
-ath12k subscribes for rootPD crash notification incase of mode 0
-and also for mode 1 when total number of userPD is 1.
+notification for both mode 0 and mode 1. Make userPD crash
+notification as default for IPQ5424 as this would prevent CPU hung
+when there is invalid access during recovery. 
+Retain RootPD crash notification in case of 1 userPD and userPD
+notification in case of more than 1 userPD present for mode 1.
 
+IPQ5424
+Mode 0  |  Mode 1  |  Type
+----------------------------
+UserPD  |  UserPD  | 1 UserPD always
+
+IPQ5332 / QCN6432
 Mode 0  |  Mode 1  |  Type
 -----------------------------
 RootPD  |  RootPD  | 1 UserPD
@@ -25,17 +31,18 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -2294,6 +2294,9 @@ static void ath12k_debug_multipd_wmi_pde
+@@ -2368,6 +2368,10 @@ static void ath12k_debug_multipd_wmi_pde
  	struct ath12k_pdev *pdev;
  	struct ath12k *ar;
  	bool assert_userpd;
 +	struct ath12k_hw_group *ag = ab->ag;
 +	u8 num_userpd_probed = 0;
++	struct ath12k_ahb *ab_ahb;
 +	struct ath12k_base *partner_ab;
  	int i;
  
  	if (ab->hif.bus == ATH12K_BUS_PCI)
-@@ -2311,7 +2314,17 @@ static void ath12k_debug_multipd_wmi_pde
+@@ -2385,10 +2389,25 @@ static void ath12k_debug_multipd_wmi_pde
  		if (!ab->ag->mlo_capable) {
  			assert_userpd = true;
  		} else {
@@ -48,9 +55,43 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +					num_userpd_probed++;
 +			}
 +
-+			if (value == ATH12K_FW_RECOVERY_DISABLE ||
++			ab_ahb = ath12k_ahb_priv(ab);
++
++			if (ab_ahb->userpd_ssr) {
++				assert_userpd = true;
++			} else if (value == ATH12K_FW_RECOVERY_DISABLE ||
 +			    value == ATH12K_FW_RECOVERY_ENABLE_AUTO ||
-+			    num_userpd_probed == 1)
++			    num_userpd_probed == 1) {
  				assert_userpd = false;
- 			else
+-			else
++			} else {
  				assert_userpd = true;
++			}
+ 		}
+ 
+ 		ath12k_wmi_pdev_set_param(ar, WMI_PDEV_PARAM_MPD_USERPD_SSR,
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -1745,10 +1745,12 @@ static int ath12k_ahb_probe(struct platf
+ 	case ATH12K_HW_QCN6432_HW10:
+ 		ab_ahb->scm_auth_enabled = true;
+ 		ab_ahb->ath12k_mdt_load = qcom_mdt_load;
++		ab_ahb->userpd_ssr = false;
+ 		break;
+ 	case ATH12K_HW_IPQ5424_HW10:
+ 		ab_ahb->scm_auth_enabled = false;
+ 		ab_ahb->ath12k_mdt_load = qcom_mdt_load_no_init;
++		ab_ahb->userpd_ssr = true;
+ 		break;
+ 	default:
+ 		ath12k_err(ab, "Unsupported device\n");
+--- a/drivers/net/wireless/ath/ath12k/ahb.h
++++ b/drivers/net/wireless/ath/ath12k/ahb.h
+@@ -97,6 +97,7 @@ struct ath12k_ahb {
+ 	u32 stop_bit;
+ 	int userpd_irq_num[ATH12K_USERPD_MAX_IRQ];
+ 	bool scm_auth_enabled;
++	bool userpd_ssr;
+ };
+ 
+ static inline struct ath12k_ahb *ath12k_ahb_priv(struct ath12k_base *ab)

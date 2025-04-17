@@ -91,7 +91,7 @@ Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
  		*chandef = eht_chandef;
  	}
  
-+	if (eht_oper && eht_240mhz_capab && chandef->width == NL80211_CHAN_WIDTH_160) {
++	if (eht_oper && eht_240mhz_capab) {
 +		struct cfg80211_chan_def eht_chandef = *chandef;
 +
 +		eht_chandef.width = NL80211_CHAN_WIDTH_320;

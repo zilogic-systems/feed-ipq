@@ -314,7 +314,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		}
 --- a/net/mac80211/util.c
 +++ b/net/mac80211/util.c
-@@ -4434,6 +4434,9 @@ void ieee80211_dfs_cac_cancel(struct iee
+@@ -4445,6 +4445,9 @@ void ieee80211_dfs_cac_cancel(struct iee
  {
  	struct ieee80211_sub_if_data *sdata;
  	struct cfg80211_chan_def chandef;
@@ -324,7 +324,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
  	/* for interface list, to avoid linking iflist_mtx and chanctx_mtx */
  	lockdep_assert_wiphy(local->hw.wiphy);
-@@ -4444,15 +4447,28 @@ void ieee80211_dfs_cac_cancel(struct iee
+@@ -4455,15 +4458,28 @@ void ieee80211_dfs_cac_cancel(struct iee
  		 * by the time it gets it, sdata->wdev.cac_started
  		 * will no longer be true
  		 */
@@ -360,7 +360,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		}
  	}
  	mutex_unlock(&local->mtx);
-@@ -4486,9 +4502,11 @@ void ieee80211_awgn_detected_work(struct
+@@ -4497,9 +4513,11 @@ void ieee80211_awgn_detected_work(struct
  
  static void
  ieee80211_dfs_radar_detected_processing(struct ieee80211_local *local,
@@ -373,7 +373,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	struct ieee80211_chanctx *ctx;
  	int num_chanctx = 0;
  
-@@ -4499,6 +4517,10 @@ ieee80211_dfs_radar_detected_processing(
+@@ -4510,6 +4528,10 @@ ieee80211_dfs_radar_detected_processing(
  
  		num_chanctx++;
  		chandef = ctx->conf.def;
@@ -384,7 +384,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	}
  	mutex_unlock(&local->chanctx_mtx);
  
-@@ -4506,13 +4528,24 @@ ieee80211_dfs_radar_detected_processing(
+@@ -4517,13 +4539,24 @@ ieee80211_dfs_radar_detected_processing(
  	ieee80211_dfs_cac_cancel(local);
  	wiphy_unlock(local->hw.wiphy);
  
@@ -413,11 +413,11 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  }
  
  void ieee80211_dfs_radar_detected_work(struct work_struct *work)
-@@ -4521,14 +4554,18 @@ void ieee80211_dfs_radar_detected_work(s
+@@ -4532,14 +4565,18 @@ void ieee80211_dfs_radar_detected_work(s
  		container_of(work, struct ieee80211_local, radar_detected_work);
  	struct channel_radar_info *radar_info, *temp;
  	u16 radar_bitmap;
-+	struct ieee80211_channel *radar_channel;
++	struct ieee80211_channel *radar_channel = NULL;
  
  	if (list_empty(&local->radar_info_list))
 -		return ieee80211_dfs_radar_detected_processing(local, 0);
@@ -434,7 +434,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
  		list_del(&radar_info->list);
  		kfree(radar_info);
-@@ -4545,17 +4582,23 @@ void ieee80211_radar_detected(struct iee
+@@ -4556,17 +4593,23 @@ void ieee80211_radar_detected(struct iee
  }
  EXPORT_SYMBOL(ieee80211_radar_detected);
  
@@ -510,7 +510,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		WARN_ON(1);
 --- a/net/wireless/nl80211.c
 +++ b/net/wireless/nl80211.c
-@@ -10550,6 +10550,7 @@ static int nl80211_start_radar_detection
+@@ -10552,6 +10552,7 @@ static int nl80211_start_radar_detection
  	struct net_device *dev = info->user_ptr[1];
  	struct wireless_dev *wdev = dev->ieee80211_ptr;
  	struct wiphy *wiphy = wdev->wiphy;
@@ -518,7 +518,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	struct cfg80211_chan_def chandef;
  	enum nl80211_dfs_regions dfs_region;
  	unsigned int cac_time_ms;
-@@ -10558,6 +10559,7 @@ static int nl80211_start_radar_detection
+@@ -10560,6 +10561,7 @@ static int nl80211_start_radar_detection
  	flush_delayed_work(&rdev->dfs_update_channels_wk);
  
  	wiphy_lock(wiphy);
@@ -526,7 +526,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
  	dfs_region = reg_get_dfs_region(wiphy);
  	if (dfs_region == NL80211_DFS_UNSET)
-@@ -10592,7 +10594,7 @@ static int nl80211_start_radar_detection
+@@ -10594,7 +10596,7 @@ static int nl80211_start_radar_detection
  		goto unlock;
  	}
  
@@ -535,7 +535,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		err = -EBUSY;
  		goto unlock;
  	}
-@@ -10613,14 +10615,21 @@ static int nl80211_start_radar_detection
+@@ -10615,14 +10617,21 @@ static int nl80211_start_radar_detection
  	if (WARN_ON(!cac_time_ms))
  		cac_time_ms = IEEE80211_DFS_MIN_CAC_TIME_MS;
  
@@ -562,7 +562,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	wiphy_unlock(wiphy);
  
  	return err;
-@@ -17036,6 +17045,10 @@ static int nl80211_set_hw_timestamp(stru
+@@ -17038,6 +17047,10 @@ static int nl80211_set_hw_timestamp(stru
  	SELECTOR(__sel, NETDEV_UP_LINK,			\
  		 NL80211_FLAG_NEED_NETDEV_UP |		\
  		 NL80211_FLAG_MLO_VALID_LINK_ID)	\
@@ -573,7 +573,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	SELECTOR(__sel, NETDEV_UP_NO_MLO,		\
  		 NL80211_FLAG_NEED_NETDEV_UP |		\
  		 NL80211_FLAG_MLO_UNSUPPORTED)		\
-@@ -17951,7 +17964,7 @@ static const struct genl_small_ops nl802
+@@ -17953,7 +17966,7 @@ static const struct genl_small_ops nl802
  		.flags = GENL_UNS_ADMIN_PERM,
  		.internal_flags = IFLAGS(NL80211_FLAG_NEED_NETDEV_UP |
  					 NL80211_FLAG_NO_WIPHY_MTX |
@@ -658,19 +658,39 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
 --- a/net/wireless/trace.h
 +++ b/net/wireless/trace.h
-@@ -730,8 +730,9 @@ DEFINE_EVENT(wiphy_netdev_evt, rdev_flus
+@@ -729,9 +729,28 @@ DEFINE_EVENT(wiphy_netdev_evt, rdev_flus
+ 	TP_ARGS(wiphy, netdev)
  );
  
- DEFINE_EVENT(wiphy_netdev_evt, rdev_end_cac,
+-DEFINE_EVENT(wiphy_netdev_evt, rdev_end_cac,
 -	     TP_PROTO(struct wiphy *wiphy, struct net_device *netdev),
 -	     TP_ARGS(wiphy, netdev)
++DECLARE_EVENT_CLASS(wiphy_netdev_link_evt,
++        TP_PROTO(struct wiphy *wiphy, struct net_device *netdev,
++                 unsigned int link_id),
++        TP_ARGS(wiphy, netdev, link_id),
++        TP_STRUCT__entry(
++                WIPHY_ENTRY
++                NETDEV_ENTRY
++                __field(unsigned int, link_id)
++        ),
++        TP_fast_assign(
++                WIPHY_ASSIGN;
++                NETDEV_ASSIGN;
++                __entry->link_id = link_id;
++        ),
++        TP_printk(WIPHY_PR_FMT ", " NETDEV_PR_FMT ", link_id: %u",
++                  WIPHY_PR_ARG, NETDEV_PR_ARG, __entry->link_id)
++);
++
++DEFINE_EVENT(wiphy_netdev_link_evt, rdev_end_cac,
 +	     TP_PROTO(struct wiphy *wiphy, struct net_device *netdev,
 +		      unsigned int link_id),
 +	     TP_ARGS(wiphy, netdev, link_id)
  );
  
  DECLARE_EVENT_CLASS(station_add_change,
-@@ -2572,25 +2573,28 @@ TRACE_EVENT(rdev_external_auth,
+@@ -2572,25 +2591,28 @@ TRACE_EVENT(rdev_external_auth,
  
  TRACE_EVENT(rdev_start_radar_detection,
  	TP_PROTO(struct wiphy *wiphy, struct net_device *netdev,
@@ -704,7 +724,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  );
  
  TRACE_EVENT(rdev_set_mcast_rate,
-@@ -3338,18 +3342,21 @@ TRACE_EVENT(cfg80211_radar_event,
+@@ -3338,18 +3360,21 @@ TRACE_EVENT(cfg80211_radar_event,
  );
  
  TRACE_EVENT(cfg80211_cac_event,
@@ -753,7 +773,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  						    u32 center_freq,
 --- a/include/net/mac80211.h
 +++ b/include/net/mac80211.h
-@@ -6660,8 +6660,11 @@ void ieee80211_radar_detected(struct iee
+@@ -6668,8 +6668,11 @@ void ieee80211_radar_detected(struct iee
   * 	with bitmap
   * @hw: pointer as obtained from ieee80211_alloc_hw()
   * @radar_bitmap: denotes the bitmap of radar.
@@ -778,7 +798,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  struct ieee80211_local {
 --- a/net/mac80211/chan.c
 +++ b/net/mac80211/chan.c
-@@ -2045,6 +2045,14 @@ void ieee80211_link_release_channel(stru
+@@ -2046,6 +2046,14 @@ void ieee80211_link_release_channel(stru
  
  	mutex_lock(&sdata->local->chanctx_mtx);
  	if (rcu_access_pointer(link->conf->chanctx_conf)) {

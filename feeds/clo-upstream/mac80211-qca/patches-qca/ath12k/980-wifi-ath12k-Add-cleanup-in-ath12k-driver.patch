@@ -26,7 +26,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -5599,7 +5599,7 @@ static int ath12k_mac_vdev_delete(struct
+@@ -5637,7 +5637,7 @@ static int ath12k_mac_vdev_delete(struct
  	reinit_completion(&ar->vdev_delete_done);
  
  	if (unlikely(test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags)))
@@ -35,7 +35,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  
  	ret = ath12k_wmi_vdev_delete(ar, arvif->vdev_id);
  	if (ret) {
-@@ -5617,6 +5617,7 @@ static int ath12k_mac_vdev_delete(struct
+@@ -5655,6 +5655,7 @@ static int ath12k_mac_vdev_delete(struct
  		goto clean_up;
  	}
  
@@ -43,7 +43,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  	spin_lock_bh(&ar->ab->base_lock);
  	ar->ab->free_vdev_map |= 1LL << arvif->vdev_id;
  	spin_unlock_bh(&ar->ab->base_lock);
-@@ -5632,14 +5633,15 @@ static int ath12k_mac_vdev_delete(struct
+@@ -5670,14 +5671,15 @@ static int ath12k_mac_vdev_delete(struct
  	ath12k_dbg(ar->ab, ATH12K_DBG_SET(MAC, L1), "mac vdev delete id %d type %d subtype %d map %llx\n",
  		   arvif->vdev_id, ahvif->vdev_type, arvif->vdev_subtype,
  		   ar->ab->free_vdev_map);
@@ -61,7 +61,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  	return ret;
  }
  
-@@ -5653,19 +5655,21 @@ static int ath12k_mac_vdev_stop(struct a
+@@ -5691,19 +5693,21 @@ static int ath12k_mac_vdev_stop(struct a
  	if (!arvif->vdev_stop_notify_done) {
  		reinit_completion(&ar->vdev_setup_done);
  
@@ -95,7 +95,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  		}
  	}
  
-@@ -9324,12 +9328,12 @@ static int ath12k_mac_op_change_sta_link
+@@ -9373,12 +9377,12 @@ static int ath12k_mac_op_change_sta_link
  
  		if ((test_bit(ahvif->primary_link_id, &sta->valid_links))) {
  			arvif = ath12k_get_arvif_from_link_id(ahvif, ahvif->primary_link_id);
@@ -110,7 +110,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  					for_each_set_bit(link_id, &sta->valid_links,
  							 IEEE80211_MLD_MAX_NUM_LINKS) {
  						if (link_id != ahsta->primary_link_id) {
-@@ -12644,9 +12648,9 @@ err_vdev_del:
+@@ -12730,9 +12734,9 @@ err_vdev_del:
  	spin_unlock_bh(&ar->ab->base_lock);
  	ab->free_vdev_stats_id_map &= ~(1LL << arvif->vdev_stats_id);
  	spin_lock_bh(&ar->data_lock);
@@ -122,15 +122,15 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  err:
  	arvif->is_created = false;
  	arvif->ar = NULL;
-@@ -12872,7 +12876,6 @@ static int ath12k_mac_op_add_interface(s
+@@ -12958,7 +12962,6 @@ static int ath12k_mac_op_add_interface(s
  	ahvif->ah = ah;
  
  	ahvif->deflink.ahvif = ahvif;
 -	ahvif->deflink.link_id = 0;
+ 	ahvif->deflink.key_cipher = INVALID_CIPHER;
  	ahvif->mcbc_gsn = 0;
  
- #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
-@@ -13150,11 +13153,7 @@ static void ath12k_mac_op_remove_interfa
+@@ -13235,11 +13238,7 @@ static void ath12k_mac_op_remove_interfa
  		if (!ar)
  			continue;
  
@@ -143,24 +143,18 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  
  		if (vif->type == NL80211_IFTYPE_AP_VLAN) {
  			ath12k_ppeds_detach_link_apvlan_vif(arvif, ahvif->vlan_iface, link_id);
-@@ -16094,6 +16093,7 @@ stop_primary:
- 		goto stop_primary;
- 	}
+@@ -15779,6 +15778,10 @@ ath12k_mac_assign_vif_chanctx_handle(str
  
-+out:
- 	mutex_unlock(&ar->conf_mutex);
+ 	lockdep_assert_held(&ah->conf_mutex);
  
- 	ath12k_ppeds_detach_link_vif(arvif, arvif->ppe_vp_profile_idx);
-@@ -16101,8 +16101,6 @@ stop_primary:
- 	ath12k_mac_remove_link_interface(hw, arvif);
- 	ath12k_mac_unassign_link_vif(arvif);
- 	return;
--out:
--	mutex_unlock(&ar->conf_mutex);
- }
- 
- static void
-@@ -18092,9 +18090,8 @@ static void ath12k_mac_op_sta_statistics
++	if (ah->ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0 &&
++	    test_bit(ATH12K_FLAG_CRASH_FLUSH,  &ah->ag->dev_flags))
++		return -ESHUTDOWN;
++
+ 	is_bridge_vdev = (ATH12K_BRIDGE_LINKS_MASK & BIT(link_id)) ?
+ 			 true : false;
+ 	arvif = ath12k_mac_assign_link_vif(ah, vif, link_id, is_bridge_vdev);
+@@ -18193,9 +18196,8 @@ static void ath12k_mac_op_sta_statistics
  	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
  	struct ath12k_link_sta *arsta = &ahsta->deflink;
  	struct ath12k *ar = arsta->arvif->ar;
@@ -172,7 +166,7 @@ Signed-off-by: Balamurugan Ramar <quic_bramar@quicinc.com>
  	u8 i;
  	s8 rssi;
  
-@@ -18105,6 +18102,17 @@ static void ath12k_mac_op_sta_statistics
+@@ -18206,6 +18208,17 @@ static void ath12k_mac_op_sta_statistics
  			   "unable to determine sta statistics \n");
  		return;
  	}

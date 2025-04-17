@@ -17,14 +17,13 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  drivers/net/wireless/ath/ath12k/mhi.c | 8 ++++++++
  1 file changed, 8 insertions(+)
 
-diff --git a/drivers/net/wireless/ath/ath12k/mhi.c b/drivers/net/wireless/ath/ath12k/mhi.c
-index 5d7992a..b5f941e 100644
 --- a/drivers/net/wireless/ath/ath12k/mhi.c
 +++ b/drivers/net/wireless/ath/ath12k/mhi.c
-@@ -366,6 +366,14 @@ static void ath12k_mhi_op_status_cb(struct mhi_controller *mhi_cntrl,
+@@ -366,6 +366,15 @@ static void ath12k_mhi_op_status_cb(stru
  		ath12k_warn(ab, "firmware crashed: MHI_CB_SYS_ERROR\n");
  		break;
  	case MHI_CB_EE_RDDM:
++		ath12k_warn(ab, "Received MHI callback: MHI_CB_EE_RDDM\n");
 +		/* check duplicate RDDM received from MHI */
 +		if (mhi_get_exec_env(ab_pci->mhi_ctrl) == mhi_cntrl->ee) {
 +			ath12k_dbg(ab, ATH12K_DBG_BOOT, "Ignore duplicate status cb %s(%d) received from MHI\n",
@@ -36,6 +35,15 @@ index 5d7992a..b5f941e 100644
  		/* In-case of rddm for mhi soc reset */
  		if(test_bit(ATH12K_MHI_SOC_RESET, &ab_pci->mhi_state)) {
  			ath12k_dbg(ab, ATH12K_DBG_BOOT, "Triggering RDDM from mhi soc reset\n");
--- 
-2.17.1
-
+@@ -376,10 +385,10 @@ static void ath12k_mhi_op_status_cb(stru
+ 
+ 		/* In-case of rddm for fatal error and ab is registered. */
+ 		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->dev_flags))) {
++			ath12k_info(ab, "Schedule SSR Recovery reset work queue\n");
+ 			set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
+ 			set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
+ 			queue_work(ab->workqueue_aux, &ab->reset_work);
+-			ath12k_dbg(ab, ATH12K_DBG_BOOT, "Schedule SSR Recovery reset work queue\n");
+ 			ath12k_hal_dump_srng_stats(ab);
+ 		} else {
+ 			BUG_ON(1);

@@ -25,8 +25,6 @@ Signed-off-by: Hari Chandrakanthan <quic_haric@quicinc.com>
  local-symbols                           |  1 +
  4 files changed, 22 insertions(+), 6 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/Kconfig b/drivers/net/wireless/ath/ath12k/Kconfig
-index 58d8c1a..2b5ccec 100644
 --- a/drivers/net/wireless/ath/ath12k/Kconfig
 +++ b/drivers/net/wireless/ath/ath12k/Kconfig
 @@ -113,3 +113,10 @@ config ATH12K_POWER_BOOST
@@ -40,11 +38,9 @@ index 58d8c1a..2b5ccec 100644
 +	help
 +	  Enable tcl ring lock in dp tx path
 +	  Say Y to enable. If unsure, say N.
-diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.c b/drivers/net/wireless/ath/ath12k/dp_tx.c
-index 2cd4d0c..59f9184 100644
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
-@@ -366,7 +366,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+@@ -369,7 +369,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
  
  	hal_ring_id = ring_id + HAL_SRNG_RING_ID_SW2TCL1;
  	tcl_ring = &ab->hal.srng_list[hal_ring_id];
@@ -53,7 +49,7 @@ index 2cd4d0c..59f9184 100644
  	ath12k_hal_srng_access_src_ring_begin_nolock(tcl_ring);
  
  	hal_tcl_desc = (void *)ath12k_hal_srng_src_get_next_entry_nolock(ab, tcl_ring);
-@@ -375,7 +375,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+@@ -378,7 +378,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
  		 * desc because the desc is directly enqueued onto hw queue.
  		 */
  		ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
@@ -62,7 +58,7 @@ index 2cd4d0c..59f9184 100644
  		ab->soc_stats.tx_err.desc_na[ring_id]++;
  		ret = -ENOMEM;
  		goto fail_remove_tx_buf;
-@@ -386,7 +386,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb)
+@@ -389,7 +389,7 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
  	memcpy(hal_tcl_desc, &tcl_desc, sizeof(tcl_desc));
  	dsb(st);
  	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
@@ -71,7 +67,7 @@ index 2cd4d0c..59f9184 100644
  
  	atomic_inc(&ar->dp.num_tx_pending);
  	atomic_inc(&ab->ag->num_dp_tx_pending);
-@@ -654,7 +654,7 @@ skip_htt_meta:
+@@ -655,7 +655,7 @@ skip_htt_meta:
  
  	hal_ring_id = tx_ring->tcl_data_ring.ring_id;
  	tcl_ring = &ab->hal.srng_list[hal_ring_id];
@@ -80,7 +76,7 @@ index 2cd4d0c..59f9184 100644
  	ath12k_hal_srng_access_src_ring_begin_nolock(tcl_ring);
  	hal_tcl_desc = ath12k_hal_srng_src_get_next_entry(ab, tcl_ring);
  	if (unlikely(!hal_tcl_desc)) {
-@@ -662,7 +662,7 @@ skip_htt_meta:
+@@ -663,7 +663,7 @@ skip_htt_meta:
  		 * desc because the desc is directly enqueued onto hw queue.
  		 */
  		ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
@@ -89,7 +85,7 @@ index 2cd4d0c..59f9184 100644
  		ab->soc_stats.tx_err.desc_na[ti.ring_id]++;
  		ret = -ENOMEM;
  
-@@ -731,7 +731,7 @@ skip_htt_meta:
+@@ -732,7 +732,7 @@ skip_htt_meta:
  
  	dsb(st);
  	ath12k_hal_srng_access_umac_src_ring_end_nolock(tcl_ring);
@@ -98,14 +94,12 @@ index 2cd4d0c..59f9184 100644
  
  	ath12k_dbg_dump(ab, ATH12K_DBG_DP_TX, NULL, "dp tx msdu: ",
  			skb->data, skb->len);
-diff --git a/drivers/net/wireless/ath/ath12k/dp_tx.h b/drivers/net/wireless/ath/ath12k/dp_tx.h
-index 153f3f7..afcd538 100644
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.h
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.h
-@@ -12,6 +12,14 @@
+@@ -9,6 +9,15 @@
  
- #define ATH12K_PPEDS_HOTLIST_LEN_MAX ath12k_ppe_ds_hotlist_len
- extern unsigned int ath12k_ppe_ds_hotlist_len;
+ #include "core.h"
+ #include "hal_tx.h"
 +
 +#ifdef CPTCFG_ATH12K_TCL_RING_LOCK_ENABLE
 +#define ATH12K_DP_TCL_RING_LOCK(tcl_ring_lock) spin_lock_bh(tcl_ring_lock)
@@ -114,14 +108,13 @@ index 153f3f7..afcd538 100644
 +#define ATH12K_DP_TCL_RING_LOCK(tcl_ring_lock)
 +#define ATH12K_DP_TCL_RING_UNLOCK(tcl_ring_lock)
 +#endif
- /* htt_tx_msdu_desc_ext
-  *
-  * valid_pwr
-diff --git a/local-symbols b/local-symbols
-index 5e75c42..0903053 100644
++
+ struct ath12k_ppeds_desc_params {
+ 	unsigned int num_ppeds_desc;
+ 	unsigned int ppeds_hotlist_len;
 --- a/local-symbols
 +++ b/local-symbols
-@@ -193,6 +193,7 @@ ATH12K_MEM_PROFILE_512M=
+@@ -194,6 +194,7 @@ ATH12K_MEM_PROFILE_512M=
  ATH12K_SAWF=
  ATH12K_POWER_OPTIMIZATION=
  ATH12K_POWER_BOOST=
@@ -129,6 +122,3 @@ index 5e75c42..0903053 100644
  WLAN_VENDOR_ATMEL=
  ATMEL=
  PCI_ATMEL=
--- 
-2.34.1
-

@@ -1,0 +1,369 @@
+From 79461b315fb649533a37282a9c60a29d395e6a12 Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Wed, 13th Nov 2024 15:30:14 +0530
+Subject: [PATCH 8/10] wifi: ath12k: add support to handle UMAC migration
+ HTT events
+
+Once WMI Migration command is sent to firmware, it gives host back a HTT
+event indicating peer migration. Host is expected to clear TID queues and
+flush cache on current primary peer and set up these a fresh on the new
+primary. Once done, host is expected to send HTT response event back
+to firmware.
+
+Add changes to
+- handle the HTT peer migration event from firmware
+- process the data and keep it ready.
+- a subsequent change will do the data path changes
+- send back HTT response to firmware.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp.h |  1 +
+ drivers/net/wireless/ath/ath12k/dp_rx.c  | 21 ++++++++++++++++++++++++++
+ 2 files changed, 22 insertions(+), 0 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp.h
++++ b/drivers/net/wireless/ath/ath12k/dp.h
+@@ -595,6 +595,7 @@ enum htt_h2t_msg_type {
+ 	HTT_H2T_MSG_TYPE_STREAMING_STATS_REQ	= 0x20,
+ 	HTT_H2T_MSG_TYPE_UMAC_RESET_PREREQUISITE_SETUP = 0x21,
+ 	HTT_H2T_MSG_TYPE_UMAC_RESET_START_PRE_RESET = 0x22,
++	HTT_H2T_MSG_TYPE_PRIMARY_LINK_PEER_MIGRATE_RESP = 0x24,
+ };
+ 
+ #define HTT_VER_REQ_INFO_MSG_ID		GENMASK(7, 0)
+@@ -1486,6 +1487,7 @@ enum htt_t2h_msg_type {
+ 	HTT_T2H_MSG_TYPE_SAWF_DEF_QUEUES_MAP_REPORT_CONF = 0x2d,
+ 	HTT_T2H_MSG_TYPE_SAWF_MSDUQ_INFO_IND = 0x2e,
+ 	HTT_T2H_MSG_TYPE_STREAMING_STATS_IND = 0x2f,
++	HTT_T2H_MSG_TYPE_PRIMARY_LINK_PEER_MIGRATE_IND = 0x37,
+ };
+ 
+ #define HTT_TARGET_VERSION_MAJOR 3
+@@ -2477,6 +2479,42 @@ struct ath11k_htt_mlo_peer_unmap_msg {
+ 	u32 info0;
+ } __packed;
+ 
++#define ATH12K_HTT_PRI_LINK_MIGR_MSG_TYPE		GENMASK(7, 0)
++#define ATH12K_HTT_PRI_LINK_MIGR_CHIP_ID		GENMASK(11, 8)
++#define ATH12K_HTT_PRI_LINK_MIGR_PDEV_ID		GENMASK(15, 12)
++#define ATH12K_HTT_PRI_LINK_MIGR_VDEV_ID		GENMASK(31, 16)
++#define ATH12K_HTT_PRI_LINK_MIGR_PEER_ID		GENMASK(15, 0)
++#define ATH12K_HTT_PRI_LINK_MIGR_ML_PEER_ID		GENMASK(31, 16)
++#define ATH12K_HTT_PRI_LINK_MIGR_STATUS 		GENMASK(7, 0)
++#define ATH12K_HTT_PRI_LINK_MIGR_SRC_INFO		GENMASK(23, 8)
++#define ATH12K_HTT_PRI_LINK_MIGR_SRC_INFO_VALID 	GENMASK(24, 24)
++
++struct ath12k_htt_pri_link_migr_ind_msg {
++	__le32 info0;
++	__le32 info1;
++} __packed;
++
++struct ath12k_htt_pri_link_migr_h2t_msg {
++	/* Bits 7:0    msg_type
++	 * Bits 11:8   chip_id
++	 * Bits 15:12  pdev_id
++	 * Bits 31:16  vdev_id
++	 */
++	__le32 info0;
++
++	/* Bits 15:0   peer_id
++	 * Bits 31:16  ml_peer_id
++	 */
++	__le32 info1;
++
++	/* Bits 7:0    status
++	 * Bits 23:8   src_info
++	 * Bit  24     src_info_valid
++	 * Bits 31:25  reserved
++	 */
++	__le32 info2;
++} __packed;
++
+ /**
+  * struct ath12k_dp_htt_rxdma_ppe_cfg_param - Rx DMA and RxOLE PPE config
+  * @override: RxDMA override to override the reo_destinatoin_indication
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -2561,6 +2561,102 @@ static void ath12k_htt_sawf_info_ind_han
+ 	spin_unlock_bh(&ab->base_lock);
+ }
+ #endif /* CPTCFG_ATH12K_SAWF */
++
++static void
++ath12k_htt_pri_link_peer_migrate_indication(struct ath12k_base *ab,
++					    struct sk_buff *skb)
++{
++	struct ath12k_htt_pri_link_migr_ind_msg *msg;
++	struct ath12k_hw_group *ag = ab->ag;
++	u16 vdev_id, peer_id, ml_peer_id;
++	struct ath12k_link_vif *arvif;
++	struct ath12k_base *pri_ab;
++	struct ath12k_sta *ahsta;
++	struct ath12k_peer *peer;
++	u8 pdev_id, chip_id;
++	int ret = -EINVAL;
++
++	msg = (struct ath12k_htt_pri_link_migr_ind_msg *)skb->data;
++
++	chip_id = le32_get_bits(msg->info0, ATH12K_HTT_PRI_LINK_MIGR_CHIP_ID);
++	pdev_id = le32_get_bits(msg->info0, ATH12K_HTT_PRI_LINK_MIGR_PDEV_ID);
++	vdev_id = le32_get_bits(msg->info0, ATH12K_HTT_PRI_LINK_MIGR_VDEV_ID);
++	peer_id = le32_get_bits(msg->info1, ATH12K_HTT_PRI_LINK_MIGR_PEER_ID);
++	ml_peer_id = le32_get_bits(msg->info1, ATH12K_HTT_PRI_LINK_MIGR_ML_PEER_ID);
++
++	ath12k_dbg(ab, ATH12K_DBG_DP_HTT,
++		   "htt MLO pri link migr ind for peer_id 0x%x ml_peer_id 0x%x vdev_id 0x%x pdev_id 0x%x chip_id 0x%x\n",
++		   peer_id, ml_peer_id, vdev_id, pdev_id, chip_id);
++
++	ml_peer_id |= ATH12K_ML_PEER_ID_VALID;
++
++	if (chip_id >= ATH12K_MAX_SOCS) {
++		ath12k_warn(ab,
++			    "htt incorrect chip id %d in MLO pri link migration event\n",
++			    chip_id);
++		goto err_pri_link_migr_ind;
++	}
++
++	pri_ab = ag->ab[chip_id];
++	if (!pri_ab) {
++		ath12k_warn(ab,
++			    "htt can not find ab for chip id %d in MLO pri link migration event\n",
++			    chip_id);
++		goto err_pri_link_migr_ind;
++	}
++
++	rcu_read_lock();
++	arvif = ath12k_mac_get_arvif_by_vdev_id(pri_ab, vdev_id);
++	if (!arvif || !arvif->ar) {
++		ath12k_err(pri_ab, "htt error in getting arvif from vdev id:%d\n",
++			   vdev_id);
++		rcu_read_unlock();
++		goto err_pri_link_migr_ind;
++	}
++	rcu_read_unlock();
++
++	spin_lock_bh(&pri_ab->base_lock);
++
++	peer = ath12k_peer_find_list_by_id(pri_ab, peer_id);
++	if (!peer) {
++		ath12k_warn(pri_ab, "htt can not find peer fo peer id %d\n",
++			    peer_id);
++		goto exit_pri_link_migr_ind;
++	}
++
++	if (peer->ml_peer_id != ml_peer_id) {
++		ath12k_warn(pri_ab, "htt ML peer id mis-match. Expected %d got %d\n",
++			    peer->ml_peer_id, ml_peer_id);
++
++		goto exit_pri_link_migr_ind;
++	}
++
++	if (peer->primary_link) {
++		ath12k_warn(pri_ab, "htt ML peer is already primary\n");
++		goto exit_pri_link_migr_ind;
++	}
++
++	ahsta = ath12k_sta_to_ahsta(peer->sta);
++
++	ahsta->migration_data.ab = ab;
++	ahsta->migration_data.vdev_id = vdev_id;
++	ahsta->migration_data.peer_id = peer_id;
++	ahsta->migration_data.ml_peer_id = ml_peer_id;
++	ahsta->migration_data.pdev_id = pdev_id;
++	ahsta->migration_data.chip_id = chip_id;
++
++	reinit_completion(&ahsta->dp_migration_event);
++
++	/* TODO: DP migration changes */
++	if (ret)
++		ath12k_warn(pri_ab, "htt ML peer failed to migrate (%d)\n", ret);
++
++exit_pri_link_migr_ind:
++	spin_unlock_bh(&pri_ab->base_lock);
++err_pri_link_migr_ind:
++	ieee80211_queue_work(arvif->ar->ah->hw, &ahsta->migration_wk);
++}
++
+ void ath12k_dp_htt_htc_t2h_msg_handler(struct ath12k_base *ab,
+ 				       struct sk_buff *skb)
+ {
+@@ -2673,6 +2769,9 @@ void ath12k_dp_htt_htc_t2h_msg_handler(s
+ 		ath12k_htt_sawf_streaming_stats_ind_handler(ab, skb);
+ 		break;
+ #endif /* CPTCFG_ATH12K_SAWF */
++	case HTT_T2H_MSG_TYPE_PRIMARY_LINK_PEER_MIGRATE_IND:
++		ath12k_htt_pri_link_peer_migrate_indication(ab, skb);
++		break;
+ 	default:
+ 		ath12k_dbg(ab, ATH12K_DBG_DP_HTT, "dp_htt event %d not handled\n",
+ 			   type);
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -2515,3 +2515,52 @@ int ath12k_dp_tx_htt_tx_monitor_mode_rin
+ 
+ 	return 0;
+ }
++
++int ath12k_dp_tx_htt_pri_link_migr_msg(struct ath12k_base *ab, u16 vdev_id,
++				       u16 peer_id, u16 ml_peer_id, u8 pdev_id,
++				       u8 chip_id, u16 src_info, bool status)
++{
++	struct ath12k_htt_pri_link_migr_h2t_msg *cmd;
++	bool src_info_valid = false;
++	int len = sizeof(*cmd);
++	struct sk_buff *skb;
++	int ret;
++
++	skb = ath12k_htc_alloc_skb(ab, len);
++	if (!skb)
++		return -ENOMEM;
++
++	skb_put(skb, len);
++
++	cmd = (struct ath12k_htt_pri_link_migr_h2t_msg *)skb->data;
++	memset(cmd, 0, sizeof(*cmd));
++
++	cmd->info0 = le32_encode_bits(HTT_H2T_MSG_TYPE_PRIMARY_LINK_PEER_MIGRATE_RESP,
++				      ATH12K_HTT_PRI_LINK_MIGR_MSG_TYPE) |
++		     le32_encode_bits(chip_id, ATH12K_HTT_PRI_LINK_MIGR_CHIP_ID) |
++		     le32_encode_bits(pdev_id, ATH12K_HTT_PRI_LINK_MIGR_PDEV_ID) |
++		     le32_encode_bits(vdev_id, ATH12K_HTT_PRI_LINK_MIGR_VDEV_ID);
++
++	ml_peer_id &= ~ATH12K_ML_PEER_ID_VALID;
++
++	cmd->info1 = le32_encode_bits(peer_id, ATH12K_HTT_PRI_LINK_MIGR_PEER_ID) |
++		     le32_encode_bits(ml_peer_id, ATH12K_HTT_PRI_LINK_MIGR_ML_PEER_ID);
++
++	if (src_info != 0)
++		src_info_valid = true;
++
++	cmd->info2 = le32_encode_bits(status, ATH12K_HTT_PRI_LINK_MIGR_STATUS) |
++		     le32_encode_bits(src_info, ATH12K_HTT_PRI_LINK_MIGR_SRC_INFO) |
++		     le32_encode_bits(src_info_valid,
++		     		      ATH12K_HTT_PRI_LINK_MIGR_SRC_INFO_VALID);
++
++	ath12k_dbg(ab, ATH12K_DBG_DP_HTT,
++		   "htt MLO send pri link migr resp for peer_id 0x%x ml_peer_id 0x%x vdev_id 0x%x pdev_id 0x%x chip_id 0x%x status %u\n",
++		   peer_id, ml_peer_id, vdev_id, pdev_id, chip_id, status);
++
++	ret = ath12k_htc_send(&ab->htc, ab->dp.eid, skb);
++	if (ret)
++		dev_kfree_skb_any(skb);
++
++	return ret;
++}
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.h
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.h
+@@ -254,4 +254,7 @@ int ath12k_dp_tx_htt_monitor_mode_ring_c
+ int ath12k_dp_tx_htt_h2t_vdev_stats_ol_req(struct ath12k *ar, u64 reset_bitmask);
+ int ath12k_dp_tx_hw_enqueue(struct ath12k_link_vif *arvif, struct sk_buff *skb);
+ void ath12k_dp_tx_encap_nwifi(struct sk_buff *skb);
++int ath12k_dp_tx_htt_pri_link_migr_msg(struct ath12k_base *ab, u16 vdev_id,
++				       u16 peer_id, u16 ml_peer_id, u8 pdev_id,
++				       u8 chip_id, u16 src_info, bool status);
+ #endif
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -839,6 +839,15 @@ struct ath12k_link_sta {
+ 
+ #define ATH12K_REPORT_LOW_ACK_NUM_PKT 0xFFFF
+ 
++struct ath12k_sta_migration_data {
++	struct ath12k_base *ab;
++	u16 vdev_id;
++	u16 peer_id;
++	u16 ml_peer_id;
++	u8 pdev_id;
++	u8 chip_id;
++};
++
+ struct ath12k_sta {
+ 	struct ath12k_vif *ahvif;
+  #ifdef CPTCFG_MAC80211_DEBUGFS
+@@ -871,6 +880,9 @@ struct ath12k_sta {
+ 
+ 	enum ieee80211_sta_state state;
+ 	bool is_migration_in_progress;
++	struct work_struct migration_wk;
++	struct ath12k_sta_migration_data migration_data;
++	struct completion dp_migration_event;
+ };
+ 
+ #define ATH12K_HALF_20MHZ_BW 10
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -9328,6 +9328,53 @@ static int ath12k_mac_reconfig_ahsta_lin
+ 	return 0;
+ }
+ 
++static void ath12k_sta_migration_wk(struct work_struct *wk)
++{
++	struct ath12k_sta *ahsta = container_of(wk, struct ath12k_sta, migration_wk);
++	struct ath12k_sta_migration_data *data = &ahsta->migration_data;
++	struct ath12k_hw_group *ag = ahsta->ahvif->ah->ag;
++	struct ath12k_base *pri_ab;
++	struct ath12k_peer *peer;
++	unsigned long time_left;
++	u16 src_info = 0;
++	bool ret = false;
++
++	if (WARN_ON(!ag))
++		return;
++
++	time_left = wait_for_completion_timeout(&ahsta->dp_migration_event, 2 * HZ);
++	if (!time_left)
++		goto send_dp_tx_event;
++
++	pri_ab = ag->ab[data->chip_id];
++	if (WARN_ON(!pri_ab))
++		return;
++
++	spin_lock_bh(&pri_ab->base_lock);
++
++	peer = ath12k_peer_find_list_by_id(pri_ab, data->peer_id);
++	if (WARN_ON(!peer)) {
++		spin_lock_bh(&pri_ab->base_lock);
++		return;
++	}
++
++	/* if everything went good then this peer should be the primary peer now */
++	if (!peer->primary_link)
++		goto err_unlock;
++
++	/* update the new primary link */
++	ahsta->primary_link_id = peer->link_id;
++	src_info = ahsta->ppe_vp_num;
++	ret = false;
++
++err_unlock:
++	spin_unlock_bh(&pri_ab->base_lock);
++send_dp_tx_event:
++	ath12k_dp_tx_htt_pri_link_migr_msg(data->ab, data->vdev_id, data->peer_id,
++					   data->ml_peer_id, data->pdev_id, data->chip_id,
++					   src_info, ret);
++}
++
+ /*
+  * FIXME: Refactor this function based on clean code principle
+  * mac80211 warns on any error during state transition.
+@@ -9486,6 +9533,10 @@ int ath12k_mac_update_sta_state(struct i
+ 		ahsta->deflink.is_assoc_link = true;
+ 		ahsta->assoc_link_id = link_id;
+ 		ahsta->primary_link_id = link_id;
++
++		init_completion(&ahsta->dp_migration_event);
++		INIT_WORK(&ahsta->migration_wk, ath12k_sta_migration_wk);
++
+ 		ath12k_dbg(NULL, ATH12K_DBG_MAC,
+ 			   "mac ML STA %pM primary link (assoc) set to %u\n",
+ 			   sta->addr, ahsta->primary_link_id);
+@@ -9493,6 +9544,8 @@ int ath12k_mac_update_sta_state(struct i
+ 
+ 	links = ahsta->links_map;
+ 	if (new_state == IEEE80211_STA_NOTEXIST && old_state == IEEE80211_STA_NONE) {
++		cancel_work_sync(&ahsta->migration_wk);
++
+ 		if (ahvif->vdev_type == WMI_VDEV_TYPE_STA) {
+ 			for_each_set_bit(link_id, &links,
+ 					 ATH12K_NUM_MAX_LINKS) {

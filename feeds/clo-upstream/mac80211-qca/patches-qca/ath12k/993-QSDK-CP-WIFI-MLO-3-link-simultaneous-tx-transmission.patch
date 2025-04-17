@@ -1,0 +1,1609 @@
+From 8a72e107b070cee99cf9395162ac229a83d6d44b Mon Sep 17 00:00:00 2001
+From: Adwait Nayak <quic_adwaitn@quicinc.com>
+Date: Sun, 22 Dec 2024 09:49:30 +0530
+Subject: [PATCH] [PATCH] QSDK:CP: WIFI: MLO 3 link simultaneous tx
+ transmission
+
+Currently, 3 link MLO association is supported but active
+transmission with 3 links simultenously is not supported;
+because TQM is designed to handle MPDU Gen and BA processing
+over 2 links only. Hence, native 3 link MLO is not supported.
+
+It is required to support 3 link simultaneous TX for MLO by
+using different TIDs for different flows under same AC and
+have these TIDs mapped across all 3 links (1 TID still
+being mapped to 2 links).
+
+In order to support simultaneous 3 link TX on MLO supported
+chipsets, following is done:
+
+-> In WiFi, there are 2 TIDs per Access Category.
+   Using different TIDs of same AC, flow distribution can be
+   achieved.
+-> Map different TIDs of same AC across all 3 links to have
+   all 3 links used for TX. For example, use TID0 on link 1
+   and link2 while TID3 on link2 and link3.
+   Using this, all 3 links can be used simultaneously
+   for a given client.
+   This requires minimum of 2 flows of same AC to be started.
+
+-> The TID mapping will be done internally within FW for all
+   3 link MLO peers based on link capacity.
+
+-> It can also be done based on the user provided ranked list
+   and FW will do the TID mapping across links
+
+For 3-link Tx link management a new module param (mlo_3_link_tx)
+is introduced.
+This feature is only applicable for QCN9274 chipset.
+
+Signed-off-by: Adwait Nayak <quic_adwaitn@quicinc.com>
+---
+ drivers/net/wireless/ath/ath.mod.c          |   1 -
+ drivers/net/wireless/ath/ath12k/accel_cfg.c |  61 ++--
+ drivers/net/wireless/ath/ath12k/core.c      |   4 +
+ drivers/net/wireless/ath/ath12k/core.h      |   1 +
+ drivers/net/wireless/ath/ath12k/hw.c        |   6 +
+ drivers/net/wireless/ath/ath12k/hw.h        |   1 +
+ drivers/net/wireless/ath/ath12k/mac.h       |   1 +
+ drivers/net/wireless/ath/ath12k/peer.h      |   3 +
+ drivers/net/wireless/ath/ath12k/sawf.c      | 296 ++++++++++++++++++--
+ drivers/net/wireless/ath/ath12k/sawf.h      |  46 ++-
+ drivers/net/wireless/ath/ath12k/wmi.c       | 249 +++++++++++++++-
+ drivers/net/wireless/ath/ath12k/wmi.h       |  54 +++-
+ drivers/net/wireless/ath/ath_sawf.c         |  86 +-----
+ include/ath/ath_dp_accel_cfg.h              |   4 +
+ include/ath/ath_sawf.h                      |  31 +-
+ 15 files changed, 680 insertions(+), 164 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/accel_cfg.c
++++ b/drivers/net/wireless/ath/ath12k/accel_cfg.c
+@@ -112,10 +112,10 @@ u32 ath_encode_mlo_metadata(u8 link_id)
+  * Return: true - success, false - failure
+  */
+ void ath12k_get_ingress_mlo_dev_info(struct net_device *ndev,
++				     struct  wireless_dev *wdev,
+ 				     const u8 *peer_mac,
+-					    u8 *node_id, u8 *link_id)
++				     u8 *node_id, u8 *link_id)
+ {
+-	struct	wireless_dev *wdev;
+ 	struct	ath12k_vif *ahvif;
+ 	struct	ieee80211_sta *sta;
+ 	struct	ath12k_sta *ahsta;
+@@ -124,24 +124,8 @@ void ath12k_get_ingress_mlo_dev_info(str
+ 	struct	ieee80211_hw *hw;
+ 	struct	ieee80211_vif *vif;
+ 
+-	wdev = ndev->ieee80211_ptr;
+-	if (!wdev) {
+-		/*
+-		 * If the netdev is vlan, it may not have ieee80211_ptr.
+-		 * In that case fetch the ieee80211_ptr from its top most parent
+-		 */
+-		if (is_vlan_dev(ndev)) {
+-			struct net_device *parent_ndev =
+-					vlan_dev_real_dev(ndev);
+-
+-			if (parent_ndev)
+-				wdev = parent_ndev->ieee80211_ptr;
+-
+-			if (!wdev)
+-				return;
+-		} else
+-			return;
+-	}
++	if (!wdev)
++		return;
+ 
+ 	hw = wiphy_to_ieee80211_hw(wdev->wiphy);
+ 	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
+@@ -206,6 +190,33 @@ unlock:
+ 	return;
+ }
+ 
++struct wireless_dev *ath12k_get_wdev_from_netdev(struct net_device *dev)
++{
++	struct  wireless_dev *wdev = NULL;
++
++	wdev = dev->ieee80211_ptr;
++	if (!wdev) {
++		/*
++		 * If the netdev is vlan, it may not have ieee80211_ptr.
++		 * In that case fetch the ieee80211_ptr from its top most parent
++		 */
++		if (is_vlan_dev(dev)) {
++			struct net_device *parent_ndev =
++					vlan_dev_real_dev(dev);
++
++			if (parent_ndev)
++				wdev = parent_ndev->ieee80211_ptr;
++
++			if (!wdev)
++				return NULL;
++		} else {
++			return NULL;
++		}
++	}
++
++	return wdev;
++}
++
+ /**
+  * ath12k_get_metadata_info() - Retrieve ds node id
+  * @ndev: pointer to corresponding net_device
+@@ -218,6 +229,7 @@ unlock:
+ u32 ath12k_get_metadata_info(struct ath_dp_metadata_param *md_param)
+ {
+ 	struct net_device *dest_dev = NULL;
++	struct  wireless_dev *wdev = NULL;
+ 	u32 metadata = 0;
+ 	u16 msduq_peer = SAWF_PEER_MSDUQ_INVALID;
+ 	u8 *dest_mac = NULL;
+@@ -239,22 +251,21 @@ u32 ath12k_get_metadata_info(struct ath_
+ 	if (!dest_dev || !dest_mac)
+ 		return metadata;
+ 
+-	ath12k_get_ingress_mlo_dev_info(dest_dev, dest_mac, &node_id, &link_id);
++	wdev = ath12k_get_wdev_from_netdev(dest_dev);
++	ath12k_get_ingress_mlo_dev_info(dest_dev, wdev, dest_mac,
++					&node_id, &link_id);
+ 
+ 	/* Update node_id only in case of DS Mode and return metadata */
+-	if (node_id != ATH12k_DS_NODE_ID_INVALID) {
++	if (node_id != ATH12k_DS_NODE_ID_INVALID)
+ 		md_param->mlo_param.out_ppe_ds_node_id = node_id;
+-		return metadata;
+-	}
+ 
+ 	/* Encode MLO metadata only if link_id updated */
+ 	if (link_id != ATH12k_MLO_LINK_ID_INVALID)
+ 		metadata |= ath_encode_mlo_metadata(link_id);
+ 
+ 	if (md_param->is_sawf_param_valid) {
+-		msduq_peer = ath12k_sawf_get_msduq_peer(dest_dev, dest_mac,
+-							md_param->sawf_param.service_id, md_param->sawf_param.dscp,
+-					md_param->sawf_param.rule_id);
++		msduq_peer = ath12k_sawf_get_msduq_peer(wdev, dest_mac,
++							&md_param->sawf_param);
+ 
+ 		/* Encode SAWF metadata only if msduq_id updated */
+ 		if (msduq_peer != SAWF_PEER_MSDUQ_INVALID)
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -132,6 +132,10 @@ unsigned int ath12k_cfr_enable_bmap = 0;
+ module_param_named(cfr_enable_bmap, ath12k_cfr_enable_bmap, uint, 0644);
+ MODULE_PARM_DESC(cfr_enable_bmap, "cfr_enable_bmap: 0-disable, enable-(0x7 for 3 chipsets)");
+ 
++bool ath12k_mlo_3_link_tx;
++module_param_named(mlo_3_link_tx, ath12k_mlo_3_link_tx, bool, 0644);
++MODULE_PARM_DESC(mlo_3_link_tx, "3 link MLO active TX support (0 - disable, 1 - enable)");
++
+ #ifdef CONFIG_IO_COHERENCY
+ bool ath12k_io_coherency_enabled = true;
+ module_param_named(io_coherency, ath12k_io_coherency_enabled, bool, 0644);
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -64,6 +64,7 @@ extern bool ath12k_erp_support;
+ extern unsigned int ath12k_ppe_ds_enabled;
+ extern bool ath12k_rx_nwifi_err_dump;
+ extern bool ath12k_fse_3_tuple_enabled;
++extern bool ath12k_mlo_3_link_tx;
+ #ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ extern unsigned int ath12k_max_clients;
+ #endif
+@@ -119,6 +120,8 @@ extern bool ath12k_debug_critical;
+ #define ATH12K_MLO_METADATA_VALID 1
+ #define ATH12K_MLO_METADATA_VALID_MASK BIT(23)
+ #define ATH12K_MLO_METADATA_TAG 0xAA
++#define ATH12K_MLO_METADATA_MLO_ASSIST_TAG 0xAA800000
++#define ATH12K_MLO_METADATA_MLO_ASSIST_TAG_MASK 0xFF800000
+ #define ATH12K_MLO_METADATA_TAG_MASK GENMASK(31, 24)
+ #define ATH12K_MLO_METADATA_LINKID_MASK GENMASK(20, 16)
+ #define ATH12k_MLO_LINK_ID_INVALID 0xFF
+--- a/drivers/net/wireless/ath/ath12k/hw.c
++++ b/drivers/net/wireless/ath/ath12k/hw.c
+@@ -1928,6 +1928,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.cfr_stream_buf_size = sizeof(struct ath12k_csi_cfr_header) +
+ 					(CFR_HDR_MAX_LEN_WORDS_QCN9274 *4) +
+ 					CFR_DATA_MAX_LEN_QCN9274,
++		.mlo_3_link_tx_support = false,
+ 	},
+ 	{
+ 		.name = "wcn7850 hw2.0",
+@@ -2015,6 +2016,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.cfr_stream_buf_size = sizeof(struct ath12k_csi_cfr_header) +
+ 					(CFR_HDR_MAX_LEN_WORDS_WCN7850 *4) +
+ 					CFR_DATA_MAX_LEN_WCN7850,
++		.mlo_3_link_tx_support = false,
+ 	},
+ 	{
+ 		.name = "qcn9274 hw2.0",
+@@ -2116,6 +2118,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.cfr_stream_buf_size = sizeof(struct ath12k_csi_cfr_header) +
+ 					(CFR_HDR_MAX_LEN_WORDS_QCN9274 *4) +
+ 					CFR_DATA_MAX_LEN_QCN9274,
++		.mlo_3_link_tx_support = true,
+ 	},
+ 	{
+ 		.name = "ipq5332 hw1.0",
+@@ -2221,6 +2224,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.cfr_stream_buf_size = sizeof(struct ath12k_csi_cfr_header) +
+ 					(CFR_HDR_MAX_LEN_WORDS_IPQ5332 *4) +
+ 					CFR_DATA_MAX_LEN_IPQ5332,
++		.mlo_3_link_tx_support = false,
+ 	},
+ 	{
+ 		.name = "qcn6432 hw1.0",
+@@ -2319,6 +2323,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.cfr_stream_buf_size = sizeof(struct ath12k_csi_cfr_header) +
+ 					(CFR_HDR_MAX_LEN_WORDS_QCN6432 *4) +
+ 					CFR_DATA_MAX_LEN_QCN6432,
++		.mlo_3_link_tx_support = false,
+ 	},
+ 	{
+ 		.name = "ipq5424 hw1.0",
+@@ -2425,6 +2430,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.cfr_stream_buf_size = sizeof(struct ath12k_csi_cfr_header) +
+ 					(CFR_HDR_MAX_LEN_WORDS_IPQ5424 * 4) +
+ 					CFR_DATA_MAX_LEN_IPQ5424,
++		.mlo_3_link_tx_support = false,
+ 	},
+ };
+ 
+--- a/drivers/net/wireless/ath/ath12k/hw.h
++++ b/drivers/net/wireless/ath/ath12k/hw.h
+@@ -297,6 +297,7 @@ struct ath12k_hw_params {
+ 	u32 cfr_dma_hdr_size;
+ 	u32 cfr_num_stream_bufs;
+ 	u32 cfr_stream_buf_size;
++	bool mlo_3_link_tx_support;
+ };
+ 
+ struct ath12k_hw_ops {
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -75,6 +75,7 @@ struct ath12k_latency_params {
+ 					GENMASK(IEEE80211_MLD_MAX_NUM_LINKS - \
+ 					1, 0)
+ #define ATH12K_MAX_STA_LINKS		3
++#define ATH12K_3LINK_MLO_MAX_STA_LINKS  3
+ 
+ /* number of failed packets (20 packets with 16 sw reties each) */
+ #define ATH12K_KICKOUT_THRESHOLD		(20 * 16)
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -22,6 +22,7 @@ struct ppdu_user_delayba {
+ 
+ #define ATH12K_PEER_STATS_DSBL_SFE	0x1
+ #define ATH12K_PEER_STATS_DSBL_PPE	0x2
++#define ATH12K_DATA_TID_MAX 8
+ 
+ struct peer_airtime_consumption {
+ 	u32 consumption;
+@@ -119,6 +120,8 @@ struct ath12k_peer {
+ 	int ppe_vp_num;
+ #endif
+ 	bool assoc_success; /* information on peer assoc status from firmware */
++	u32 flow_cnt[ATH12K_DATA_TID_MAX];
++	u8 tid_weight[ATH12K_DATA_TID_MAX];
+ 	struct ath12k_dp_mon_peer_stats stats;
+ 	u8 vdev_type_4addr;
+ 	bool is_reset_mcbc;
+--- a/drivers/net/wireless/ath/ath12k/sawf.c
++++ b/drivers/net/wireless/ath/ath12k/sawf.c
+@@ -23,7 +23,6 @@ module_param_named(sawf, ath12k_sawf_ena
+ MODULE_PARM_DESC(sawf, "Enable SAWF feature (Default: true)");
+ 
+ static struct ath_sawf_callbacks ath_wifi_sawf_callback = {
+-	.sawf_dl_callback = ath12k_sawf_get_msduq,
+ 	.sawf_ul_callback = ath12k_sawf_config_ul,
+ };
+ 
+@@ -541,9 +540,9 @@ int ath12k_sawf_disable_config(u8 svc_id
+ 	return ret;
+ }
+ 
+-struct ath12k_base *ath12k_sawf_get_ab_from_vif(struct ieee80211_vif *vif,
+-						u8 *peer_mac,
+-						u16 *peer_id)
++struct ath12k_base *ath12k_sawf_get_ab_from_vif(struct wireless_dev *wdev,
++						struct ieee80211_vif *vif,
++						u8 *peer_mac, u16 *peer_id)
+ {
+ 	struct ath12k_base *ab = NULL;
+ 	struct ath12k *ar = NULL;
+@@ -555,6 +554,9 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 	u8 mac_addr[ETH_ALEN] = { 0 };
+ 	u8 link_id;
+ 
++	if (!wdev)
++		return NULL;
++
+ 	if (!vif)
+ 		return NULL;
+ 
+@@ -568,12 +570,16 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 	sta = ieee80211_find_sta_by_ifaddr(ahvif->ah->hw, peer_mac, NULL);
+ 	if (!sta) {
+ 		ath12k_dbg(ab, ATH12K_DBG_SAWF, "Peer:%pM not present \n", peer_mac);
+-		return NULL;
++		sta = wdev_to_ieee80211_vlan_sta(wdev);
++		if (!sta)
++			return NULL;
+ 	}
++
+ 	ahsta = (struct ath12k_sta *)sta->drv_priv;
+ 	if (!ahsta)
+ 		return NULL;
+ 
++	rcu_read_lock();
+ 	if (sta->mlo) {
+ 		link_id = ahsta->primary_link_id;
+ 		memcpy(mac_addr, ahsta->link[link_id]->addr, ETH_ALEN);
+@@ -585,9 +591,8 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 		memcpy(mac_addr, peer_mac, ETH_ALEN);
+ 	}
+ 
+-	rcu_read_lock();
+ 	arvif = ath12k_rcu_get_arvif_from_link_id(ahvif, link_id);
+-	if (WARN_ON(!arvif)) {
++	if (!arvif) {
+ 		rcu_read_unlock();
+ 		return NULL;
+ 	}
+@@ -600,6 +605,7 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 	rcu_read_unlock();
+ 
+ 	ab = ar->ab;
++
+ 	spin_lock_bh(&ab->base_lock);
+ 	peer = ath12k_peer_find_by_addr(ab, mac_addr);
+ 	if (!peer) {
+@@ -608,6 +614,7 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 		return NULL;
+ 	}
+ 	*peer_id = peer->peer_id;
++
+ 	spin_unlock_bh(&ab->base_lock);
+ 	return ab;
+ }
+@@ -629,7 +636,7 @@ struct ath12k_base *ath12k_sawf_get_ab_f
+ 	if (!vif)
+ 		return NULL;
+ 
+-	return ath12k_sawf_get_ab_from_vif(vif, peer_mac, peer_id);
++	return ath12k_sawf_get_ab_from_vif(wdev, vif, peer_mac, peer_id);
+ }
+ 
+ u8 ath12k_sawf_get_msduq_of_tid(struct ath12k_base *ab,
+@@ -703,9 +710,127 @@ u8 ath12k_sawf_get_msduq_of_tid(struct a
+ 	return msduq_id;
+ }
+ 
+-u16 ath12k_sawf_alloc_msduq(struct ath12k_base *ab,
+-			    u8 svc_id,
+-			    u16 peer_id)
++static inline u8
++ath12k_sawf_get_3_link_best_suitable_tid(struct ath12k_peer *peer,
++					 u8 tid1, u8 tid2)
++{
++	u64 tid1_weight = 0;
++	u64 tid2_weight = 0;
++
++	/* if no weights are feeded fall back to equal distribution */
++	if (!peer->tid_weight[tid1] || !peer->tid_weight[tid2]) {
++		tid1_weight = peer->flow_cnt[tid1];
++		tid2_weight = peer->flow_cnt[tid2];
++		goto tid_selection;
++	}
++
++	/* for the first two flows fall back to equal distribution */
++	if (!peer->flow_cnt[tid1] || !peer->flow_cnt[tid2]) {
++		tid1_weight = peer->flow_cnt[tid1];
++		tid2_weight = peer->flow_cnt[tid2];
++		goto tid_selection;
++	}
++
++	/* weight based distribution */
++	tid1_weight = peer->flow_cnt[tid1] * peer->tid_weight[tid2];
++	tid2_weight = peer->flow_cnt[tid2] * peer->tid_weight[tid1];
++
++tid_selection:
++	if (tid1_weight > tid2_weight)
++		return tid2;
++	else
++		return tid1;
++}
++
++static u8 ath12k_sawf_get_3_link_queue_id(struct ath12k_peer *peer, u8 tid)
++{
++	u8 queue_id = SAWF_MSDUQ_ID_INVALID;
++	u8 ac = ath12k_tid_to_ac(tid);
++
++	switch (ac) {
++	case WME_AC_BE:
++		queue_id = ath12k_sawf_get_3_link_best_suitable_tid(peer, 0, 3);
++		break;
++	case WME_AC_BK:
++		queue_id = ath12k_sawf_get_3_link_best_suitable_tid(peer, 1, 2);
++		break;
++	case WME_AC_VI:
++		queue_id = ath12k_sawf_get_3_link_best_suitable_tid(peer, 4, 5);
++		break;
++	case WME_AC_VO:
++		queue_id = ath12k_sawf_get_3_link_best_suitable_tid(peer, 6, 7);
++		break;
++	default:
++		break;
++	}
++
++	rcu_read_lock();
++	if (queue_id != SAWF_MSDUQ_ID_INVALID) {
++		if (queue_id < ATH12K_DATA_TID_MAX)
++			peer->flow_cnt[queue_id]++;
++		else
++			queue_id = SAWF_MSDUQ_ID_INVALID;
++	}
++	rcu_read_unlock();
++
++	return queue_id;
++}
++
++u32 dscp_tid_map[WMI_HOST_DSCP_MAP_MAX] = {
++	0, 0, 0, 0, 0, 0, 0, 0,
++	1, 1, 0, 1, 0, 1, 0, 1,
++	0, 2, 3, 2, 3, 2, 3, 2,
++	4, 3, 4, 3, 4, 3, 4, 3,
++	4, 4, 4, 4, 4, 4, 4, 4,
++	5, 5, 5, 5, 6, 5, 6, 5,
++	7, 6, 6, 6, 6, 6, 6, 6,
++	7, 7, 7, 7, 7, 7, 7, 7,
++};
++
++u8 ath12k_sawf_get_peer_msduq(struct ath12k_base *ab,
++			       u16 peer_id,
++			       u32 dscp_pcp, bool pcp)
++{
++	struct ath12k_peer *peer;
++	u8 queue_id = SAWF_MSDUQ_ID_INVALID;
++
++	if (!ath12k_mlo_3_link_tx)
++		return SAWF_MSDUQ_ID_INVALID;
++
++	rcu_read_lock();
++	spin_lock_bh(&ab->base_lock);
++	peer = ath12k_peer_find_list_by_id(ab, peer_id);
++	if (!peer) {
++		ath12k_err(ab, "Unable to find peer for peer_id : %d\n",
++			   peer_id);
++		goto unlock_ab_base;
++	}
++
++	if (!peer->sta || !peer->sta->valid_links)
++		goto unlock_ab_base;
++
++	if (hweight16(peer->sta->valid_links) !=
++				ATH12K_3LINK_MLO_MAX_STA_LINKS)
++		goto unlock_ab_base;
++
++	if (peer->primary_link &&
++	    ab->hw_params->mlo_3_link_tx_support) {
++		if (pcp)
++			queue_id = dscp_pcp;
++		else
++			queue_id = dscp_tid_map[dscp_pcp];
++
++		queue_id = ath12k_sawf_get_3_link_queue_id(peer, queue_id);
++	}
++
++unlock_ab_base:
++	spin_unlock_bh(&ab->base_lock);
++	rcu_read_unlock();
++	return queue_id;
++}
++
++u16 ath12k_sawf_alloc_msduq(struct ath12k_base *ab, u8 svc_id,
++			    u16 peer_id, u32 dscp_pcp, bool pcp)
+ {
+ 	struct ath12k_sawf_ctx *sawf_ctx;
+ 	struct ath12k_peer *peer;
+@@ -717,9 +842,18 @@ u16 ath12k_sawf_alloc_msduq(struct ath12
+ 		return SAWF_PEER_MSDUQ_INVALID;
+ 
+ 	spin_lock_bh(&sawf_ctx->sawf_svc_lock);
+-	if (!ath12k_svc_id_configured(svc_id)) {
++	if (!ath12k_svc_id_valid(svc_id) ||
++	    !ath12k_svc_id_configured(svc_id)) {
++		/* For 3-Link MLO Clients TX link management get msduq */
+ 		spin_unlock_bh(&sawf_ctx->sawf_svc_lock);
+-		return SAWF_PEER_MSDUQ_INVALID;
++		msduq_id = ath12k_sawf_get_peer_msduq(ab, peer_id,
++						      dscp_pcp, pcp);
++
++		if (msduq_id != SAWF_MSDUQ_ID_INVALID)
++			ret_peer_msduq = FIELD_PREP(SAWF_PEER_ID, peer_id) |
++				FIELD_PREP(SAWF_MSDUQ_ID, msduq_id);
++
++		return ret_peer_msduq;
+ 	}
+ 
+ 	svc_tid = ath12k_get_tid(svc_id);
+@@ -776,11 +910,13 @@ u16 ath12k_sawf_alloc_msduq(struct ath12
+ 	return ret_peer_msduq;
+ }
+ 
+-u16 ath12k_sawf_get_msduq(struct ieee80211_vif *vif, u8 *peer_mac,
+-			  u32 service_id, u32 dscp, u32 rule_id)
++u16 ath12k_sawf_get_msduq(struct wireless_dev *wdev,
++			  u8 *peer_mac, u32 service_id,
++			  u32 dscp_pcp, u32 rule_id, bool pcp)
+ {
+ 	struct ath12k_base *ab;
+ 	struct ath12k_sawf_ctx *sawf_ctx;
++	struct ieee80211_vif	*vif;
+ 	u16 peer_id;
+ 	u16 peer_msduq;
+ 
+@@ -788,11 +924,22 @@ u16 ath12k_sawf_get_msduq(struct ieee802
+ 	if (!sawf_ctx)
+ 		return SAWF_PEER_MSDUQ_INVALID;
+ 
+-	ab = ath12k_sawf_get_ab_from_vif(vif, peer_mac, &peer_id);
++	if (ath12k_mlo_3_link_tx) {
++		vif = wdev_to_ieee80211_vif_vlan(wdev, false);
++		if (!vif)
++			return SAWF_PEER_MSDUQ_INVALID;
++	} else {
++		vif = wdev_to_ieee80211_vif(wdev);
++		if (!vif)
++			return SAWF_PEER_MSDUQ_INVALID;
++	}
++
++	ab = ath12k_sawf_get_ab_from_vif(wdev, vif, peer_mac, &peer_id);
+ 	if (!ab)
+ 		return SAWF_PEER_MSDUQ_INVALID;
+ 
+-	peer_msduq = ath12k_sawf_alloc_msduq(ab, service_id, peer_id);
++	peer_msduq = ath12k_sawf_alloc_msduq(ab, service_id,
++					     peer_id, dscp_pcp, pcp);
+ 	ath12k_dbg(ab, ATH12K_DBG_SAWF,
+ 		   "SAWF get msduq:peer %pM SvcId %u:msduq id 0x%x allocated\n",
+ 		   peer_mac, service_id, peer_msduq);
+@@ -800,14 +947,14 @@ u16 ath12k_sawf_get_msduq(struct ieee802
+ 	return peer_msduq;
+ }
+ 
+-u16 ath12k_sawf_get_msduq_peer(struct net_device *dev, u8 *peer_mac,
+-			       u32 service_id, u32 dscp, u32 rule_id)
++u16 ath12k_sawf_get_msduq_peer(struct wireless_dev *wdev,
++			       u8 *peer_mac,
++			      struct sawf_param *dl_params)
+ {
+-	struct wireless_dev	*wdev;
+-	struct ieee80211_vif	*vif;
+ 	struct ieee80211_hw	*hw;
++	u32 dscp_pcp;
++	bool pcp = false;
+ 
+-	wdev = dev->ieee80211_ptr;
+ 	if (!wdev)
+ 		return SAWF_PEER_MSDUQ_INVALID;
+ 
+@@ -815,11 +962,16 @@ u16 ath12k_sawf_get_msduq_peer(struct ne
+ 	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
+ 		return SAWF_PEER_MSDUQ_INVALID;
+ 
+-	vif = wdev_to_ieee80211_vif(wdev);
+-	if (!vif)
+-		return SAWF_PEER_MSDUQ_INVALID;
++	if (dl_params->valid_flag & ATH12K_SAWF_PCP_VALID) {
++		dscp_pcp = dl_params->pcp;
++		pcp = true;
++	} else {
++		dscp_pcp = dl_params->dscp;
++	}
+ 
+-	return ath12k_sawf_get_msduq(vif, peer_mac, service_id, dscp, rule_id);
++	return ath12k_sawf_get_msduq(wdev, peer_mac,
++				     dl_params->service_id, dscp_pcp,
++				     dl_params->rule_id, pcp);
+ }
+ 
+ u32 ath_encode_sawf_metadata(u16 msduq_id)
+@@ -1136,6 +1288,47 @@ static void ath12k_sawf_core_send_ul_con
+ 	ret = ath12k_core_sawf_ul_config(vif, &latency_info);
+ }
+ 
++static void
++ath12k_sawf_3_link_peer_dl_flow_count(struct wireless_dev *wdev,
++				      struct ieee80211_vif *vif,
++				      u8 *mac_addr, u32 mark_metadata)
++{
++	struct ath12k_base *ab;
++	struct ath12k_peer *peer;
++	u16 peer_id, queue_id;
++
++	if (!ath12k_mlo_3_link_tx)
++		return;
++
++	if (!mac_addr)
++		return;
++
++	ab = ath12k_sawf_get_ab_from_vif(wdev, vif, mac_addr, &peer_id);
++	if (!ab || peer_id == HAL_INVALID_PEERID)
++		return;
++
++	spin_lock_bh(&ab->base_lock);
++	peer = ath12k_peer_find_list_by_id(ab, peer_id);
++	if (!peer || !peer->sta)
++		goto unlock_ab_base;
++
++	if (!peer->sta->valid_links ||
++	    (hweight16(peer->sta->valid_links) !=
++			ATH12K_3LINK_MLO_MAX_STA_LINKS))
++		goto unlock_ab_base;
++
++	queue_id = mark_metadata & SAWF_PEER_MSDUQ_ID;
++
++	if (queue_id < ATH12K_DATA_TID_MAX) {
++		if (peer->flow_cnt[queue_id])
++			peer->flow_cnt[queue_id]--;
++	}
++
++unlock_ab_base:
++	spin_unlock_bh(&ab->base_lock);
++	return;
++}
++
+ void ath12k_send_ul_configs(struct work_struct *work)
+ {
+ 	struct ath12k_sawf_ctx *sawf;
+@@ -1161,19 +1354,39 @@ void ath12k_send_ul_configs(struct work_
+ 							ul_params->rv_service_id,
+ 							ul_params->dst_mac,
+ 							ul_params->add_or_sub);
++
++		if (ul_params->fw_mark_metadata != ATH12K_SAWF_META_DATA_INVALID &&
++		    !ath12k_svc_id_valid(ul_params->fw_service_id) &&
++		    (ul_params->add_or_sub == FLOW_STOP))
++			ath12k_sawf_3_link_peer_dl_flow_count(ul_params->dest_wdev,
++							      ul_params->dest_vif,
++							      ul_params->dst_mac,
++							      ul_params->fw_mark_metadata);
++
++		if (ul_params->rv_mark_metadata != ATH12K_SAWF_META_DATA_INVALID &&
++		    !ath12k_svc_id_valid(ul_params->rv_service_id) &&
++		    (ul_params->add_or_sub == FLOW_STOP))
++			ath12k_sawf_3_link_peer_dl_flow_count(ul_params->src_wdev,
++							      ul_params->src_vif,
++							      ul_params->src_mac,
++							      ul_params->rv_mark_metadata);
++
+ 		kfree(ul_params);
+ 		spin_lock_bh(&sawf->sawf_svc_lock);
+ 	}
+ 	spin_unlock_bh(&sawf->sawf_svc_lock);
+ }
+ 
+-void ath12k_sawf_config_ul(struct ieee80211_vif *dest_vif, u8 *dst_mac,
+-			   struct ieee80211_vif *src_vif, u8 *src_mac,
+-			   u8 fw_service_id, u8 rv_service_id,
+-			   u8 add_or_sub)
++void ath12k_sawf_config_ul(struct net_device *dest_ndev, u8 *dst_mac,
++			   struct net_device *src_ndev, u8 *src_mac,
++			   u8 fw_service_id, u8 rv_service_id, u8 add_or_sub,
++			   u32 fw_mark_metadata, u32 rv_mark_metadata)
+ {
+ 	struct ath12k_sawf_ctx *sawf;
+ 	struct ath12k_ul_params *ul_params;
++	struct ieee80211_hw     *hw;
++	struct ieee80211_vif *dest_vif, *src_vif;
++	struct wireless_dev  *dest_wdev, *src_wdev;
+ 
+ 	sawf = ath12k_get_sawf_context();
+ 	if (!sawf) {
+@@ -1181,11 +1394,39 @@ void ath12k_sawf_config_ul(struct ieee80
+ 		return;
+ 	}
+ 
++	src_wdev = ath12k_get_wdev_from_netdev(src_ndev);
++	dest_wdev = ath12k_get_wdev_from_netdev(dest_ndev);
++
++	if (!src_wdev || !dest_wdev)
++		return;
++
++	hw = wiphy_to_ieee80211_hw(src_wdev->wiphy);
++	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
++		return;
++
++	hw = wiphy_to_ieee80211_hw(dest_wdev->wiphy);
++	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
++		return;
++
++	if (ath12k_mlo_3_link_tx) {
++		dest_vif = wdev_to_ieee80211_vif_vlan(dest_wdev, false);
++		src_vif = wdev_to_ieee80211_vif_vlan(src_wdev, false);
++	} else {
++		dest_vif = wdev_to_ieee80211_vif(dest_wdev);
++		src_vif = wdev_to_ieee80211_vif(src_wdev);
++	}
++
++	if (!dest_vif || !src_vif)
++		return;
++
+ 	ul_params = kzalloc(sizeof(*ul_params), GFP_NOWAIT);
+ 	if (!ul_params) {
+ 		ath12k_err(NULL,"Failed to allocate memory during SAWF UL configuration\n");
+ 		return;
+ 	}
++
++	ul_params->dest_wdev = dest_wdev;
++	ul_params->src_wdev = src_wdev;
+ 	ul_params->dest_vif = dest_vif;
+ 	ul_params->src_vif = src_vif;
+ 	ether_addr_copy(ul_params->dst_mac, dst_mac);
+@@ -1193,6 +1434,8 @@ void ath12k_sawf_config_ul(struct ieee80
+ 	ul_params->fw_service_id = fw_service_id;
+ 	ul_params->rv_service_id = rv_service_id;
+ 	ul_params->add_or_sub = add_or_sub;
++	ul_params->fw_mark_metadata = fw_mark_metadata;
++	ul_params->rv_mark_metadata = rv_mark_metadata;
+ 	spin_lock_bh(&sawf->sawf_svc_lock);
+ 	list_add_tail(&ul_params->list, &sawf->list);
+ 	spin_unlock_bh(&sawf->sawf_svc_lock);
+--- a/drivers/net/wireless/ath/ath12k/sawf.h
++++ b/drivers/net/wireless/ath/ath12k/sawf.h
+@@ -13,20 +13,32 @@ struct telemetry_sawfdelay_stats;
+ 
+ #ifdef CPTCFG_ATH12K_SAWF
+ #include <ath/ath_sawf.h>
++#include <ath/ath_dp_accel_cfg.h>
+ 
+ #define ATH12K_MAC_ADDR_SIZE	6
+ #define DP_SAWF_INVALID_PARAM	-1
+ 
++#define ATH12K_SAWF_SVC_CLASS_INVALID 0
+ #define ATH12K_SAWF_SVC_CLASS_MIN 1
+ #define ATH12K_SAWF_SVC_CLASS_MAX 128
+ #define ATH12K_SAWF_MAX_TID_SUPPORT 8
+ #define MAX_Q_PER_TID 8
++#define ATH12K_MAX_SVC_CLASS_NAME 64
++#define DISABLED_MODE_MAX_LEN 128
++#define ATH12K_SAWF_SCS_TID_MAX 8
++
++/*
++ * Service class defined for Pre-11BE SCS (Only TID based service class
++ * without other QoS attributes)
++ */
++#define ATH12K_SAWF_SCS_SVC_CLASS_MIN (ATH12K_SAWF_SVC_CLASS_MAX + 1)
++#define ATH12K_SAWF_SCS_SVC_CLASS_MAX (ATH12K_SAWF_SVC_CLASS_MAX + ATH12K_SAWF_SCS_TID_MAX)
++
+ /**
+  ** SAWF_metadata related information.
+  **/
+ #define SAWF_VALID_TAG	0xAA
+ #define SAWF_TAG_SHIFT	0x18
+-
+ /* Skb mark for SAWF */
+ #define SAWF_MSDUQ_ID			GENMASK(5, 0)
+ #define SAWF_PEER_ID			GENMASK(15, 6)
+@@ -44,6 +56,11 @@ struct telemetry_sawfdelay_stats;
+ #define FLOW_OVERRIDE_FROM_Q_ID		BIT(3)
+ #define WHO_CLASSIFY_INFO_FROM_Q_ID	GENMASK(5, 4)
+ 
++#define ATH12K_SAWF_META_DATA_INVALID 0xFFFFFFFF
++#define FLOW_START 1
++#define FLOW_STOP  2
++
++#define ATH12K_SAWF_PCP_VALID  0x4
+ #define SAWF_PEER_MSDUQ_INVALID	0xFFFF
+ #define SAWF_MSDUQ_ID_INVALID	0x3F
+ #define SAWF_MSDUQ_ID		GENMASK(5, 0)
+@@ -197,6 +214,8 @@ struct ath12k_sawf_svc_params {
+ 
+ struct ath12k_ul_params {
+ 	struct list_head list;
++	struct wireless_dev *dest_wdev;
++	struct wireless_dev *src_wdev;
+ 	struct ieee80211_vif *dest_vif;
+ 	struct ieee80211_vif *src_vif;
+ 	u8 dst_mac[ETH_ALEN];
+@@ -204,6 +223,8 @@ struct ath12k_ul_params {
+ 	u8 fw_service_id;
+ 	u8 rv_service_id;
+ 	u8 add_or_sub;
++	u32 fw_mark_metadata;
++	u32 rv_mark_metadata;
+ };
+ 
+ /**
+@@ -852,22 +873,22 @@ int ath12k_sawf_reconfigure_on_crash(str
+ int ath12k_create_send_svc_params(struct ath12k_sawf_svc_params *param);
+ int ath12k_sawf_disable_config(u8 svc_id);
+ void ath12k_send_ul_configs(struct work_struct *work);
+-u16 ath12k_sawf_get_msduq(struct ieee80211_vif *vif,
++u16 ath12k_sawf_get_msduq(struct wireless_dev *wdev,
+ 			  u8 *peer_mac, u32 service_id,
+-			  u32 dscp, u32 rule_id);
+-u16 ath12k_sawf_get_msduq_peer(struct net_device *dev,
+-			       u8 *peer_mac, u32 service_id,
+-			  u32 dscp, u32 rule_id);
++			  u32 dscp_pcp, u32 rule_id, bool pcp);
++u16 ath12k_sawf_get_msduq_peer(struct wireless_dev *wdev, u8 *peer_mac,
++			       struct sawf_param *dl_params);
+ u32 ath_encode_sawf_metadata(u16 msduq_peer);
+-void ath12k_sawf_config_ul(struct ieee80211_vif *dest_vif, u8 *dst_mac,
+-			   struct ieee80211_vif *src_vif,  u8 *src_mac,
+-			   u8 fw_service_id, u8 rv_service_id,
+-			   u8 add_or_sub);
++struct wireless_dev *ath12k_get_wdev_from_netdev(struct net_device *dev);
++void ath12k_sawf_config_ul(struct net_device *dest_ndev, u8 *dst_mac,
++			   struct net_device *src_ndev, u8 *src_mac,
++			   u8 fw_service_id, u8 rv_service_id, u8 add_or_sub,
++			   u32 fw_mark_metadata, u32 rv_mark_metadata);
+ int ath12k_sawf_wmi_config_ul(struct ath12k *ar,
+ 			      struct ath12k_sawf_wmi_peer_latency_param *latency_info);
+-struct ath12k_base *ath12k_sawf_get_ab_from_vif(struct ieee80211_vif *vif,
+-						u8 *peer_mac,
+-						u16 *peer_id);
++struct ath12k_base *ath12k_sawf_get_ab_from_vif(struct wireless_dev *wdev,
++						struct ieee80211_vif *vif,
++						u8 *peer_mac, u16 *peer_id);
+ 
+ struct ath12k_base *ath12k_sawf_get_ab_from_netdev(struct net_device *dev,
+ 						u8 *peer_mac,
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -3614,7 +3614,6 @@ int ath12k_wmi_send_peer_assoc_cmd(struc
+ 		ptr += sizeof(*partner_info);
+ 	}
+ 
+-
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
+ 		   "wmi peer assoc vdev id %d assoc id %d peer mac %pM peer_flags %x rate_caps %x peer_caps %x \nlisten_intval %d ht_caps %x max_mpdu %d nss %d phymode %d peer_mpdu_density %d vht_caps %x he cap_info %x he ops %x \nhe cap_info_ext %x he phy %x %x %x peer_bw_rxnss_override %x peer_flags_ext %x eht mac_cap %x %x eht phy_cap %x %x %x \neht ops %x ml flags %x mld_addr %pM logical_link_idx %u ml peer id %d is_bridge_peer %d ieee_link_id %u num_partner_links %d\n",
+ 		   cmd->vdev_id, cmd->peer_associd, arg->peer_mac,
+@@ -16489,6 +16488,267 @@ ath12k_wmi_delete_all_peer_resp_event(st
+ 		    arg.status, arg.vdev_id);
+ }
+ 
++static int ath12k_wmi_tlv_mlo_3_link_tlt_evt_parse(struct ath12k_base *ab,
++						   u16 tag, u16  len,
++						   const void *ptr, void *data)
++{
++	struct mlo_tlt_selection_evt_params *tlt_sel_params;
++	struct wmi_mlo_tlt_selection_for_tid_spray_event *ev;
++	int i;
++
++	switch (tag) {
++	case WMI_TAG_MLO_TLT_SELECTION_FOR_TID_SPRAY_EVENT_FIXED_PARAM:
++		tlt_sel_params = (struct mlo_tlt_selection_evt_params *)data;
++		ev = (struct wmi_mlo_tlt_selection_for_tid_spray_event *)ptr;
++
++		/* copy mld mac address */
++		ether_addr_copy(tlt_sel_params->mld_addr, ev->mld_mac.addr);
++
++		for (i = 0; i < WMI_TLT_MAX_LINKS; i++) {
++			/* fill link bit map values */
++			if (i < WMI_TLT_NUM_TID_PER_AC)
++				tlt_sel_params->link_bmap[i] =
++					__le32_to_cpu(ev->link_bmap[i]);
++
++			/* fill link priority */
++			tlt_sel_params->link_priority[i] =
++				__le32_to_cpu(ev->hwlink_priority[i]);
++		}
++		break;
++
++	default:
++		ath12k_warn(ab, "Invalid tag received tag %d len %d\n",
++			    tag, len);
++		break;
++	}
++	return 0;
++}
++
++static u32 ath12k_mlo_get_link_maxphyrate(struct ath12k_base *ab,
++					  struct ath12k_peer *peer,
++					  u16 hw_link_id)
++{
++	struct ath12k_sta *ahsta;
++	struct ath12k_link_sta *arsta;
++	struct rate_info rate;
++	struct ath12k_link_vif *arvif;
++	unsigned long links;
++	struct ath12k *ar;
++	u32 maxphyrate;
++	u8 link_id, i;
++
++	if (hw_link_id == INVALID_HW_LINK_ID) {
++		ath12k_err(ab, "invalid hw link id is passed: %d",
++			   hw_link_id);
++		return 0;
++	}
++
++	ahsta = ath12k_sta_to_ahsta(peer->sta);
++	links = ahsta->links_map;
++
++	for_each_set_bit(link_id, &links, ATH12K_NUM_MAX_LINKS) {
++		if (i >= ATH12K_WMI_MLO_MAX_LINKS)
++			break;
++
++		arsta = ahsta->link[link_id];
++		if (!arsta) {
++			ath12k_dbg(ab, ATH12K_DBG_DATA,
++				   "failed to find the peer with link id %d\n",
++				   peer ? peer->link_id : -1);
++			return 0;
++		}
++
++		arvif = ath12k_get_arvif_from_link_id(ahsta->ahvif, link_id);
++		ar = arvif->ar;
++
++		rate = arsta->txrate;
++
++		if (hw_link_id != ar->pdev->hw_link_id)
++			continue;
++
++		maxphyrate = cfg80211_calculate_bitrate(&rate);
++		break;
++	}
++
++	return maxphyrate;
++}
++
++static void ath12k_update_peer_tlt_selection(struct ath12k_base *ab,
++					     struct ath12k_peer *peer,
++			struct mlo_tlt_selection_evt_params *evt_params)
++{
++	u8 tid_weight[ATH12K_DATA_TID_MAX] = {0};
++	u8 primary_tid_weight = 0;
++	u8 secondary_tid_weight = 0;
++	u32 primary_tid_capacity = 0;
++	u32 secondary_tid_capacity = 0;
++	u64 total_capacity = 0;
++	u8 i = 0;
++	u8 tid_bitmap = 0;
++	u8 common_link_tid_bitmap = 0;
++	u32 common_link_capacity = 0;
++
++	/* check whether link bitmap is valid or not */
++	if ((evt_params->link_bmap[0] == 0) ||
++	    (evt_params->link_bmap[1] == 0)) {
++		ath12k_err(ab, "invalid link bitmap received "
++			   "primary tid bitmap = %d secondary tid bitmap = %d",
++			   evt_params->link_bmap[0], evt_params->link_bmap[1]);
++		return;
++	}
++
++	if (!peer->sta || !peer->sta->valid_links)
++		return;
++
++	/* non 3 link association */
++	if (hweight16(peer->sta->valid_links) !=
++	    ATH12K_3LINK_MLO_MAX_STA_LINKS)
++		return;
++
++	/* find the common link */
++	common_link_tid_bitmap =
++		evt_params->link_bmap[0] & evt_params->link_bmap[1];
++	if (common_link_tid_bitmap) {
++		common_link_capacity =
++			ath12k_mlo_get_link_maxphyrate(ab, peer,
++			GET_3_LINK_TX_HW_LINK_ID(common_link_tid_bitmap));
++		/* distribute the common link capacity */
++		if (common_link_capacity) {
++			primary_tid_capacity = common_link_capacity / 2;
++			secondary_tid_capacity = common_link_capacity / 2;
++		}
++	}
++
++	/* calulate primary tid capacity */
++	for (i = 0; i < ATH12K_DATA_TID_MAX; i++) {
++		/* skip the common link capacity addition */
++		tid_bitmap = ((evt_params->link_bmap[0])  & (1 << i));
++		if (tid_bitmap && (tid_bitmap != common_link_tid_bitmap)) {
++			primary_tid_capacity +=
++				ath12k_mlo_get_link_maxphyrate(ab, peer,
++				       GET_3_LINK_TX_HW_LINK_ID(tid_bitmap));
++		}
++	}
++
++	/* calulate secondary tid capacity */
++	for (i = 0; i < ATH12K_DATA_TID_MAX; i++) {
++		/* skip the common link capacity addition */
++		tid_bitmap = ((evt_params->link_bmap[1])  & (1 << i));
++		if (tid_bitmap && (tid_bitmap != common_link_tid_bitmap)) {
++			secondary_tid_capacity +=
++				ath12k_mlo_get_link_maxphyrate(ab, peer,
++					 GET_3_LINK_TX_HW_LINK_ID(tid_bitmap));
++		}
++	}
++
++	if (!primary_tid_capacity || !secondary_tid_capacity) {
++		ath12k_err(ab, "Invalid link phy rate peer mld mac address: %pM"
++			   " link_priority = %d:%d:%d primary tid bitmap = %d"
++			   " secondary tid bitmap= %d common link bit map = %d",
++			   evt_params->mld_addr, evt_params->link_priority[0],
++			   evt_params->link_priority[1],
++			   evt_params->link_priority[2],
++			   evt_params->link_bmap[0], evt_params->link_bmap[1],
++			   common_link_tid_bitmap);
++		return;
++	}
++
++	total_capacity = primary_tid_capacity + secondary_tid_capacity;
++
++	/* percentage calculation */
++	primary_tid_weight = div64_u64((u64)(primary_tid_capacity * 100),
++				       total_capacity);
++	secondary_tid_weight = div64_u64((u64)(secondary_tid_capacity * 100),
++					 total_capacity);
++
++	ath12k_dbg(ab, ATH12K_DBG_WMI,
++		   "peer mld mac address: %pM, link_priority = %d:%d:%d"
++		   " primary_link_capacity = %d secondary_link_capacity = %d"
++		   " primary_tid_weight = %d secondary_tid_weight = %d"
++		   " primary tid bitmap = %d secondary tid bitmap = %d"
++		   " common link capacity = %d common link bit map = %d",
++		   evt_params->mld_addr, evt_params->link_priority[0],
++		   evt_params->link_priority[1], evt_params->link_priority[2],
++		   primary_tid_capacity, secondary_tid_capacity,
++		   primary_tid_weight, secondary_tid_weight,
++		   evt_params->link_bmap[0], evt_params->link_bmap[1],
++		   common_link_capacity, common_link_tid_bitmap);
++
++	/* best effort */
++	tid_weight[0] = primary_tid_weight;
++	tid_weight[3] = secondary_tid_weight;
++
++	/* background */
++	tid_weight[1] = primary_tid_weight;
++	tid_weight[2] = secondary_tid_weight;
++
++	/* video */
++	tid_weight[4] = primary_tid_weight;
++	tid_weight[5] = secondary_tid_weight;
++
++	/* voice */
++	tid_weight[6] = primary_tid_weight;
++	tid_weight[7] = secondary_tid_weight;
++
++	for (i = 0; i < ATH12K_DATA_TID_MAX; i++) {
++		if (peer->tid_weight[i] != tid_weight[i])
++			peer->tid_weight[i] = tid_weight[i];
++	}
++
++	return;
++}
++
++static void ath12k_wmi_mlo_3_link_tlt_selection(struct ath12k_base *ab,
++						struct sk_buff *skb)
++{
++	struct mlo_tlt_selection_evt_params tlt_sel_params = {0};
++	struct ath12k_peer *peer, *tmp;
++	struct ath12k *ar = NULL;
++	struct ath12k_sta *ahsta;
++	struct ieee80211_sta *sta;
++	int ret, i;
++
++	ret = ath12k_wmi_tlv_iter(ab, skb->data, skb->len,
++				  ath12k_wmi_tlv_mlo_3_link_tlt_evt_parse,
++				  &tlt_sel_params);
++	if (ret) {
++		ath12k_warn(ab, "failed to fetch tlt selection tlv %d", ret);
++		return;
++	}
++
++	rcu_read_lock();
++	spin_lock_bh(&ab->base_lock);
++	for (i = 0; i < ab->num_radios; i++) {
++		ar = ab->pdevs[i].ar;
++		if (!ar)
++			continue;
++
++		list_for_each_entry_safe(peer, tmp, &ab->peers, list) {
++			if (!peer->sta || !peer->vif)
++				continue;
++
++			if (!peer->mlo)
++				continue;
++
++			sta = peer->sta;
++			ahsta = (struct ath12k_sta *)sta->drv_priv;
++		}
++	}
++
++	if (!peer) {
++		ath12k_warn(ab, "peer not found %pM",
++			    tlt_sel_params.mld_addr);
++		goto exit;
++	}
++
++	ath12k_update_peer_tlt_selection(ab, peer, &tlt_sel_params);
++
++exit:
++	spin_unlock_bh(&ab->base_lock);
++	rcu_read_unlock();
++	return;
++}
++
+ static void ath12k_wmi_op_rx(struct ath12k_base *ab, struct sk_buff *skb)
+ {
+ 	struct wmi_cmd_hdr *cmd_hdr;
+@@ -16701,6 +16961,9 @@ static void ath12k_wmi_op_rx(struct ath1
+ 	case WMI_PDEV_POWER_BOOST_EVENTID:
+ 		ath12k_wmi_power_boost_event(ab, skb);
+ 		break;
++	case WMI_MLO_TLT_SELECTION_FOR_TID_SPRAY_EVENTID:
++		ath12k_wmi_mlo_3_link_tlt_selection(ab, skb);
++		break;
+ 	case WMI_VDEV_DELETE_ALL_PEER_RESP_EVENTID:
+ 		ath12k_wmi_delete_all_peer_resp_event(ab, skb);
+ 		break;
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -1125,6 +1125,7 @@ enum wmi_tlv_event_id {
+ 	WMI_MLO_TEARDOWN_COMPLETE_EVENTID,
+ 	/* Response event for Link Removal Cmd */
+ 	WMI_MLO_LINK_REMOVAL_EVENTID,
++	WMI_MLO_TLT_SELECTION_FOR_TID_SPRAY_EVENTID = 0x4800C,
+ };
+ 
+ enum wmi_tlv_pdev_param {
+@@ -1278,6 +1279,7 @@ enum wmi_tlv_pdev_param {
+ 	WMI_PDEV_PARAM_SET_CMD_OBSS_PD_PER_AC = 0xbe,
+ 	WMI_PDEV_PARAM_ENABLE_SR_PROHIBIT = 0xc6,
+ 	WMI_PDEV_PARAM_MPD_USERPD_SSR = 0xce,
++	WMI_PDEV_PARAM_TID_MAPPING_3LINK_MLO = 0xec,
+ #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
+ 	WMI_PDEV_PARAM_PWR_REDUCTION_IN_QUARTER_DB = 0xf1,
+ #endif
+@@ -1400,6 +1402,7 @@ enum wmi_tlv_vdev_param {
+ 	WMI_VDEV_PARAM_SET_HE_SOUNDING_MODE = 0x87,
+ 	WMI_VDEV_PARAM_UL_FIXED_RATE,
+ 	WMI_VDEV_PARAM_6GHZ_PARAMS = 0x99,
++	WMI_VDEV_PARAM_MLO_MAX_RECOM_ACTIVE_LINKS = 0xc1,
+ 	WMI_VDEV_PARAM_PROTOTYPE = 0x8000,
+ 	WMI_VDEV_PARAM_BSS_COLOR,
+ 	WMI_VDEV_PARAM_SET_HEMU_MODE,
+@@ -2286,6 +2289,7 @@ enum wmi_tlv_tag {
+ 	WMI_TAG_PDEV_UTF_CMD_FIXED_PARAM = 0x4be,
+ 	WMI_TAG_PDEV_UTF_EVENT_FIXED_PARAM,
+ 	WMI_TAG_TWT_VDEV_CONFIG_CMD = 0x4de,
++	WMI_TAG_MLO_TLT_SELECTION_FOR_TID_SPRAY_EVENT_FIXED_PARAM = 0x4e0,
+ 	WMI_TAG_PDEV_POWER_BOOST_EVENT_FIXED_PARAM = 0x4E8,
+ 	WMI_TAG_PDEV_POWER_BOOST_CMD_FIXED_PARAM,
+ 	WMI_TAG_PDEV_POWER_BOOST_MEM_ADDR_CMD_FIXED_PARAM,
+@@ -9153,6 +9157,57 @@ struct ath12k_wmi_wsi_stats_info_param {
+ 	u32 wsi_egress_load_info;
+ };
+ 
++#define WMI_TLT_MAX_LINKS 5
++#define WMI_TLT_NUM_TID_PER_AC 2
++#define MLO_3LINK_MAX_RECOM_ACTIVE_LINKS 3
++#define WMI_HOST_DSCP_MAP_MAX (64)
++#define GET_3_LINK_TX_HW_LINK_ID(bitmap) (bitmap >> 1)
++#define INVALID_HW_LINK_ID 0xFFFF
++#define ATH12K_MAX_MLO_LINK_PEERS 2
++
++struct wmi_mlo_tlt_selection_for_tid_spray_event {
++	struct ath12k_wmi_mac_addr_params mld_mac;
++	/* hwlink_priority:
++	 * Based on capacity, hw chip is ordered here.
++	 * hwlink_priority[0] holds the HW chip ID which is the top priority,
++	 * hwlink_priority[1] holds the HW chip ID which is the 2nd priority,
++	 * etc.
++	 */
++	__le32 hwlink_priority[WMI_TLT_MAX_LINKS];
++	/* link_bmap:
++	 * Bitmap segments for the primary TIDs (0/1/4/6)
++	 * are provided in link_bmap[0].
++	 * Bitmap segments for the secondary TIDs (3/2/5/7)
++	 * are provided in link_bmap[1].
++	 * link_bmap[0]:
++	 *     bits  4:0  are used to indicate which links are used for TID 0
++	 *     bits  9:5  are used to indicate which links are used for TID 1
++	 *     bits 14:10 are used to indicate which links are used for TID 4
++	 *     bits 19:15 are used to indicate which links are used for TID 6
++	 *     bits 31:20 are unused
++	 * link_bmap[0]:
++	 *     bits  4:0  are used to indicate which links are used for TID 3
++	 *     bits  9:5  are used to indicate which links are used for TID 2
++	 *     bits 14:10 are used to indicate which links are used for TID 5
++	 *     bits 19:15 are used to indicate which links are used for TID 7
++	 *     bits 31:20 are unused
++	 */
++	__le32 link_bmap[WMI_TLT_NUM_TID_PER_AC];
++};
++
++/**
++ * struct mlo_tlt_selection_evt_params - MLO tlt selection
++ * request params
++ * @mld_addr: mld address
++ * @link_priority: link priority order based on hw chip id
++ * @link_bmap: Link priority bitmap
++ */
++struct mlo_tlt_selection_evt_params {
++	u8 mld_addr[ETH_ALEN];
++	u32 link_priority[WMI_TLT_MAX_LINKS];
++	u32 link_bmap[WMI_TLT_NUM_TID_PER_AC];
++};
++
+ void ath12k_wmi_init_qcn9274(struct ath12k_base *ab,
+ 			     struct ath12k_wmi_resource_config_arg *config);
+ void ath12k_wmi_init_wcn7850(struct ath12k_base *ab,
+@@ -9379,7 +9434,6 @@ int ath12k_wmi_mlo_reconfig_link_removal
+ 					 size_t reconfig_ml_ie_len);
+ int ath12k_wmi_send_wsi_stats_info(struct ath12k *ar,
+ 				   struct ath12k_wmi_wsi_stats_info_param *param);
+-
+ int ath12k_wmi_pdev_enable_telemetry_stats(struct ath12k_base *ab,
+ 					   struct ath12k *ar);
+ int ath12k_wmi_peer_delete_all(struct ath12k_link_vif *arvif);
+--- a/drivers/net/wireless/ath/ath_sawf.c
++++ b/drivers/net/wireless/ath/ath_sawf.c
+@@ -33,96 +33,34 @@ void ath_sawf_msduq_callback_unregister(
+ }
+ EXPORT_SYMBOL(ath_sawf_msduq_callback_unregister);
+ 
+-u16 ath_sawf_downlink(struct ath_dl_params *ecm_ath_dl_params)
+-{
+-	struct net_device *dev = ecm_ath_dl_params->netdev;
+-	struct wireless_dev *wdev;
+-	struct ieee80211_vif *vif;
+-	struct ieee80211_hw *hw;
+-	u16 ret = SAWF_MSDUQ_ID_INVALID;
+-
+-	if (unlikely(!ecm_ath_dl_params)) {
+-		pr_info(" ECM downlink parameters are not available\n");
+-		return ret;
+-	}
+-
+-	if (!dev)
+-		return ret;
+-
+-	wdev = dev->ieee80211_ptr;
+-	if (!wdev)
+-		return ret;
+-
+-	hw = wiphy_to_ieee80211_hw(wdev->wiphy);
+-	if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
+-		return ret;
+-
+-	vif = wdev_to_ieee80211_vif(wdev);
+-	if (!vif)
+-		return ret;
+-
+-	spin_lock_bh(&sawf_uldl_lock);
+-
+-	if (sawf_cb)
+-		ret = sawf_cb->sawf_dl_callback(vif,
+-						 ecm_ath_dl_params->peer_mac,
+-						 ecm_ath_dl_params->service_id,
+-						 ecm_ath_dl_params->dscp,
+-						 ecm_ath_dl_params->rule_id);
+-	else
+-		pr_err("SAWF ath downlink callback failed\n");
+-
+-	spin_unlock_bh(&sawf_uldl_lock);
+-
+-	return ret;
+-}
+-EXPORT_SYMBOL(ath_sawf_downlink);
+-
+ void ath_sawf_uplink(struct ath_ul_params *ecm_ath_ul_params)
+ {
+-	struct wireless_dev *src_wdev = NULL, *dest_wdev = NULL;
+-	struct ieee80211_vif *src_vif = NULL, *dest_vif = NULL;
+-	struct ieee80211_hw *hw;
++	struct net_device *src_ndev = NULL, *dest_ndev = NULL;
+ 
+ 	if (unlikely(!ecm_ath_ul_params)) {
+ 		pr_info("ECM uplink parameters are not available\n");
+ 		return;
+ 	}
+ 
+-	if (ecm_ath_ul_params->src_dev)
+-		src_wdev = ecm_ath_ul_params->src_dev->ieee80211_ptr;
+-	if ( ecm_ath_ul_params->dst_dev)
+-		dest_wdev = ecm_ath_ul_params->dst_dev->ieee80211_ptr;
+-	if (!src_wdev && !dest_wdev)
+-		return;
++	src_ndev = ecm_ath_ul_params->src_dev;
++	dest_ndev = ecm_ath_ul_params->dst_dev;
+ 
+-	if (src_wdev) {
+-		hw = wiphy_to_ieee80211_hw(src_wdev->wiphy);
+-		if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
+-			return;
+-
+-		src_vif = wdev_to_ieee80211_vif(src_wdev);
+-	}
+-
+-	if (dest_wdev) {
+-		hw = wiphy_to_ieee80211_hw(dest_wdev->wiphy);
+-		if (!ieee80211_hw_check(hw, SUPPORT_ECM_REGISTRATION))
+-			return;
+-
+-		dest_vif = wdev_to_ieee80211_vif(dest_wdev);
+-	}
++	if (!src_ndev && !dest_ndev)
++		return;
+ 
+ 	spin_lock_bh(&sawf_uldl_lock);
+ 
+-	if (sawf_cb)
+-		sawf_cb->sawf_ul_callback(dest_vif,
++	if (sawf_cb) {
++		sawf_cb->sawf_ul_callback(dest_ndev,
+ 					  ecm_ath_ul_params->dst_mac,
+-					  src_vif,
++					  src_ndev,
+ 					  ecm_ath_ul_params->src_mac,
+ 					  ecm_ath_ul_params->fw_service_id,
+ 					  ecm_ath_ul_params->rv_service_id,
+-					  ecm_ath_ul_params->start_or_stop);
+-	else
++					  ecm_ath_ul_params->start_or_stop,
++					  ecm_ath_ul_params->fw_mark_metadata,
++					  ecm_ath_ul_params->rv_mark_metadata);
++	} else
+ 		pr_err("SAWF ath uplink callback failed\n");
+ 
+ 	spin_unlock_bh(&sawf_uldl_lock);
+--- a/include/ath/ath_dp_accel_cfg.h
++++ b/include/ath/ath_dp_accel_cfg.h
+@@ -8,6 +8,10 @@
+ #include <linux/if_vlan.h>
+ #include <net/mac80211.h>
+ 
++#define ATH_SAWF_SVID_VALID 0x1
++#define ATH_SAWF_DSCP_VALID 0x2
++#define ATH_SAWF_PCP_VALID  0x4
++
+ /*
+  * wifi classifier metadata
+  * ----------------------------------------------------------------------------
+--- a/include/ath/ath_sawf.h
++++ b/include/ath/ath_sawf.h
+@@ -10,29 +10,17 @@
+ #define SAWF_MSDUQ_ID_INVALID   0x3F
+ 
+ struct ath_sawf_callbacks {
+-	u16 (*sawf_dl_callback)(struct ieee80211_vif *vif,
++	void (*sawf_ul_callback)(struct net_device *dest_ndev,
+ 				 u8 dest_mac[],
+-				 u32 service_class_id,
+-				 u32 dscp,
+-				 u32 rule_id);
+-	void (*sawf_ul_callback)(struct ieee80211_vif *dest_vif,
+-				  u8 dest_mac[],
+-				  struct ieee80211_vif *src_vif,
+-				  u8 src_mac[],
+-				  u8 fwd_service_id,
+-				  u8 rev_service_id,
+-				  u8 add_or_sub);
++				 struct net_device *src_ndev,
++				 u8 src_mac[],
++				 u8 fwd_service_id,
++				 u8 rev_service_id,
++				 u8 add_or_sub,
++				 u32 fw_mark_metadata,
++				 u32 rv_mark_metadata);
+ };
+ 
+-struct ath_dl_params {
+-	struct net_device *netdev;
+-	u8 *peer_mac;
+-	u32 service_id;
+-	u32 dscp;
+-	u32 rule_id;
+-};
+-
+-
+ struct ath_ul_params {
+ 	struct net_device *dst_dev;
+ 	struct net_device *src_dev;
+@@ -41,10 +29,11 @@ struct ath_ul_params {
+ 	u8 fw_service_id;
+ 	u8 rv_service_id;
+ 	u8 start_or_stop;
++	u32 fw_mark_metadata;
++	u32 rv_mark_metadata;
+ };
+ 
+ int ath_sawf_msduq_callback_register(struct ath_sawf_callbacks *ath_cb);
+ void ath_sawf_msduq_callback_unregister(void);
+-u16 ath_sawf_downlink(struct ath_dl_params *ecm_ath_dl_params);
+ void ath_sawf_uplink(struct ath_ul_params *ecm_ath_ul_params);
+ #endif
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -11637,7 +11637,9 @@ static void ath12k_mac_op_tx(struct ieee
+ 	skb_cb->vif = vif;
+ 
+ #ifdef CPTCFG_MAC80211_SFE_SUPPORT
+-	if (skb->mark & ATH12K_MLO_METADATA_VALID_MASK) {
++	if (likely(skb->fast_xmit &&
++		   ((skb->mark & ATH12K_MLO_METADATA_MLO_ASSIST_TAG_MASK) ==
++		   ATH12K_MLO_METADATA_MLO_ASSIST_TAG))) {
+ 		link_id =  u32_get_bits(skb->mark, ATH12K_MLO_METADATA_LINKID_MASK);
+ 		rcu_read_lock();
+ 		arvif = rcu_dereference(ahvif->link[link_id]);
+@@ -12271,6 +12273,17 @@ int ath12k_mac_radio_start(struct ath12k
+ 		}
+ 	}
+ 
++	if (ath12k_mlo_3_link_tx) {
++		ret = ath12k_wmi_pdev_set_param(ar,
++					WMI_PDEV_PARAM_TID_MAPPING_3LINK_MLO,
++                                        ath12k_mlo_3_link_tx, pdev->pdev_id);
++		if (ret) {
++			ath12k_err(ab,
++				   "Failed to enable 3-link tid mapping"
++				   "for pdev id:%d\n", pdev->pdev_id);
++		}
++	}
++
+ 	ret = ath12k_dp_rx_pkt_type_filter(ar, ATH12K_PKT_TYPE_EAP,
+ 					   ATH12K_ROUTE_EAP_METADATA);
+ 	if (ret) {
+@@ -13144,6 +13157,20 @@ int ath12k_mac_vdev_create(struct ath12k
+ 	}
+ #endif
+ 
++	if (ath12k_mlo_3_link_tx) {
++		param_id = WMI_VDEV_PARAM_MLO_MAX_RECOM_ACTIVE_LINKS;
++
++		ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id,
++				param_id, MLO_3LINK_MAX_RECOM_ACTIVE_LINKS);
++
++		if (ret) {
++			ath12k_warn(ar->ab,
++				    "failed to set max recom active links"
++				    "for vdev %d: %d\n",
++				    arvif->vdev_id, ret);
++		}
++	}
++
+ 	ath12k_debugfs_add_interface(arvif);
+ 
+ 	if (vif->type == NL80211_IFTYPE_STATION &&
+--- a/drivers/net/wireless/ath/ath12k/dp_tx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
+@@ -41,10 +41,29 @@ static inline u32 ath12k_sawf_get_tcl_cm
+ 				 HAL_TCL_DATA_CMD_INFO3_CLASSIFY_INFO_SEL) |
+ 		 u32_encode_bits(flow_override,
+ 				 HAL_TCL_DATA_CMD_INFO3_FLOW_OVERRIDE);
+-
+ 	return update;
+ }
+ 
++static inline u8 ath12k_dp_sawf_get_svc_id(struct ath12k_base *ab,
++					   struct ath12k_peer *peer,
++					   u32 msduq_id)
++{
++       u8 tid, q_id;
++       u8 svc_id = ATH12K_SAWF_SVC_CLASS_INVALID;
++
++       if (msduq_id < (ab->default_msduq_per_tid *
++		       ATH12K_SAWF_MAX_TID_SUPPORT)) {
++               ath12k_dbg(ab, ATH12K_DBG_SAWF,
++                          "Invalid msduq: 0x%x in mark\n", msduq_id);
++               return svc_id;
++       }
++
++       tid = u32_get_bits(msduq_id, MSDUQID_TID_MASK);
++       q_id = u32_get_bits(msduq_id, MSDUQID_Q_MASK) -
++               ab->default_msduq_per_tid;
++       svc_id = peer->sawf_ctx_peer.msduq_table[tid][q_id].svc_id;
++       return svc_id;
++}
+ #endif /* CPTCFG_ATH12K_SAWF */
+ static enum hal_tcl_encap_type
+ ath12k_dp_tx_get_encap_type(struct ath12k_base *ab, struct sk_buff *skb)
+@@ -290,6 +309,8 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	struct ieee80211_tx_info *info;
+ 	struct ath12k_peer *peer;
++	u32 meta_data_flags, svc_id, msduq_id;
++	u16 peer_id;
+ #endif
+ 	dma_addr_t paddr;
+ 	int ret, len;
+@@ -310,13 +331,13 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 	paddr = (dma_addr_t)virt_to_phys(skb->data);
+ 
+ 	len = skb->len;
+-	is_from_recycler = skb->is_from_recycler;
+ 	/* the edma driver uses this flags to optimize the cache invalidation */
+-	skb->fast_recycled = 1;
+ 
+-	tx_desc->flags = 0;
+-	if (is_from_recycler)
+-		tx_desc->flags |= DP_TX_DESC_FLAG_FAST;
++	is_from_recycler = (skb->fast_recycled = !!skb->is_from_recycler);
++	if (likely(is_from_recycler))
++		tx_desc->flags = DP_TX_DESC_FLAG_FAST;
++	else
++		tx_desc->flags = 0;
+ 
+ 	tx_desc->skb = skb;
+ 	tx_desc->mac_id = desc->mac_id;
+@@ -334,14 +355,12 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ #ifdef CPTCFG_ATH12K_SAWF
+         /* SAWF */
+ 	if (skb->mark & SAWF_VALID_MASK) {
+-		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
+-		u16 peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
++		msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
+                 tx_desc->timestamp = ktime_get_real();
+ 		info = IEEE80211_SKB_CB(skb);
+-
+                 if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+-			u32 meta_data_flags, q_id, tid, svc_id;
+-
++			tcl_desc.info3 |= ath12k_sawf_get_tcl_cmd_info3_update(msduq_id);
++			peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
+ 			rcu_read_lock();
+ 			peer = ath12k_peer_find_by_peer_list_index(ar, peer_id);
+ 			if (unlikely(!peer)) {
+@@ -349,10 +368,8 @@ int ath12k_dp_tx_hw_enqueue(struct ath12
+ 					   "peer_id %u not found\n", peer_id);
+ 				rcu_read_unlock();
+ 			} else {
+-				tcl_desc.info3 |= ath12k_sawf_get_tcl_cmd_info3_update(msduq_id);
+-				tid = u32_get_bits(msduq_id, MSDUQID_TID_MASK);
+-				q_id = u32_get_bits(msduq_id, MSDUQID_Q_MASK) - ab->default_msduq_per_tid;
+-				svc_id = peer->sawf_ctx_peer.msduq_table[tid][q_id].svc_id;
++				svc_id = ath12k_dp_sawf_get_svc_id(ab, peer,
++								   msduq_id);
+ 				meta_data_flags = ath12k_sawf_get_tcl_metadata_update(skb->mark, svc_id);
+ 				tcl_desc.info1 = u32_encode_bits(meta_data_flags,
+ 								 HAL_TCL_DATA_CMD_INFO1_CMD_NUM);
+@@ -426,6 +443,7 @@ int ath12k_dp_tx(struct ath12k *ar, stru
+ 	struct ath12k_tx_desc_info *tx_desc;
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
++	u32 msduq_id, svc_id;
+ #endif
+ 	struct ath12k_skb_cb *skb_cb = ATH12K_SKB_CB(skb);
+ 	struct hal_tcl_data_cmd *hal_tcl_desc;
+@@ -512,8 +530,8 @@ int ath12k_dp_tx(struct ath12k *ar, stru
+ 	 */
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	if (skb->mark & SAWF_VALID_MASK) {
+-		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID), q_id, tid, svc_id;
+-		u16 peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
++		msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
++		peer_id = u32_get_bits(skb->mark, SAWF_PEER_ID);
+ 		if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+ 			rcu_read_lock();
+ 			peer = ath12k_peer_find_by_peer_list_index(ar, peer_id);
+@@ -521,9 +539,8 @@ int ath12k_dp_tx(struct ath12k *ar, stru
+ 				ath12k_dbg(ab, ATH12K_DBG_SAWF,
+ 					   "peer_id %u not found\n", peer_id);
+ 			else {
+-				tid = u32_get_bits(msduq_id, MSDUQID_TID_MASK);
+-				q_id = u32_get_bits(msduq_id, MSDUQID_Q_MASK) - ab->default_msduq_per_tid;
+-				svc_id = peer->sawf_ctx_peer.msduq_table[tid][q_id].svc_id;
++				svc_id = ath12k_dp_sawf_get_svc_id(ab, peer,
++								   msduq_id);
+ 				ti.meta_data_flags =
+ 					ath12k_sawf_get_tcl_metadata_update(skb->mark, svc_id);
+ 			}
+@@ -719,12 +736,10 @@ skip_htt_meta:
+ 	tcl_cmd->info3 = (ti.vdev_id << 24) | arvif->desc.info3;
+ 	tcl_cmd->info4 = info4;
+ 	tcl_cmd->info5 = 0;
+-
+ #ifdef CPTCFG_ATH12K_SAWF
+ 	/* SAWF */
+ 	if (skb->mark & SAWF_VALID_MASK) {
+-		u32 msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
+-
++		msduq_id = u32_get_bits(skb->mark, SAWF_MSDUQ_ID);
+ 		if (msduq_id < (ab->max_msduq_per_tid * ATH12K_SAWF_MAX_TID_SUPPORT)) {
+ 			tcl_cmd->info3 |=
+ 				ath12k_sawf_get_tcl_cmd_info3_update(msduq_id);

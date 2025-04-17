@@ -20,16 +20,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -2787,7 +2787,7 @@ static void ath12k_peer_assoc_h_eht(stru
- 	band = def.chan->band;
- 	eht_mcs_mask = arvif->bitrate_mask.control[band].eht_mcs;
- 
--	if (ath12k_peer_assoc_h_eht_masked(eht_mcs_mask))
-+	if (ath12k_peer_assoc_h_eht_masked((const u16*) eht_mcs_mask))
- 		return;
- 
- 
-@@ -5889,6 +5889,47 @@ static void ath12k_mac_copy_eht_ppe_thre
+@@ -5892,6 +5892,47 @@ static void ath12k_mac_copy_eht_ppe_thre
  	}
  }
  
@@ -77,7 +68,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  static void ath12k_mac_copy_eht_cap(struct ath12k_band_cap *band_cap,
  				    struct ieee80211_he_cap_elem *he_cap_elem,
  				    int iftype,
-@@ -5922,6 +5963,9 @@ static void ath12k_mac_copy_eht_cap(stru
+@@ -5925,6 +5966,9 @@ static void ath12k_mac_copy_eht_cap(stru
  			  IEEE80211_EHT_PHY_CAP7_MU_BEAMFORMER_160MHZ |
  			  IEEE80211_EHT_PHY_CAP7_MU_BEAMFORMER_320MHZ);
  		break;
@@ -87,13 +78,3 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  	default:
  		break;
  	}
-@@ -8348,7 +8392,8 @@ ath12k_mac_bitrate_mask_get_single_nss(s
- 	}
- 
- 	mcs_nss_len = ieee80211_eht_mcs_nss_size(&sband->iftype_data->he_cap.he_cap_elem,
--						 &sband->iftype_data->eht_cap.eht_cap_elem);
-+						 &sband->iftype_data->eht_cap.eht_cap_elem,
-+						 false);
- 	if (mcs_nss_len == 4) {
- 		/* 20 MHz only STA case */
- 		const struct ieee80211_eht_mcs_nss_supp_20mhz_only *eht_mcs_nss =

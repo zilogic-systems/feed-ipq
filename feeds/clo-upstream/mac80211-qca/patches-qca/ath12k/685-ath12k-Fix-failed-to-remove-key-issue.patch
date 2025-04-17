@@ -62,8 +62,8 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	if (ahvif->tx_encap_type == HAL_TCL_ENCAP_TYPE_RAW &&
 -	    test_bit(ATH12K_FLAG_HW_CRYPTO_DISABLED, &ab->dev_flags) &&
 +	    test_bit(ATH12K_FLAG_HW_CRYPTO_DISABLED, &ag->dev_flags) &&
- 	    ahvif->key_cipher != INVALID_CIPHER)
- 		encrypt_type = ath12k_dp_tx_get_encrypt_type(ahvif->key_cipher);
+ 	    arvif->key_cipher != INVALID_CIPHER)
+ 		encrypt_type = ath12k_dp_tx_get_encrypt_type(arvif->key_cipher);
  	else
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
@@ -95,7 +95,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  		}
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -4374,6 +4374,7 @@ ath12k_mac_assign_link_vif( struct ath12
+@@ -4373,6 +4373,7 @@ ath12k_mac_assign_link_vif( struct ath12
  				return NULL;
  
  			INIT_LIST_HEAD(&arvif->list);
@@ -103,15 +103,15 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  			INIT_WORK(&arvif->update_obss_color_notify_work,
  				  ath12k_update_obss_color_notify_work);
  			INIT_WORK(&arvif->update_bcn_template_work,
-@@ -4801,6 +4802,7 @@ static int ath12k_install_key(struct ath
+@@ -4795,6 +4796,7 @@ static int ath12k_install_key(struct ath
+ {
  	int ret;
- 	struct ath12k_vif *ahvif = arvif->ahvif;
  	struct ath12k *ar = arvif->ar;
 +	struct ath12k_hw_group *ag = ar->ab->ag;
  	struct wmi_vdev_install_key_arg arg = {
  		.vdev_id = arvif->vdev_id,
  		.key_idx = key->keyidx,
-@@ -4814,7 +4816,7 @@ static int ath12k_install_key(struct ath
+@@ -4808,7 +4810,7 @@ static int ath12k_install_key(struct ath
  
  	reinit_completion(&ar->install_key_done);
  
@@ -120,7 +120,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  		return 0;
  
  	if (cmd == DISABLE_KEY) {
-@@ -4848,7 +4850,7 @@ static int ath12k_install_key(struct ath
+@@ -4842,7 +4844,7 @@ static int ath12k_install_key(struct ath
  		return -EOPNOTSUPP;
  	}
  
@@ -129,7 +129,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV |
  			      IEEE80211_KEY_FLAG_RESERVE_TAILROOM;
  
-@@ -4945,28 +4947,6 @@ static int ath12k_mac_set_key(struct ath
+@@ -4939,28 +4941,6 @@ static int ath12k_mac_set_key(struct ath
  
  	ab = ar->ab;
  
@@ -158,7 +158,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	if (sta)
  		peer_addr = arsta->addr;
  	else if (ahvif->vdev_type == WMI_VDEV_TYPE_STA)
-@@ -4976,10 +4956,6 @@ static int ath12k_mac_set_key(struct ath
+@@ -4970,10 +4950,6 @@ static int ath12k_mac_set_key(struct ath
  
  	rcu_read_unlock();
  
@@ -169,7 +169,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	/* the peer should not disappear in mid-way (unless FW goes awry) since
  	 * we already hold conf_mutex. we just make sure its there now.
  	 */
-@@ -4992,15 +4968,17 @@ static int ath12k_mac_set_key(struct ath
+@@ -4986,15 +4962,17 @@ static int ath12k_mac_set_key(struct ath
  			ath12k_warn(ab, "cannot install key for non-existent peer %pM\n",
  				    peer_addr);
  			ret = -EOPNOTSUPP;
@@ -189,7 +189,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	if (key->flags & IEEE80211_KEY_FLAG_PAIRWISE)
  		flags |= WMI_KEY_PAIRWISE;
  	else
-@@ -5009,13 +4987,13 @@ static int ath12k_mac_set_key(struct ath
+@@ -5003,13 +4981,13 @@ static int ath12k_mac_set_key(struct ath
  	ret = ath12k_install_key(arvif, key, cmd, peer_addr, flags);
  	if (ret) {
  		ath12k_warn(ab, "ath12k_install_key failed (%d)\n", ret);
@@ -205,7 +205,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	}
  
  	spin_lock_bh(&ab->base_lock);
-@@ -5059,8 +5037,6 @@ static int ath12k_mac_set_key(struct ath
+@@ -5053,8 +5031,6 @@ static int ath12k_mac_set_key(struct ath
  
  	spin_unlock_bh(&ab->base_lock);
  
@@ -214,7 +214,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  out:
  	return ret;
  }
-@@ -5072,6 +5048,8 @@ static int ath12k_mac_op_set_key(struct
+@@ -5066,6 +5042,8 @@ static int ath12k_mac_op_set_key(struct
  	struct ath12k *ar;
  	struct ath12k_hw *ah = hw->priv;
  	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
@@ -223,7 +223,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	struct ath12k_link_vif *arvif;
  	struct ath12k_link_sta *arsta = NULL;
  	struct ath12k_sta *ahsta;
-@@ -5079,14 +5057,41 @@ static int ath12k_mac_op_set_key(struct
+@@ -5073,14 +5051,41 @@ static int ath12k_mac_op_set_key(struct
  
  	mutex_lock(&ah->conf_mutex);
  
@@ -269,7 +269,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  
  		ath12k_info(NULL, "set key param cached since vif not assign to radio\n");
  		mutex_unlock(&ah->conf_mutex);
-@@ -5103,8 +5108,13 @@ static int ath12k_mac_op_set_key(struct
+@@ -5097,8 +5102,13 @@ static int ath12k_mac_op_set_key(struct
  		ahsta = (struct ath12k_sta *)sta->drv_priv;
  		arsta = &ahsta->deflink;
  	}
@@ -283,7 +283,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	mutex_unlock(&ah->conf_mutex);
  	return ret;
  }
-@@ -8491,6 +8501,7 @@ static void ath12k_mac_update_vif_offloa
+@@ -8488,6 +8498,7 @@ static void ath12k_mac_update_vif_offloa
  					  struct ath12k_link_vif *arvif)
  {
  	struct ath12k_base *ab = ar->ab;
@@ -291,7 +291,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	struct ath12k_vif *ahvif = arvif->ahvif;
  	struct ieee80211_vif *vif = ahvif->vif;
  	u32 param_id, param_value;
-@@ -8505,7 +8516,7 @@ static void ath12k_mac_update_vif_offloa
+@@ -8502,7 +8513,7 @@ static void ath12k_mac_update_vif_offloa
  
  	if (vif->offload_flags & IEEE80211_OFFLOAD_ENCAP_ENABLED)
  		ahvif->tx_encap_type = ATH12K_HW_TXRX_ETHERNET;
@@ -300,7 +300,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  		ahvif->tx_encap_type = ATH12K_HW_TXRX_RAW;
  	else
  		ahvif->tx_encap_type = ATH12K_HW_TXRX_NATIVE_WIFI;
-@@ -8521,7 +8532,7 @@ static void ath12k_mac_update_vif_offloa
+@@ -8518,7 +8529,7 @@ static void ath12k_mac_update_vif_offloa
  	param_id = WMI_VDEV_PARAM_RX_DECAP_TYPE;
  	if (vif->offload_flags & IEEE80211_OFFLOAD_DECAP_ENABLED)
  		param_value = ATH12K_HW_TXRX_ETHERNET;
@@ -309,7 +309,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  		param_value = ATH12K_HW_TXRX_RAW;
  	else
  		param_value = ATH12K_HW_TXRX_NATIVE_WIFI;
-@@ -8857,6 +8868,9 @@ static void ath12k_mac_vif_cache_flush(s
+@@ -8854,6 +8865,9 @@ static void ath12k_mac_vif_cache_flush(s
  	struct ath12k_hw *ah = ar->ah;
  	struct ath12k_vif *ahvif = (void *)vif->drv_priv;
  	struct ath12k_link_vif *arvif;
@@ -319,7 +319,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	int ret;
  
  	lockdep_assert_held(&ah->conf_mutex);
-@@ -8870,23 +8884,35 @@ static void ath12k_mac_vif_cache_flush(s
+@@ -8867,23 +8881,35 @@ static void ath12k_mac_vif_cache_flush(s
  		if (ret)
  			ath12k_warn(ar->ab,
  				    "unable to apply tx config parameters to vdev %d\n", ret);
@@ -364,7 +364,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  }
  
  static struct ath12k *ath12k_mac_assign_vif_to_vdev(struct ieee80211_hw *hw,
-@@ -8973,6 +8999,7 @@ static int ath12k_mac_op_add_interface(s
+@@ -8970,6 +8996,7 @@ static int ath12k_mac_op_add_interface(s
  	ahvif->deflink.ahvif = ahvif;
  	ahvif->deflink.link_id = 0;
  	INIT_LIST_HEAD(&ahvif->deflink.list);
@@ -372,7 +372,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	INIT_WORK(&ahvif->deflink.update_obss_color_notify_work,
  		  ath12k_update_obss_color_notify_work);
  	INIT_WORK(&ahvif->deflink.update_bcn_template_work,
-@@ -9022,6 +9049,7 @@ static void ath12k_mac_remove_link_inter
+@@ -9017,6 +9044,7 @@ static void ath12k_mac_remove_link_inter
  	struct ath12k *ar;
  	struct ath12k_vif *ahvif = arvif->ahvif;
  	struct ieee80211_vif *vif = ahvif->vif;
@@ -380,7 +380,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	struct ath12k_base *ab;
  	int ret;
  
-@@ -9090,6 +9118,13 @@ err_vdev_del:
+@@ -9085,6 +9113,13 @@ err_vdev_del:
  
  	ath12k_debugfs_remove_interface(arvif);
  
@@ -394,7 +394,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	/* TODO: recal traffic pause state based on the available vdevs */
  
  	ahvif->link[arvif->link_id] = NULL;
-@@ -12985,6 +13020,7 @@ static int ath12k_mac_hw_register(struct
+@@ -12991,6 +13026,7 @@ static int ath12k_mac_hw_register(struct
  	struct ath12k_pdev_cap *cap;
  	struct ath12k_base *ab, *ab_dflt;
  	struct ath12k *ar;
@@ -402,7 +402,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  	struct ath12k_pdev *pdev;
  	int i, j, ret;
  
-@@ -13010,6 +13046,7 @@ static int ath12k_mac_hw_register(struct
+@@ -13016,6 +13052,7 @@ static int ath12k_mac_hw_register(struct
  
  	ar = ah->radio;
  	ab = ar->ab;
@@ -410,7 +410,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  
  	/* Use the first chip in group to advertise some features/info
  	 * these are expected to be similar for chips in group
-@@ -13150,7 +13187,7 @@ static int ath12k_mac_hw_register(struct
+@@ -13156,7 +13193,7 @@ static int ath12k_mac_hw_register(struct
  	ah->hw->wiphy->regulatory_flags = REGULATORY_WIPHY_SELF_MANAGED;
  	ah->hw->wiphy->reg_notifier = ath12k_reg_notifier;
  
@@ -419,7 +419,7 @@ Signed-off-by: Sivashankari Madhavan <quic_sivamadh@quicinc.com>
  		hw->netdev_features = NETIF_F_HW_CSUM;
  		ieee80211_hw_set(hw, SW_CRYPTO_CONTROL);
  		ieee80211_hw_set(hw, SUPPORT_FAST_XMIT);
-@@ -13371,6 +13408,7 @@ int ath12k_mac_allocate(struct ath12k_hw
+@@ -13377,6 +13414,7 @@ int ath12k_mac_allocate(struct ath12k_hw
  		ah->ops = ops;
  		ah->num_radio = num_radios;
  		ag->ah[i] = ah;

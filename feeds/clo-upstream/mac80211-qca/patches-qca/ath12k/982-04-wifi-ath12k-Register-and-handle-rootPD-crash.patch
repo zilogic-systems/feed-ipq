@@ -16,7 +16,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/ahb.c
 +++ b/drivers/net/wireless/ath/ath12k/ahb.c
-@@ -1196,6 +1196,61 @@ static int ath12k_ahb_config_rproc_irq(s
+@@ -1201,6 +1201,63 @@ static int ath12k_ahb_config_rproc_irq(s
  	return 0;
  }
  
@@ -37,6 +37,8 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +	if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ag->dev_flags))) {
 +		set_bit(ATH12K_FLAG_RECOVERY, &ag->dev_flags);
 +		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ag->dev_flags);
++		set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
++		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
 +		ab_ahb->crash_type = ATH12K_RPROC_ROOTPD_CRASH;
 +		queue_work(ab->workqueue_aux, &ag->reset_work);
 +	}
@@ -78,7 +80,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  static int ath12k_ahb_root_pd_state_notifier(struct notifier_block *nb,
  					     const unsigned long event, void *data)
  {
-@@ -1207,6 +1262,9 @@ static int ath12k_ahb_root_pd_state_noti
+@@ -1212,6 +1269,9 @@ static int ath12k_ahb_root_pd_state_noti
  		ath12k_dbg(ab, ATH12K_DBG_AHB, "Root PD is UP\n");
  		complete(&ab_ahb->rootpd_ready);
  		return NOTIFY_OK;
@@ -88,7 +90,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  	}
  
  	return NOTIFY_DONE;
-@@ -1217,6 +1275,8 @@ static int ath12k_ahb_register_rproc_not
+@@ -1222,6 +1282,8 @@ static int ath12k_ahb_register_rproc_not
  	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
  
  	ab_ahb->rpd_nb.notifier_call = ath12k_ahb_root_pd_state_notifier;
@@ -97,7 +99,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  	init_completion(&ab_ahb->rootpd_ready);
  
  	/* RootPD notification can be registered only once */
-@@ -1229,6 +1289,15 @@ static int ath12k_ahb_register_rproc_not
+@@ -1234,6 +1296,15 @@ static int ath12k_ahb_register_rproc_not
  	if (!ab_ahb->rpd_notifier)
  		return -EINVAL;
  
@@ -113,7 +115,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  	return 0;
  }
  
-@@ -1239,12 +1308,13 @@ static void ath12k_ahb_unregister_rproc_
+@@ -1244,12 +1315,13 @@ static void ath12k_ahb_unregister_rproc_
  	if (ab_ahb->userpd_id != ATH12K_AHB_USERPD1)
  		return;
  
@@ -154,7 +156,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  	struct completion userpd_spawned;
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -190,7 +190,7 @@ void ath12k_core_put_hw_group(struct ath
+@@ -210,7 +210,7 @@ void ath12k_core_put_hw_group(struct ath
   * scenarios driver can queue ab->reset_work for all ahb and
   * hybrid chipset's.
   */
@@ -163,15 +165,22 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  {
  	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_work);
  	struct ath12k_base *ab;
-@@ -207,7 +207,6 @@ static void ath12k_core_hw_group_reset(s
+@@ -227,7 +227,13 @@ static void ath12k_core_hw_group_reset(s
  			set_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags);
  			set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
  			ab_ahb->crash_type = ATH12K_RPROC_ROOTPD_CRASH;
 -			queue_work(ab->workqueue_aux, &ab->reset_work);
++		}
++
++		if (!ab->is_reset) {
++			ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_PPE2TCL);
++			ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_REO2PPE);
++			ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_PPE_WBM2SW_REL);
++			ath12k_hif_irq_disable(ab);
  		}
  
  		ath12k_hal_dump_srng_stats(ab);
-@@ -238,7 +237,7 @@ ath12k_core_hw_group_alloc(u8 id, u8 max
+@@ -258,7 +264,7 @@ ath12k_core_hw_group_alloc(u8 id, u8 max
  	mutex_init(&ag->mlomem_arena.mutex_lock);
  	ag->hw_queues_stopped = false;
  	ag->recovery_mode = ATH12K_MLO_RECOVERY_MODE0;
@@ -180,3 +189,59 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  	ag->fst = NULL;
  	ag->wsi_load_info = NULL;
  #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
+@@ -3533,13 +3539,23 @@ static void ath12k_core_reset(struct wor
+ 		ath12k_info(ab, "Recovery is initiated with Mode%s\n",
+ 			   (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0 ? "0" : "1"));
+ 
++	if (ab->hif.bus != ATH12K_BUS_PCI)
++		ab_ahb = ath12k_ahb_priv(ab);
++
+ 	if (!ab->is_reset) {
+ 		/* TODO: DS: revisit for DS SSR
+ 		 * As net device still exists and part of the bridge,
+ 		 * do not free vp allocated upon SSR */
+-		ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_PPE2TCL);
+-		ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_REO2PPE);
+-		ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_PPE_WBM2SW_REL);
++
++		/* Disable IRQs only for PCI bus and AHB bus in case of userPD crash
++ 		 * IRQs will be disabled for AHB rootPD crash from rootPD crash notifier
++ 		 */
++		if (!((ab->hif.bus == ATH12K_BUS_AHB || ab->hif.bus == ATH12K_BUS_HYBRID) &&
++		     ab_ahb->crash_type == ATH12K_RPROC_ROOTPD_CRASH)) {
++			ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_PPE2TCL);
++			ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_REO2PPE);
++			ath12k_hif_ppeds_irq_disable(ab, PPEDS_IRQ_PPE_WBM2SW_REL);
++		}
+ 	}
+ 
+ 	/* Sometimes the recovery will fail and then the next all recovery fail,
+@@ -3593,8 +3609,16 @@ static void ath12k_core_reset(struct wor
+ 
+ 	mutex_lock(&ag->mutex_lock);
+ 
+-	if (!ab->is_reset)
+-		ath12k_hif_irq_disable(ab);
++	if (!ab->is_reset) {
++		/* Disable IRQs only for PCI bus and AHB bus in case of userPD crash
++                 * IRQs will be disabled for AHB rootPD crash from rootPD crash notifier
++		 */
++		if (!((ab->hif.bus == ATH12K_BUS_AHB || ab->hif.bus == ATH12K_BUS_HYBRID) &&
++		     ab_ahb->crash_type == ATH12K_RPROC_ROOTPD_CRASH)) {
++			ath12k_hif_irq_disable(ab);
++		}
++	}
++
+ 
+ 	ab->is_reset = true;
+ 	atomic_set(&ab->recovery_count, 0);
+@@ -3675,9 +3699,6 @@ static void ath12k_core_reset(struct wor
+ 
+ 	ab->qmi.num_radios = ATH12K_QMI_INVALID_RADIO;
+ 
+-	if (ab->hif.bus != ATH12K_BUS_PCI)
+-		ab_ahb = ath12k_ahb_priv(ab);
+-
+ 	for (i = 0; i < ag->num_chip; i++) {
+ 		partner_ab = ag->ab[i];
+ 		if (ab == partner_ab)

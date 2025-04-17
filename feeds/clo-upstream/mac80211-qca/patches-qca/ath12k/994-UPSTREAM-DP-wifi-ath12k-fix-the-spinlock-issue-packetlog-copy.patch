@@ -1,0 +1,56 @@
+From 5605be8ffc482a0108f9c272d5188d019ce84179 Mon Sep 17 00:00:00 2001
+From: Nithyanantham Paramasivam <quic_nithp@quicinc.com>
+Date: Thu, 12 Dec 2024 14:54:09 +0530
+Subject: [PATCH] wifi: ath12k: fix the spin lock issue during packetlog copy
+
+During packet log collection, the following kernel bug occcurs.
+Currently, while coping the packet dump when no data is present, it
+leads to kernel bug. This is due to not releasing the aquired spinlock
+when no data is present. Added the spin unlock call when no data case.
+
+BUG: sleeping function called from invalid context at include/linux/percpu-rwsem.h:49
+in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 5994, name: cp
+preempt_count: 201, expected: 0
+RCU nest depth: 0, expected: 0
+ CPU: 1 PID: 5994 Comm: cp Tainted: G           O       6.6.47+ #0
+ Hardware name: Qualcomm Technologies, Inc. IPQ9574/RDP433/AP-AL02-C4 (DT)
+  Call trace:
+   dump_backtrace+0xd4/0xf4
+   show_stack+0x14/0x1c
+   dump_stack_lvl+0x44/0x58
+   dump_stack+0x14/0x1c
+   __might_resched+0x124/0x13c
+   __might_sleep+0x60/0x6c
+   vfs_write+0xac/0x3d8
+   ksys_write+0x74/0xec
+   __arm64_sys_write+0x14/0x1c
+   el0_svc_common.constprop.0+0xc8/0x120
+   do_el0_svc+0x18/0x20
+   el0_svc+0x18/0x40
+   el0t_64_sync_handler+0x80/0x124
+   el0t_64_sync+0x150/0x154
+
+Signed-off-by: Nithyanantham Paramasivam <quic_nithp@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/pktlog.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/pktlog.c b/drivers/net/wireless/ath/ath12k/pktlog.c
+index 49e9ab7..59fca7c 100644
+--- a/drivers/net/wireless/ath/ath12k/pktlog.c
++++ b/drivers/net/wireless/ath/ath12k/pktlog.c
+@@ -251,8 +251,10 @@ static ssize_t ath12k_pktlog_read(struct file *file, char __user *userbuf,
+ 
+ 	start_offset = log_buf->rd_offset;
+ 
+-	if ((rem_len == 0) || (start_offset < 0))
++	if ((rem_len == 0) || (start_offset < 0)) {
++		spin_unlock_bh(&info->lock);
+ 		goto read_done;
++	}
+ 
+ 	fold_offset = -1;
+ 	cur_rd_offset = start_offset;
+-- 
+2.17.1
+

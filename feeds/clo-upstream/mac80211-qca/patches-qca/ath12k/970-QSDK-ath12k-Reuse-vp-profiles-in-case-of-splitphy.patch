@@ -60,7 +60,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	rcu_read_unlock();
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -416,6 +416,7 @@ struct ath12k_link_vif {
+@@ -419,6 +419,7 @@ struct ath12k_link_vif {
  	u8 hal_addr_search_flags;
  	u8 search_type;
  	int bank_id;
@@ -68,9 +68,17 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	u8 vdev_id_check_en;
  	bool beacon_prot;
  
+@@ -432,6 +433,7 @@ struct ath12k_link_vif {
+ 	bool pending_up;
+ 	bool pending_stop;
+ 	bool spectral_enabled;
++	bool primary_sta_link;
+ 	u8 bssid[ETH_ALEN];
+ 	struct cfg80211_bitrate_mask bitrate_mask;
+ 	struct delayed_work connection_loss_work;
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -3169,8 +3169,6 @@ static ssize_t ath12k_debugfs_dump_ppeds
+@@ -3300,8 +3300,6 @@ static ssize_t ath12k_debugfs_dump_ppeds
  			 ppeds_stats->num_rx_desc_freed);
  	len += scnprintf(buf + len, size - len, "num_rx_desc_realloc %u\n",
  			 ppeds_stats->num_rx_desc_realloc);
@@ -81,7 +89,31 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  			 ppeds_stats->tqm_rel_reason[0],
 --- a/drivers/net/wireless/ath/ath12k/dp.c
 +++ b/drivers/net/wireless/ath/ath12k/dp.c
-@@ -642,7 +642,7 @@ skip_dma_alloc:
+@@ -92,6 +92,7 @@ int ath12k_dp_peer_setup(struct ath12k *
+ 			 struct ath12k_link_sta *arsta)
+ {
+ 	struct ath12k_base *ab = ar->ab;
++	struct ieee80211_vif *vif = arvif->ahvif->vif;
+ 	struct ath12k_peer *peer;
+ 	struct crypto_shash *tfm;
+ 	int ret = 0, tid;
+@@ -112,10 +113,15 @@ int ath12k_dp_peer_setup(struct ath12k *
+ 	if (peer->mlo && peer->link_id != arsta->ahsta->primary_link_id) {
+ 		ret = 0;
+ 		peer->primary_link = false;
++		arvif->primary_sta_link = false;
+ 		goto free_shash;
+ 	}
+ 
+ 	peer->primary_link = true;
++	arvif->primary_sta_link = true;
++
++	if (vif->type == NL80211_IFTYPE_STATION)
++		ath12k_dp_tx_ppeds_cfg_astidx_cache_mapping(ar->ab, arvif, true);
+ 
+ 	for (tid = 0; tid <= IEEE80211_NUM_TIDS; tid++) {
+ 		ret = ath12k_dp_rx_peer_tid_setup(ar, tid, 1, 0, HAL_PN_TYPE_NONE, peer);
+@@ -631,7 +637,7 @@ skip_dma_alloc:
  }
  
  static
@@ -90,7 +122,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  {
  	struct ath12k_vif *ahvif = arvif->ahvif;
  	u32 bank_config = 0;
-@@ -682,7 +682,7 @@ u32 ath12k_dp_tx_get_vdev_bank_config(st
+@@ -671,7 +677,7 @@ u32 ath12k_dp_tx_get_vdev_bank_config(st
  
  	bank_config |= u32_encode_bits(ieee80211_vif_is_mesh(ahvif->vif) ? 3 : 0,
  					HAL_TX_BANK_CONFIG_MESH_EN) |
@@ -99,7 +131,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  					HAL_TX_BANK_CONFIG_VDEV_ID_CHECK_EN);
  
  	bank_config |= u32_encode_bits(0, HAL_TX_BANK_CONFIG_DSCP_TIP_MAP_ID);
-@@ -690,8 +690,8 @@ u32 ath12k_dp_tx_get_vdev_bank_config(st
+@@ -679,8 +685,8 @@ u32 ath12k_dp_tx_get_vdev_bank_config(st
  	return bank_config;
  }
  
@@ -110,7 +142,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  {
  	int bank_id = DP_INVALID_BANK_ID;
  	int i;
-@@ -699,7 +699,7 @@ static int ath12k_dp_tx_get_bank_profile
+@@ -688,7 +694,7 @@ static int ath12k_dp_tx_get_bank_profile
  	bool configure_register = false;
  
  	/* convert vdev params into hal_tx_bank_config */
@@ -119,7 +151,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  
  	spin_lock_bh(&dp->tx_bank_lock);
  	/* TODO: implement using idr kernel framework*/
-@@ -755,8 +755,15 @@ void ath12k_dp_tx_update_bank_profile(st
+@@ -744,8 +750,15 @@ void ath12k_dp_tx_update_bank_profile(st
  	struct ath12k_base *ab = arvif->ar->ab;
  	struct ath12k_dp *dp = &ab->dp;
  
@@ -136,7 +168,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	arvif->desc.info0 = FIELD_PREP(HAL_TCL_DATA_CMD_INFO0_BANK_ID,
  				       arvif->bank_id);
  
-@@ -1585,7 +1592,8 @@ void ath12k_dp_vdev_tx_attach(struct ath
+@@ -1574,7 +1587,8 @@ void ath12k_dp_vdev_tx_attach(struct ath
  
  	ath12k_dp_update_vdev_search(arvif);
  	arvif->vdev_id_check_en = true;
@@ -148,7 +180,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  				       arvif->bank_id);
 --- a/drivers/net/wireless/ath/ath12k/dp.h
 +++ b/drivers/net/wireless/ath/ath12k/dp.h
-@@ -393,6 +393,7 @@ struct host_link_stats {
+@@ -400,6 +400,7 @@ struct host_link_stats {
  #define MAX_PPEDS_IRQS 3
  struct ath12k_dp_ppe_vp_profile {
  	bool is_configured;
@@ -156,7 +188,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	u8 vp_num;
  	u8 ppe_vp_num_idx;
  	u8 search_idx_reg_num;
-@@ -2712,6 +2713,9 @@ struct ath12k_rx_desc_info *ath12k_dp_ge
+@@ -2776,6 +2777,9 @@ struct ath12k_rx_desc_info *ath12k_dp_ge
  struct ath12k_tx_desc_info *ath12k_dp_get_tx_desc(struct ath12k_base *ab,
  						  u32 desc_id);
  void ath12k_dp_tx_update_bank_profile(struct ath12k_link_vif *arvif);
@@ -178,7 +210,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  #define HAL_TX_PPE_VP_CFG_PMAC_ID		GENMASK(9, 8)
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -12599,6 +12599,11 @@ err_vdev_del:
+@@ -12777,6 +12777,11 @@ err_vdev_del:
  
  	ath12k_mac_vif_unref(&ab->dp, vif);
  	ath12k_dp_tx_put_bank_profile(&ab->dp, arvif->bank_id);
@@ -187,10 +219,10 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
 +		ath12k_dp_tx_put_bank_profile(&ab->dp,
 +						arvif->splitphy_ds_bank_id);
 +
- 	ahvif->key_cipher = INVALID_CIPHER;
+ 	arvif->key_cipher = INVALID_CIPHER;
  
  	/* Recalc txpower for remaining vdev */
-@@ -14914,7 +14919,7 @@ ath12k_mac_assign_vif_chanctx_handle(str
+@@ -15119,7 +15124,7 @@ ath12k_mac_assign_vif_chanctx_handle(str
  	ab = ar->ab;
  
  	ret = ath12k_ppeds_attach_link_vif(arvif, ahvif->ppe_vp_num,
@@ -201,7 +233,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/ppe.c
 +++ b/drivers/net/wireless/ath/ath12k/ppe.c
-@@ -560,11 +560,24 @@ void ath12k_dp_peer_ppeds_route_setup(st
+@@ -562,11 +562,24 @@ void ath12k_dp_peer_ppeds_route_setup(st
  }
  
  static int ath12k_dp_ppeds_alloc_ppe_vp_profile(struct ath12k_base *ab,
@@ -227,7 +259,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	if (ab->ppe.num_ppe_vp_profiles == PPE_VP_ENTRIES_MAX) {
  		mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
  		ath12k_err(ab, "Maximum ppe_vp count reached for soc\n");
-@@ -584,6 +597,9 @@ static int ath12k_dp_ppeds_alloc_ppe_vp_
+@@ -586,6 +599,9 @@ static int ath12k_dp_ppeds_alloc_ppe_vp_
  	ab->ppe.num_ppe_vp_profiles++;
  
  	ab->dp.ppe_vp_profile[i].is_configured = true;
@@ -237,7 +269,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	*vp_profile = &ab->dp.ppe_vp_profile[i];
  	mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
  
-@@ -594,6 +610,8 @@ static void
+@@ -596,6 +612,8 @@ static void
  ath12k_dp_ppeds_dealloc_ppe_vp_profile(struct ath12k_base *ab,
  				       int ppe_vp_profile_idx)
  {
@@ -246,7 +278,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	if (ppe_vp_profile_idx < 0 || ppe_vp_profile_idx >= PPE_VP_ENTRIES_MAX) {
  		ath12k_err(ab, "Invalid PPE VP profile free index");
  		return;
-@@ -606,10 +624,17 @@ ath12k_dp_ppeds_dealloc_ppe_vp_profile(s
+@@ -608,10 +626,17 @@ ath12k_dp_ppeds_dealloc_ppe_vp_profile(s
  		return;
  	}
  
@@ -267,7 +299,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  }
  
  static int ath12k_dp_ppeds_alloc_vp_tbl_entry(struct ath12k_base *ab)
-@@ -726,6 +751,24 @@ static void ath12k_dp_ppeds_setup_vp_ent
+@@ -728,6 +753,24 @@ static void ath12k_dp_ppeds_setup_vp_ent
  					   struct ath12k_dp_ppe_vp_profile *ppe_vp_profile)
  {
  	u32 ppe_vp_config = 0;
@@ -292,7 +324,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  
  	ppe_vp_config |=
  		u32_encode_bits(ppe_vp_profile->vp_num,
-@@ -738,8 +781,8 @@ static void ath12k_dp_ppeds_setup_vp_ent
+@@ -740,8 +783,8 @@ static void ath12k_dp_ppeds_setup_vp_ent
  				HAL_TX_PPE_VP_CFG_TO_FW) |
  		u32_encode_bits(ppe_vp_profile->drop_prec_enable,
  				HAL_TX_PPE_VP_CFG_DROP_PREC_EN) |
@@ -303,7 +335,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  		u32_encode_bits(arvif->vdev_id, HAL_TX_PPE_VP_CFG_VDEV_ID);
  
  	ath12k_hal_tx_set_ppe_vp_entry(ab, ppe_vp_config,
-@@ -751,7 +794,7 @@ static void ath12k_dp_ppeds_setup_vp_ent
+@@ -753,7 +796,7 @@ static void ath12k_dp_ppeds_setup_vp_ent
  		   " lmac_id %d vdev_id %d ppe_vp_num_idx %d\n",
  		   ppe_vp_profile->vp_num, ppe_vp_profile->search_idx_reg_num,
  		   ppe_vp_profile->use_ppe_int_pri, ppe_vp_profile->to_fw,
@@ -312,7 +344,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  		   arvif->vdev_id, ppe_vp_profile->ppe_vp_num_idx);
  	return;
  }
-@@ -807,42 +850,63 @@ static int ath12k_ppeds_attach_link_apvl
+@@ -809,42 +852,63 @@ static int ath12k_ppeds_attach_link_apvl
  	}
  
  	/*Allocate a ppe vp profile for a vap */
@@ -401,7 +433,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  
  	ath12k_dbg(ab, ATH12K_DBG_PPE,
  		   "PPEDS vdev attach success chip_id %d soc_idx %d ds_node_id %d vdev_id %d vpnum %d ppe_vp_profile_idx %d "
-@@ -891,12 +955,15 @@ void ath12k_ppe_ds_attach_vlan_vif_link(
+@@ -893,12 +957,15 @@ void ath12k_ppe_ds_attach_vlan_vif_link(
  }
  
  int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
@@ -418,7 +450,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  	int ppe_vp_profile_idx, ppe_vp_tbl_idx;
  	int ppe_vp_search_tbl_idx = -1;
  	int vdev_id = arvif->vdev_id;
-@@ -920,42 +987,95 @@ int ath12k_ppeds_attach_link_vif(struct
+@@ -922,42 +989,95 @@ int ath12k_ppeds_attach_link_vif(struct
  	}
  
  	/*Allocate a ppe vp profile for a vap */
@@ -519,7 +551,8 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
 +		}
 +
 +		*link_ppe_vp_profile_idx = ppe_vp_profile_idx;
-+
+ 
+-	*link_ppe_vp_profile_idx = ppe_vp_profile_idx;
 +		arvif->splitphy_ds_bank_id = ath12k_dp_tx_get_bank_profile(ab, arvif, &ab->dp, vdevid_chk_en);
 +
 +		for_each_set_bit(link_idx, &ahvif->links_map, IEEE80211_MLD_MAX_NUM_LINKS) {
@@ -528,8 +561,7 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
 +			if (!iter_arvif || iter_arvif == arvif ||
 +					ab != iter_arvif->ab)
 +				continue;
- 
--	*link_ppe_vp_profile_idx = ppe_vp_profile_idx;
++
 +			iter_arvif->splitphy_ds_bank_id = arvif->splitphy_ds_bank_id;
 +		}
 +
@@ -539,6 +571,16 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  
  	ath12k_dbg(ab, ATH12K_DBG_PPE,
  		   "PPEDS vdev attach success chip_id %d soc_idx %d ds_node_id %d vdev_id %d vpnum %d ppe_vp_profile_idx %d "
+@@ -986,7 +1106,8 @@ void ath12k_dp_tx_ppeds_cfg_astidx_cache
+ 	int ppe_vp_profile_idx = arvif->ppe_vp_profile_idx;
+ 	struct ath12k_dp_ppe_vp_profile *vp_profile;
+ 
+-	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
++	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags) ||
++			!arvif->primary_sta_link)
+ 		return;
+ 
+ 	vp_profile = &ab->dp.ppe_vp_profile[ppe_vp_profile_idx];
 --- a/drivers/net/wireless/ath/ath12k/ppe.h
 +++ b/drivers/net/wireless/ath/ath12k/ppe.h
 @@ -52,7 +52,6 @@ struct ath12k_ppeds_stats {
@@ -569,49 +611,9 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  {
  	return 0;
  }
-diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
---- a/drivers/net/wireless/ath/ath12k/core.h
-+++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -436,6 +436,7 @@ struct ath12k_link_vif {
- 	bool pending_up;
- 	bool pending_stop;
- 	bool spectral_enabled;
-+	bool primary_sta_link;
- 	u8 bssid[ETH_ALEN];
- 	struct cfg80211_bitrate_mask bitrate_mask;
- 	struct delayed_work connection_loss_work;
-diff --git a/drivers/net/wireless/ath/ath12k/dp.c b/drivers/net/wireless/ath/ath12k/dp.c
---- a/drivers/net/wireless/ath/ath12k/dp.c
-+++ b/drivers/net/wireless/ath/ath12k/dp.c
-@@ -92,6 +92,7 @@ int ath12k_dp_peer_setup(struct ath12k *ar, struct ath12k_link_vif *arvif,
- 			 struct ath12k_link_sta *arsta)
- {
- 	struct ath12k_base *ab = ar->ab;
-+	struct ieee80211_vif *vif = arvif->ahvif->vif;
- 	struct ath12k_peer *peer;
- 	struct crypto_shash *tfm;
- 	int ret = 0, tid;
-@@ -112,10 +113,15 @@ int ath12k_dp_peer_setup(struct ath12k *ar, struct ath12k_link_vif *arvif,
- 	if (peer->mlo && peer->link_id != arsta->ahsta->primary_link_id) {
- 		ret = 0;
- 		peer->primary_link = false;
-+		arvif->primary_sta_link = false;
- 		goto free_shash;
- 	}
- 
- 	peer->primary_link = true;
-+	arvif->primary_sta_link = true;
-+
-+	if (vif->type == NL80211_IFTYPE_STATION)
-+		ath12k_dp_tx_ppeds_cfg_astidx_cache_mapping(ar->ab, arvif, true);
- 
- 	for (tid = 0; tid <= IEEE80211_NUM_TIDS; tid++) {
- 		ret = ath12k_dp_rx_peer_tid_setup(ar, tid, 1, 0, HAL_PN_TYPE_NONE, peer);
-diff --git a/drivers/net/wireless/ath/ath12k/peer.c b/drivers/net/wireless/ath/ath12k/peer.c
-index 564a630..761bf90 100644
 --- a/drivers/net/wireless/ath/ath12k/peer.c
 +++ b/drivers/net/wireless/ath/ath12k/peer.c
-@@ -852,7 +852,6 @@ int ath12k_peer_create(struct ath12k *ar, struct ath12k_link_vif *arvif,
+@@ -873,7 +873,6 @@ int ath12k_peer_create(struct ath12k *ar
  		arvif->ast_idx = peer->hw_peer_id;
  		arvif->desc.info4 = FIELD_PREP(HAL_TCL_DATA_CMD_INFO4_SEARCH_INDEX, arvif->ast_idx) |
  				    FIELD_PREP(HAL_TCL_DATA_CMD_INFO4_CACHE_SET_NUM, arvif->ast_hash);
@@ -619,16 +621,3 @@ index 564a630..761bf90 100644
  	}
  
  	peer->sec_type = HAL_ENCRYPT_TYPE_OPEN;
-diff --git a/drivers/net/wireless/ath/ath12k/ppe.c b/drivers/net/wireless/ath/ath12k/ppe.c
---- a/drivers/net/wireless/ath/ath12k/ppe.c
-+++ b/drivers/net/wireless/ath/ath12k/ppe.c
-@@ -1137,7 +1137,8 @@ void ath12k_dp_tx_ppeds_cfg_astidx_cache_mapping(struct ath12k_base *ab,
- 	int ppe_vp_profile_idx = arvif->ppe_vp_profile_idx;
- 	struct ath12k_dp_ppe_vp_profile *vp_profile;
- 
--	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
-+	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags) ||
-+			!arvif->primary_sta_link)
- 		return;
- 
- 	vp_profile = &ab->dp.ppe_vp_profile[ppe_vp_profile_idx];

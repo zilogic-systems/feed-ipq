@@ -7,12 +7,17 @@ Currently, separate set peer param command for each peer is being sent
 for changing channel width. However this leads to firmware buffer overflow
 during multi-client testing.
 
-This can be optimised by using WMI_PEER_CHAN_WIDTH_SWITCH_CMDID. This command
-clubs N number of peers into single command. The value of N is advertised
-by firmware in service ready event 2.
+This can be optimised by using WMI_PEER_CHAN_WIDTH_SWITCH_CMDID and it
+clubs N number of peers into single command. The value of N is
+advertised by firmware in service ready event 2.
 
 Add support to form and send WMI_PEER_CHAN_WIDTH_SWITCH_CMDID during peer
 channel width change.
+
+Dependency: ath12k/713-001-ath12k-update-sta-max-bandwith-during-peer-assoc-pre.patch
+            ath12k/713-002-ath12k-update-sta-max-bandwith-during-peer-assoc-pre.patch
+
+Patch-work: [None]
 
 Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 ---
@@ -24,7 +29,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -304,6 +304,11 @@ struct ath12k_link_vif_pvt {
+@@ -303,6 +303,11 @@ struct ath12k_link_vif_pvt {
  };
  #endif
  
@@ -47,7 +52,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  };
  
  struct ath12k_vif {
-@@ -1370,6 +1379,8 @@ struct ath12k_base {
+@@ -1369,6 +1378,8 @@ struct ath12k_base {
  
  	int userpd_id;
  
@@ -58,7 +63,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  };
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -4957,6 +4957,9 @@ ath12k_mac_assign_link_vif( struct ath12
+@@ -4932,6 +4932,9 @@ ath12k_mac_assign_link_vif( struct ath12
  			INIT_WORK(&arvif->update_bcn_template_work,
  				  ath12k_update_bcn_template_work);
  			arvif->num_stations = 0;
@@ -68,14 +73,23 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		}
  	}
  
-@@ -6376,6 +6379,98 @@ static int ath12k_station_unauthorize(st
+@@ -6233,10 +6236,7 @@ static int ath12k_station_assoc(struct a
+ 
+ 	spin_lock_bh(&ar->data_lock);
+ 
+-	/* Set arsta bw and prev bw */
+ 	arsta->bw = bandwidth;
+-	arsta->bw_prev = bandwidth;
+-
+ 	arvif->num_stations++;
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
+@@ -6352,6 +6352,72 @@ static int ath12k_station_unauthorize(st
  	return ret;
  }
  
 +static int ath12k_mac_set_peer_ch_switch_data(struct ath12k_link_vif *arvif,
-+					      struct ath12k_link_sta *arsta,
-+					      enum wmi_phy_mode peer_phymode,
-+					      bool is_upgrade)
++					      struct ath12k_link_sta *arsta)
 +{
 +	struct ath12k *ar = arvif->ar;
 +	struct ath12k_peer_ch_width_switch_data *peer_data;
@@ -84,7 +98,6 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +	struct ieee80211_vif *vif = arvif->ahvif->vif;
 +	struct cfg80211_chan_def def;
 +	u16 ru_punct_bitmap;
-+	int ret;
 +
 +	lockdep_assert_held(&ar->conf_mutex);
 +
@@ -107,28 +120,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +		arvif->peer_ch_width_switch_data = peer_data;
 +	}
 +
-+	/* before adding to the list, if its BW upgrade, phymode should be updated.
-+	 * We update now and check because if we fail to update the phymode, no
-+	 * point is setting the bandwidth */
-+	if (is_upgrade) {
-+		ret = ath12k_wmi_set_peer_param(ar, arsta->addr,
-+						arvif->vdev_id, WMI_PEER_PHYMODE,
-+						peer_phymode);
-+		if (ret) {
-+			ath12k_warn(ar->ab, "failed to update STA %pM peer phymode %d: %d\n",
-+				    arsta->addr, peer_phymode, ret);
-+
-+			if (peer_data->count == 0) {
-+				kfree(peer_data);
-+				arvif->peer_ch_width_switch_data = NULL;
-+			}
-+
-+			return -EINVAL;
-+		}
-+	}
-+
 +	peer_arg = &peer_data->peer_arg[peer_data->count++];
-+
 +
 +	ru_punct_bitmap = 0;
 +
@@ -149,8 +141,6 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +	ether_addr_copy(peer_arg->mac_addr.addr, arsta->addr);
 +	peer_arg->chan_width = arsta->bw;
 +	peer_arg->puncture_20mhz_bitmap = ~ru_punct_bitmap;
-+	peer_arg->peer_phymode = peer_phymode;
-+	peer_arg->is_upgrade = is_upgrade;
 +	spin_unlock_bh(&ar->data_lock);
 +
 +	if (peer_data->count == 1) {
@@ -167,29 +157,113 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  static void ath12k_sta_rc_update_wk(struct work_struct *wk)
  {
  	struct ath12k *ar;
-@@ -6438,6 +6533,11 @@ static void ath12k_sta_rc_update_wk(stru
- 		ath12k_peer_assoc_h_phymode(ar, arvif, arsta, &peer_arg);
- 		peer_phymode = peer_arg.peer_phymode;
+@@ -6365,11 +6431,10 @@ static void ath12k_sta_rc_update_wk(stru
+ 	const u16 *vht_mcs_mask;
+ 	const u16 *he_mcs_mask;
+ 	const u16 *eht_mcs_mask;
+-	u32 changed, bw, nss, smps, bw_prev;
++	u32 changed, bw, nss, smps;
+ 	int err, num_vht_rates, num_he_rates, num_eht_rates, num_ht_rates;
+ 	const struct cfg80211_bitrate_mask *mask;
+ 	struct ath12k_wmi_peer_assoc_arg peer_arg;
+-	enum wmi_phy_mode peer_phymode;
+ 	struct ath12k_sta *ahsta;
+ 	struct ieee80211_link_sta *link_sta = NULL;
+ 	bool ht_supp, vht_supp, has_he, has_eht;
+@@ -6396,7 +6461,6 @@ static void ath12k_sta_rc_update_wk(stru
+ 	arsta->changed = 0;
  
-+		err = ath12k_mac_set_peer_ch_switch_data(arvif, arsta, peer_phymode,
-+							 bw > bw_prev ? true : false);
+ 	bw = arsta->bw;
+-	bw_prev = arsta->bw_prev;
+ 	nss = arsta->nss;
+ 	smps = arsta->smps;
+ 
+@@ -6411,53 +6475,20 @@ static void ath12k_sta_rc_update_wk(stru
+ 			   ath12k_mac_max_eht_nss(eht_mcs_mask)));
+ 
+ 	if (changed & IEEE80211_RC_BW_CHANGED) {
+-		ath12k_peer_assoc_h_phymode(ar, arvif, arsta, &peer_arg);
+-		peer_phymode = peer_arg.peer_phymode;
++		ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac bandwidth upgrade for sta %pM new %d\n",
++			   arsta->addr, bw);
++
++		err = ath12k_mac_set_peer_ch_switch_data(arvif, arsta);
 +		if (!err || err == -EINVAL)
 +			goto err_rc_bw_changed;
 +
- 		if (bw > bw_prev) {
- 			/* Phymode shows maximum supported channel width, if we
- 			 * upgrade bandwidth then due to sanity check of firmware,
-@@ -10223,6 +10323,9 @@ static int ath12k_mac_op_add_interface(s
++		err = ath12k_wmi_set_peer_param(ar, sta->addr,
++						arvif->vdev_id, WMI_PEER_CHWIDTH,
++						bw);
++		if (err)
++			ath12k_warn(ar->ab, "failed to update STA %pM to peer bandwidth %d: %d\n",
++				    arsta->addr, bw, err);
+ 
+-		if (bw > bw_prev) {
+-			/* Phymode shows maximum supported channel width, if we
+-			 * upgrade bandwidth then due to sanity check of firmware,
+-			 * we have to send WMI_PEER_PHYMODE followed by
+-			 * WMI_PEER_CHWIDTH
+-			 */
+-			ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac bandwidth upgrade for sta %pM new %d old %d\n",
+-					arsta->addr, bw, bw_prev);
+-			err = ath12k_wmi_set_peer_param(ar, arsta->addr,
+-							arvif->vdev_id, WMI_PEER_PHYMODE,
+-							peer_phymode);
+-			if (err) {
+-				ath12k_warn(ar->ab, "failed to update STA %pM to peer phymode %d: %d\n",
+-					    arsta->addr, peer_phymode, err);
+-				goto err_rc_bw_changed;
+-			}
+-			err = ath12k_wmi_set_peer_param(ar, sta->addr,
+-							arvif->vdev_id, WMI_PEER_CHWIDTH,
+-							bw);
+-			if (err)
+-				ath12k_warn(ar->ab, "failed to update STA %pM to peer bandwidth %d: %d\n",
+-					    arsta->addr, bw, err);
+-		} else {
+-			/* When we downgrade bandwidth this will conflict with phymode
+-			 * and cause to trigger firmware crash. In this case we send
+-			 * WMI_PEER_CHWIDTH followed by WMI_PEER_PHYMODE
+-			 */
+-			ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac bandwidth downgrade for sta %pM new %d old %d\n",
+-					arsta->addr, bw, bw_prev);
+-			err = ath12k_wmi_set_peer_param(ar, arsta->addr,
+-							arvif->vdev_id, WMI_PEER_CHWIDTH,
+-							bw);
+-			if (err) {
+-				ath12k_warn(ar->ab, "failed to update STA %pM peer to bandwidth %d: %d\n",
+-					    arsta->addr, bw, err);
+-				goto err_rc_bw_changed;
+-			}
+-			err = ath12k_wmi_set_peer_param(ar, arsta->addr,
+-							arvif->vdev_id, WMI_PEER_PHYMODE,
+-							peer_phymode);
+-			if (err)
+-				ath12k_warn(ar->ab, "failed to update STA %pM to peer phymode %d: %d\n",
+-					    arsta->addr, peer_phymode, err);
+-		}
+ 	}
+ 
+ 	if (changed & IEEE80211_RC_NSS_CHANGED) {
+@@ -7455,7 +7486,6 @@ static void ath12k_mac_op_sta_rc_update(
+ 
+ 	if (changed & IEEE80211_RC_BW_CHANGED) {
+ 		bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, sta);
+-		arsta->bw_prev = arsta->bw;
+ 		arsta->bw = bw;
+ 	}
+ 
+@@ -10186,6 +10216,9 @@ static int ath12k_mac_op_add_interface(s
  	INIT_WORK(&ahvif->deflink.update_bcn_template_work,
- 		  ath12k_update_bcn_template_work);
+ 			ath12k_update_bcn_template_work);
  	ahvif->deflink.num_stations = 0;
 +	init_completion(&ahvif->deflink.peer_ch_width_switch_send);
 +	INIT_WORK(&ahvif->deflink.peer_ch_width_switch_work,
 +		  ath12k_wmi_peer_chan_width_switch_work);
  
- 	ahvif->key_cipher = INVALID_CIPHER;
- 
-@@ -10277,6 +10380,7 @@ static void ath12k_mac_remove_link_inter
+ 	/* Allocate Default Queue now and reassign during actual vdev create */
+ 	vif->cab_queue = ATH12K_HW_DEFAULT_QUEUE;
+@@ -10238,6 +10271,7 @@ static void ath12k_mac_remove_link_inter
  
  	cancel_work_sync(&arvif->update_obss_color_notify_work);
  	cancel_work_sync(&arvif->update_bcn_template_work);
@@ -199,7 +273,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -6551,6 +6551,7 @@ static int ath12k_wmi_svc_rdy_ext2_parse
+@@ -6523,6 +6523,7 @@ static int ath12k_wmi_svc_rdy_ext2_parse
  		}
  		ab->max_msduq_per_tid = parse->arg.max_msduq_per_tid;
  		ab->default_msduq_per_tid = parse->arg.default_msduq_per_tid;
@@ -207,7 +281,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		break;
  
  	case WMI_TAG_ARRAY_STRUCT:
-@@ -14453,3 +14454,219 @@ int ath12k_wmi_svc_send_disable(struct a
+@@ -14434,3 +14435,190 @@ int ath12k_wmi_svc_send_disable(struct a
  
  	return ret;
  }
@@ -311,9 +385,6 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +	for (i = 0; i < num; i++) {
 +		arg = &peer_arg[start_idx + i];
 +
-+		/* for bandwidth upgrade phymode should be set already. Safe to
-+		 * to directly set channel width
-+		 */
 +		err = ath12k_wmi_set_peer_param(ar, arg->mac_addr.addr,
 +						arvif->vdev_id, WMI_PEER_CHWIDTH,
 +						arg->chan_width);
@@ -321,18 +392,6 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +			ath12k_warn(ar->ab, "failed to update STA %pM peer bw %d: %d\n",
 +				    arg->mac_addr.addr, arg->chan_width, err);
 +			continue;
-+		}
-+
-+		/* for bandwidth downgrade, phymode should be set after setting
-+		 * channel width
-+		 */
-+		if (!arg->is_upgrade) {
-+			err = ath12k_wmi_set_peer_param(ar, arg->mac_addr.addr,
-+							arvif->vdev_id, WMI_PEER_PHYMODE,
-+							arg->peer_phymode);
-+			if (err)
-+				ath12k_warn(ar->ab, "failed to update STA %pM peer phymode %d: %d\n",
-+					    arg->mac_addr.addr, arg->peer_phymode, err);
 +		}
 +	}
 +}
@@ -344,15 +403,15 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +	struct ath12k *ar = arvif->ar;
 +	struct ath12k_peer_ch_width_switch_data *data;
 +	struct wmi_peer_chan_width_switch_arg arg;
-+	struct wmi_chan_width_peer_arg *peer_arg;
 +	unsigned long time_left = 0;
 +	int count_left, curr_count, max_count_per_cmd = ar->ab->chwidth_num_peer_caps;
-+	int cmd_num = 0, ret, i;
++	int cmd_num = 0, ret;
 +
 +	mutex_lock(&ar->conf_mutex);
 +
 +	/* possible that the worker got scheduled after complete was triggered. In
-+	 * this case we don't wait for timeout */
++	 * this case we don't wait for timeout
++	 */
 +	if (arvif->peer_ch_width_switch_data->count == arvif->num_stations)
 +		goto send_cmd;
 +
@@ -362,7 +421,8 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +						ATH12K_PEER_CH_WIDTH_SWITCH_TIMEOUT_HZ);
 +	if (time_left == 0) {
 +		/* Even though timeout occured, we would send the command for the peers
-+		 * for which we received sta rc update event, hence not returning */
++		 * for which we received sta rc update event, hence not returning
++		 */
 +		ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +			   "timed out waiting for all peers in peer channel width switch\n");
 +	}
@@ -402,25 +462,10 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +		ret = ath12k_wmi_peer_chan_width_switch(ar, &arg);
 +		if (ret) {
 +			/* fallback */
-+			ath12k_wmi_set_peers_chan_width(arvif, arg.peer_arg, arg.num_peers,
++			ath12k_wmi_set_peers_chan_width(arvif, arg.peer_arg,
++							arg.num_peers,
 +							arg.start_idx);
 +		}
-+	}
-+
-+	for (i = 0; i < data->count; i++) {
-+		peer_arg = &data->peer_arg[i];
-+
-+		/* for bandwidth upgrade phymode is set from worker scheduler */
-+		if (peer_arg->is_upgrade)
-+			continue;
-+
-+		/* for bandwidth downgrade phymode needs to be set */
-+		ret = ath12k_wmi_set_peer_param(ar, peer_arg->mac_addr.addr,
-+						arvif->vdev_id, WMI_PEER_PHYMODE,
-+						peer_arg->peer_phymode);
-+		if (ret)
-+			ath12k_warn(ar->ab, "failed to update STA %pM peer phymode %d: %d\n",
-+				    peer_arg->mac_addr.addr, peer_arg->peer_phymode, ret);
 +	}
 +
 +	kfree(arvif->peer_ch_width_switch_data);
@@ -429,7 +474,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 +}
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -8025,6 +8025,38 @@ struct wmi_vdev_adfs_ocac_complete_event
+@@ -8001,6 +8001,38 @@ struct wmi_vdev_adfs_ocac_complete_event
  	u32 center_freq2;
  } __packed;
  
@@ -468,7 +513,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  #define ATH12K_FW_STATS_BUF_SIZE (1024 * 1024)
  
  void ath12k_wmi_init_qcn9274(struct ath12k_base *ab,
-@@ -8230,4 +8262,5 @@ int ath12k_wmi_config_peer_ppeds_routing
+@@ -8208,4 +8240,5 @@ int ath12k_wmi_config_peer_ppeds_routing
  					 u32 service_code, u32 priority_valid,
  					 u32 src_info, bool ppe_routing_enable);
  #endif

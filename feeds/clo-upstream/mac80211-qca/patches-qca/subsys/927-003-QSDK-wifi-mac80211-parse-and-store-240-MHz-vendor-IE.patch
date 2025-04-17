@@ -16,11 +16,9 @@ Signed-off-by: Aloka Dixit <quic_alokad@quicinc.com>
  net/mac80211/util.c        | 34 ++++++++++++++++++++++++++++++++++
  3 files changed, 39 insertions(+), 1 deletion(-)
 
-diff --git a/include/linux/ieee80211.h b/include/linux/ieee80211.h
-index 9b43fdfb5c05..88df1187a078 100644
 --- a/include/linux/ieee80211.h
 +++ b/include/linux/ieee80211.h
-@@ -4113,6 +4113,10 @@ struct ieee80211_multiple_bssid_configuration {
+@@ -4239,6 +4239,10 @@ struct ieee80211_multiple_bssid_configur
  #define WLAN_OUI_TYPE_MICROSOFT_WPS	4
  #define WLAN_OUI_TYPE_MICROSOFT_TPC	8
  
@@ -31,11 +29,9 @@ index 9b43fdfb5c05..88df1187a078 100644
  #define IEEE80211_EHT_OPER_CTRL_CHANWIDTH_20MHZ        0
  #define IEEE80211_EHT_OPER_CTRL_CHANWIDTH_40MHZ        1
  #define IEEE80211_EHT_OPER_CTRL_CHANWIDTH_80MHZ        2
-diff --git a/net/mac80211/ieee80211_i.h b/net/mac80211/ieee80211_i.h
-index f5492a2def67..3d9e6d42b99b 100644
 --- a/net/mac80211/ieee80211_i.h
 +++ b/net/mac80211/ieee80211_i.h
-@@ -1803,7 +1803,7 @@ struct ieee802_11_elems {
+@@ -1798,7 +1798,7 @@ struct ieee802_11_elems {
  	const struct ieee80211_aid_response_ie *aid_resp;
  	const struct ieee80211_eht_cap_elem *eht_cap;
  	const struct ieee80211_eht_operation *eht_operation;
@@ -44,11 +40,9 @@ index f5492a2def67..3d9e6d42b99b 100644
  	const struct ieee80211_multi_link_elem *ml_basic;
  	const struct ieee80211_multi_link_elem *ml_reconf;
  
-diff --git a/net/mac80211/util.c b/net/mac80211/util.c
-index ef239b5c3b17..2d556ea0d777 100644
 --- a/net/mac80211/util.c
 +++ b/net/mac80211/util.c
-@@ -1056,6 +1056,34 @@ ieee80211_parse_extension_element(u32 *crc,
+@@ -1056,6 +1056,36 @@ ieee80211_parse_extension_element(u32 *c
  		*crc = crc32_be(*crc, (void *)elem, elem->datalen + 2);
  }
  
@@ -56,14 +50,16 @@ index ef239b5c3b17..2d556ea0d777 100644
 +					      struct ieee802_11_elems *elems)
 +{
 +	u8 rem_elen;
++	const u8 *end;
 +
 +	if (elen <= 6 || pos[3] != WLAN_OUI_QCN_TYPE_1)
 +		return;
 +
++	end = pos + elen;
 +	rem_elen = elen - 4;
 +	pos += 4;
 +
-+	while (rem_elen > 2) {
++	while ((rem_elen > 2) && (pos < end)) {
 +		switch (pos[0]) {
 +		case WLAN_OUI_QCN_ATTR_5GHZ_240MHZ_SUPP:
 +			if (rem_elen >= 11) {
@@ -83,7 +79,7 @@ index ef239b5c3b17..2d556ea0d777 100644
  static u32
  _ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params,
  			     struct ieee802_11_elems *elems,
-@@ -1195,6 +1223,12 @@ _ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params,
+@@ -1195,6 +1225,12 @@ _ieee802_11_parse_elems_full(struct ieee
  						elems->wmm_param_len = elen;
  					}
  				}
@@ -96,6 +92,3 @@ index ef239b5c3b17..2d556ea0d777 100644
  			}
  			break;
  		case WLAN_EID_RSN:
--- 
-2.34.1
-

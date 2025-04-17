@@ -1,0 +1,55 @@
+From d502315e7dc5e424e33ea6b8b206159709e7a882 Mon Sep 17 00:00:00 2001
+From: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
+Date: Thu, 12 Dec 2024 14:59:52 +0530
+Subject: [PATCH] Upstream:DP:wifi: ath12k: improve the rx descriptor error
+ information
+
+The ath12k_dp_get_rx_desc() failure log currently contains the same
+information across multiple Rx data paths and lacks sufficient detail for
+debugging purposes. To address this, change the ath12k_dp_get_rx_desc()
+failure log to include cookie information along with Rx path details.
+This will provide more specific data for debugging purposes.
+
+link: https://lore.kernel.org/all/20240516000807.1704913-3-quic_periyasa@quicinc.com/
+
+Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
+index 4ba99dc..ef7ee5a 100644
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3944,7 +3944,7 @@ try_again:
+ 		if (unlikely(!desc_info)) {
+ 			desc_info = ath12k_dp_get_rx_desc(src_ab, cookie);
+ 			if (!desc_info) {
+-				ath12k_warn(ab, "Invalid cookie in manual desc retrieval cookie 0x%x", cookie);
++				ath12k_warn(ab, "Rx, invalid cookie 0x%x\n", cookie);
+ 				continue;
+ 			}
+ 		}
+@@ -4790,7 +4790,7 @@ ath12k_dp_process_rx_err_buf(struct ath12k *ar, struct hal_reo_dest_ring *desc,
+ 	if (!desc_info) {
+ 		desc_info = ath12k_dp_get_rx_desc(ab, cookie);
+ 		if (!desc_info) {
+-			ath12k_warn(ab, "Invalid cookie in manual desc retrieval cookie 0x%x", cookie);
++			ath12k_warn(ab, "Rx Exception, invalid cookie 0x%x\n", cookie);
+ 			return -EINVAL;
+ 		}
+ 	}
+@@ -5551,7 +5551,8 @@ int ath12k_dp_rx_process_wbm_err(struct ath12k_base *ab,
+ 		if (!desc_info) {
+ 			desc_info = ath12k_dp_get_rx_desc(ab, err_info.cookie);
+ 			if (!desc_info) {
+-				ath12k_warn(ab, "Invalid cookie in manual desc retrieval cookie 0x%x", err_info.cookie);
++				ath12k_warn(ab, "WBM Rx err, invalid cookie 0x%x\n",
++					    err_info.cookie);
+ 				continue;
+ 			}
+ 		}
+-- 
+2.34.1
+

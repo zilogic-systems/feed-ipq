@@ -48,11 +48,9 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  net/mac80211/link.c | 18 ++++++++++++++++++
  1 file changed, 18 insertions(+)
 
-diff --git a/net/mac80211/link.c b/net/mac80211/link.c
-index 9b6746f..2e8fe5f 100644
 --- a/net/mac80211/link.c
 +++ b/net/mac80211/link.c
-@@ -242,6 +242,7 @@ static int ieee80211_vif_update_links(struct ieee80211_sub_if_data *sdata,
+@@ -242,6 +242,7 @@ static int ieee80211_vif_update_links(st
  	struct ieee80211_bss_conf *old[IEEE80211_MLD_MAX_NUM_LINKS];
  	struct ieee80211_link_data *old_data[IEEE80211_MLD_MAX_NUM_LINKS];
  	bool use_deflink = old_links == 0; /* set for error case */
@@ -60,7 +58,7 @@ index 9b6746f..2e8fe5f 100644
  
  	sdata_assert_lock(sdata);
  
-@@ -345,6 +346,23 @@ free:
+@@ -345,6 +346,24 @@ free:
  		links[link_id] = NULL;
  	}
  deinit:
@@ -76,6 +74,7 @@ index 9b6746f..2e8fe5f 100644
 +
 +			for_each_set_bit(link_id_vlan, &rem,
 +					 IEEE80211_MLD_MAX_NUM_LINKS) {
++				vlan->wdev.valid_links &= ~BIT(link_id_vlan);
 +				rcu_assign_pointer(vlan->vif.link_conf[link_id_vlan], NULL);
 +				rcu_assign_pointer(vlan->link[link_id_vlan], NULL);
 +			}
@@ -84,6 +83,3 @@ index 9b6746f..2e8fe5f 100644
  	if (use_deflink)
  		ieee80211_link_init(sdata, -1, &sdata->deflink,
  				    &sdata->vif.bss_conf);
--- 
-2.34.1
-

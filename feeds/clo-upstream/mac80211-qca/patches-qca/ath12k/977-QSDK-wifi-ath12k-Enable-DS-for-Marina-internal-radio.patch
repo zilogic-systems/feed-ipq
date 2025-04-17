@@ -18,11 +18,9 @@ Signed-off-by: Nithyanantham Paramasivam <quic_nithp@quicinc.com>
  drivers/net/wireless/ath/ath12k/hw.h   |   1 +
  6 files changed, 154 insertions(+), 7 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/ahb.c b/drivers/net/wireless/ath/ath12k/ahb.c
-index a54706f..a6bcb37 100644
 --- a/drivers/net/wireless/ath/ath12k/ahb.c
 +++ b/drivers/net/wireless/ath/ath12k/ahb.c
-@@ -34,7 +34,8 @@ static const struct of_device_id ath12k_ahb_of_match[] = {
+@@ -34,7 +34,8 @@ static const struct of_device_id ath12k_
  MODULE_DEVICE_TABLE(of, ath12k_ahb_of_match);
  
  #define ATH12K_IRQ_CE0_OFFSET 4
@@ -32,7 +30,7 @@ index a54706f..a6bcb37 100644
  static const char *irq_name[ATH12K_IRQ_NUM_MAX] = {
  	"misc-pulse1",
  	"misc-latch",
-@@ -89,7 +90,10 @@ static const char *irq_name[ATH12K_IRQ_NUM_MAX] = {
+@@ -89,7 +90,10 @@ static const char *irq_name[ATH12K_IRQ_N
  	"wbm2host-tx-completions-ring2",
  	"wbm2host-tx-completions-ring1",
  	"tcl2host-status-ring",
@@ -54,7 +52,7 @@ index a54706f..a6bcb37 100644
  };
  
  static inline u32 ath12k_ahb_get_cmem_base(struct ath12k_base *ab)
-@@ -768,7 +775,118 @@ static int ath12k_ahb_ssr_notifier_unreg(struct ath12k_base *ab)
+@@ -768,7 +775,118 @@ static int ath12k_ahb_ssr_notifier_unreg
  	return ath12k_rproc_unregister_subsys_notifier(ab);
  }
  
@@ -83,7 +81,7 @@ index a54706f..a6bcb37 100644
 +		}
 +		ab->irq_num[irq_idx] = irq;
 +		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
-+		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL],
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL][0],
 +			 sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE_WBM2SW_REL]),
 +			 "ppe_wbm_rel_%d", ab->ppe.ds_node_id);
 +		ret = devm_request_irq(&pdev->dev, irq,  ath12k_dp_ppeds_handle_tx_comp,
@@ -107,7 +105,7 @@ index a54706f..a6bcb37 100644
 +		}
 +		ab->irq_num[irq_idx] = irq;
 +		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
-+		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL],
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL][0],
 +			 sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_PPE2TCL]),
 +			 "ppe2tcl_%d",  ab->ppe.ds_node_id);
 +		ret = devm_request_irq(&pdev->dev, irq,  ath12k_ds_ppe2tcl_irq_handler,
@@ -130,7 +128,7 @@ index a54706f..a6bcb37 100644
 +		}
 +		ab->irq_num[irq_idx] = irq;
 +		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
-+		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE],
++		snprintf(&ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE][0],
 +			 sizeof(ab->dp.ppeds_irq_name[PPEDS_IRQ_REO2PPE]),
 +			 "reo2ppe_%d", ab->ppe.ds_node_id);
 +		ret = devm_request_irq(&pdev->dev, irq,  ath12k_ds_reo2ppe_irq_handler,
@@ -174,7 +172,7 @@ index a54706f..a6bcb37 100644
  	.start = ath12k_ahb_start,
  	.stop = ath12k_ahb_stop,
  	.read32 = ath12k_ahb_read32,
-@@ -786,6 +904,12 @@ static const struct ath12k_hif_ops ath12k_ahb_hif_ops = {
+@@ -786,6 +904,12 @@ static const struct ath12k_hif_ops ath12
  	.dp_umac_reset_irq_config = ath12k_ahb_dp_umac_config_irq,
  	.dp_umac_reset_enable_irq = ath12k_ahb_dp_umac_reset_enable_irq,
  	.dp_umac_reset_free_irq = ath12k_ahb_dp_umac_reset_free_irq,
@@ -187,11 +185,9 @@ index a54706f..a6bcb37 100644
  };
  
  static const struct ath12k_hif_ops ath12k_ahb_hif_ops_qcn6432 = {
-diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
-index faa6500..97a5032 100644
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -1861,8 +1861,8 @@ int ath12k_core_qmi_firmware_ready(struct ath12k_base *ab)
+@@ -1865,8 +1865,8 @@ int ath12k_core_qmi_firmware_ready(struc
  			 * TODO: add device capability check
  			 */
  			ath12k_ppe_ds_enabled = 0;
@@ -202,8 +198,6 @@ index faa6500..97a5032 100644
  	}
  #endif
  
-diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
-index 8d159ad..05b5498 100644
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
 @@ -189,7 +189,7 @@ enum ath12k_firmware_mode {
@@ -215,11 +209,9 @@ index 8d159ad..05b5498 100644
  #define ATH12K_EXT_IRQ_NUM_MAX	16
  #define ATH12K_MAX_TCL_RING_NUM 3
  
-diff --git a/drivers/net/wireless/ath/ath12k/dp.c b/drivers/net/wireless/ath/ath12k/dp.c
-index 0138159..6311f1e 100644
 --- a/drivers/net/wireless/ath/ath12k/dp.c
 +++ b/drivers/net/wireless/ath/ath12k/dp.c
-@@ -308,7 +308,7 @@ static void ath12k_dp_srng_msi_setup(struct ath12k_base *ab,
+@@ -314,7 +314,7 @@ static void ath12k_dp_srng_msi_setup(str
  	/* Interrupt will not be freed for non-asserted chips
  	 * during UMAC reset
  	 */
@@ -228,7 +220,7 @@ index 0138159..6311f1e 100644
  		ath12k_hif_ppeds_register_interrupts(ab, type, vector, ring_num);
  }
  
-@@ -367,12 +367,17 @@ static int ath12k_dp_srng_init_idx(struct ath12k_base *ab, struct dp_srng *ring,
+@@ -373,12 +373,17 @@ static int ath12k_dp_srng_init_idx(struc
  	struct hal_srng_params params = { 0 };
  	bool cached = false;
  	int ret;
@@ -246,7 +238,7 @@ index 0138159..6311f1e 100644
  	switch (type) {
  	case HAL_REO_DST:
  	case HAL_REO2PPE:
-@@ -494,6 +499,7 @@ int ath12k_dp_srng_setup(struct ath12k_base *ab, struct dp_srng *ring,
+@@ -500,6 +505,7 @@ int ath12k_dp_srng_setup(struct ath12k_b
  	int max_entries = ath12k_hal_srng_get_max_entries(ab, type);
  	int ret;
  	bool cached = false;
@@ -254,7 +246,7 @@ index 0138159..6311f1e 100644
  
  	if (max_entries < 0 || entry_sz < 0)
  		return -EINVAL;
-@@ -540,6 +546,10 @@ skip_dma_alloc:
+@@ -546,6 +552,10 @@ skip_dma_alloc:
  	params.num_entries = num_entries;
  	ath12k_dp_srng_msi_setup(ab, &params, type, ring_num + mac_id);
  
@@ -265,11 +257,9 @@ index 0138159..6311f1e 100644
  	switch (type) {
  	case HAL_REO_DST:
  	case HAL_REO2PPE:
-diff --git a/drivers/net/wireless/ath/ath12k/hw.c b/drivers/net/wireless/ath/ath12k/hw.c
-index 84f0857..e8baed1 100644
 --- a/drivers/net/wireless/ath/ath12k/hw.c
 +++ b/drivers/net/wireless/ath/ath12k/hw.c
-@@ -1563,6 +1563,12 @@ const struct ath12k_hw_regs ipq5424_hw_regs = {
+@@ -1563,6 +1563,12 @@ const struct ath12k_hw_regs ipq5424_hw_r
  	.hal_wbm0_release_ring_base_lsb = 0x00000e08,
  	.hal_wbm1_release_ring_base_lsb = 0x00000e80,
  
@@ -282,7 +272,7 @@ index 84f0857..e8baed1 100644
  	/* CE base address */
  	.hal_umac_ce0_src_reg_base = 0x00200000,
  	.hal_umac_ce0_dest_reg_base = 0x00201000,
-@@ -1911,6 +1917,7 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+@@ -1913,6 +1919,7 @@ static struct ath12k_hw_params ath12k_hw
  		.cfr_support = true,
  		.cfr_dma_hdr_size = sizeof(struct ath12k_cfir_enh_dma_hdr),
  		.cfr_num_stream_bufs = 127,
@@ -290,7 +280,7 @@ index 84f0857..e8baed1 100644
  		/* sizeof (ath12k_csi_cfr_header) + max cfr header(200 bytes) +
  		 * max cfr payload(16384 bytes)
  		 */
-@@ -1997,6 +2004,7 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+@@ -1999,6 +2006,7 @@ static struct ath12k_hw_params ath12k_hw
  		.cfr_support = true,
  		.cfr_dma_hdr_size = sizeof(struct ath12k_cfir_enh_dma_hdr),
  		.cfr_num_stream_bufs = 255,
@@ -298,7 +288,7 @@ index 84f0857..e8baed1 100644
  		/* sizeof (ath12k_csi_cfr_header) + max cfr header(200 bytes) +
  		 * max cfr payload(16384 bytes)
  		 */
-@@ -2096,6 +2104,7 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+@@ -2098,6 +2106,7 @@ static struct ath12k_hw_params ath12k_hw
  		.cfr_support = true,
  		.cfr_dma_hdr_size = sizeof(struct ath12k_cfir_enh_dma_hdr),
  		.cfr_num_stream_bufs = 127,
@@ -306,7 +296,7 @@ index 84f0857..e8baed1 100644
  		/* sizeof (ath12k_csi_cfr_header) + max cfr header(200 bytes) +
  		 * max cfr payload(16384 bytes)
  		 */
-@@ -2199,6 +2208,7 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+@@ -2201,6 +2210,7 @@ static struct ath12k_hw_params ath12k_hw
  		.cfr_support = true,
  		.cfr_dma_hdr_size = sizeof(struct ath12k_cfir_enh_dma_hdr),
  		.cfr_num_stream_bufs = 255,
@@ -314,7 +304,7 @@ index 84f0857..e8baed1 100644
  		/* sizeof (ath12k_csi_cfr_header) + max cfr header(200 bytes) +
  		 * max cfr payload(16384 bytes)
  		 */
-@@ -2295,6 +2305,7 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
+@@ -2297,6 +2307,7 @@ static struct ath12k_hw_params ath12k_hw
  		.cfr_support = true,
  		.cfr_dma_hdr_size = sizeof(struct ath12k_cfir_enh_dma_hdr),
  		.cfr_num_stream_bufs = 128,
@@ -322,16 +312,14 @@ index 84f0857..e8baed1 100644
  		/* sizeof (ath12k_csi_cfr_header) + max cfr header(200 bytes) +
  		 * max cfr payload(16384 bytes)
  		 */
-@@ -2391,6 +2402,7 @@ static struct ath12k_hw_params ath12k_hw_params[] = {
- 		.support_fse = false,
+@@ -2395,6 +2406,7 @@ static struct ath12k_hw_params ath12k_hw
+ 		.support_fse = true,
  		.handle_beacon_miss = true,
  		.cfr_support = false,
 +		.ds_support = true,
  		.cfr_dma_hdr_size = sizeof(struct ath12k_cfir_enh_dma_hdr),
  		.cfr_num_stream_bufs = 128,
  		/* sizeof (ath12k_csi_cfr_header) + max cfr header(200 bytes) +
-diff --git a/drivers/net/wireless/ath/ath12k/hw.h b/drivers/net/wireless/ath/ath12k/hw.h
-index 7aa99b9..5812d79 100644
 --- a/drivers/net/wireless/ath/ath12k/hw.h
 +++ b/drivers/net/wireless/ath/ath12k/hw.h
 @@ -284,6 +284,7 @@ struct ath12k_hw_params {
@@ -342,6 +330,3 @@ index 7aa99b9..5812d79 100644
  	u32 cfr_dma_hdr_size;
  	u32 cfr_num_stream_bufs;
  	u32 cfr_stream_buf_size;
--- 
-2.17.1
-

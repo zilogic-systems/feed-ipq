@@ -1,0 +1,60 @@
+From 92dbcf2b43f495db0833cfcaae1ee1485b175214 Mon Sep 17 00:00:00 2001
+From: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+Date: Fri, 20 Dec 2024 23:54:49 +0530
+Subject: [PATCH] UPSTREAM:CP:wifi:ath12k: Fix phymode bandwidth update
+ sequence
+
+During channel switch, when bandwidth is upgraded phymode update should
+happen first followed by channel width update and viceversa during
+bandwidth downgrade.
+
+The sequence is decided by comparing current bandwidth and previous
+bandwidth updated during peer association. For station mode the
+bandwidth is never updated causing it to be default 0. When comparision
+happens during bandwidth downgrade, the current bandwidth is always greater
+than previous bandwidth causing phymode to update first which results in
+Q6 crash due to wrong
+sequence.
+
+Fix by updating the bandwidth during association for station mode as
+well.
+
+Patch-work: None
+Patch-dependency: None
+
+Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/mac.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -4478,6 +4478,7 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 	u8 link_id;
+ 	u16 he_6ghz_capa;
+ 	struct ieee80211_link_sta *link_sta;
++	enum ieee80211_sta_rx_bandwidth bandwidth;
+ 	u8 bssid[ETH_ALEN];
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+@@ -4534,6 +4535,7 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 	he_6ghz_capa = link_sta->he_6ghz_capa.capa;
+ 	he_cap = link_sta->he_cap;
+ 	ht_cap = link_sta->ht_cap;
++	bandwidth = link_sta->bandwidth;
+ 
+ 	ath12k_peer_assoc_prepare(ar, arvif, arsta, &peer_arg, false, link_sta);
+ 
+@@ -4596,6 +4598,12 @@ void ath12k_bss_assoc(struct ath12k *ar,
+ 		params.tx_bssid = bss_conf->transmitter_bssid;
+ 	}
+ 
++	spin_lock_bh(&ar->data_lock);
++	/* Set arsta bw and prev bw */
++	arsta->bw = bandwidth;
++	arsta->bw_prev = bandwidth;
++	spin_unlock_bh(&ar->data_lock);
++
+ 	if (ar->ab->ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE1 &&
+ 	    !ar->ab->is_reset)
+ 		/* Skip sending vdev up for non-asserted links while

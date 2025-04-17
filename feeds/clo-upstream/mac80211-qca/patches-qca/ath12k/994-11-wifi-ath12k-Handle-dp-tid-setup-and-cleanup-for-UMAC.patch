@@ -1,0 +1,353 @@
+From adc51574e79aa5e4a1936ce404b2e064cb270bcb Mon Sep 17 00:00:00 2001
+From: Girish Kumar M P <quic_gmp@quicinc.com>
+Date: Wed, 11 Dec 2024 14:48:23 +0530
+Subject: [PATCH] wifi: ath12k: Handle dp tid setup and cleanup for UMAC
+ Migration
+
+UMAC Migration involves transferring the Primary TQM from one firmware
+to another without disconnecting the MLD peer.
+
+Add Api's to send HAL_REO_CMD_FLUSH_QUEUE and HAL_REO_CMD_UNBLOCK_CACHE
+reo commands.
+
+Currently performing tid setup for the new primary peer incase of
+dp_setup_done bit is not set for the peer.
+
+Tid cleanup is performed for the old primary peer only after the
+migration is success.
+
+Patch Dependency: ALL UMAC migration patches [994 Series]
+FR 105112: Ath12k Core Infrastructure for UMAC Migration
+
+Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_rx.c    | 178 ++++++++++++++++++++-
+ drivers/net/wireless/ath/ath12k/dp_rx.h    |   2 +
+ drivers/net/wireless/ath/ath12k/hal_desc.h |   2 +-
+ drivers/net/wireless/ath/ath12k/hal_rx.c   |  48 ++++++
+ 4 files changed, 228 insertions(+), 2 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -928,6 +928,7 @@ void ath12k_dp_rx_peer_tid_delete(struct
+ 	elem->ml_peer_id = peer->ml_peer_id;
+ 
+ 	memcpy(&elem->data, rx_tid, sizeof(*rx_tid));
++	rx_tid->active = false;
+ 
+ 	spin_lock_bh(&dp->reo_cmd_update_rx_queue_lock);
+ 	list_add_tail(&elem->list, &dp->reo_cmd_update_rx_queue_list);
+@@ -2558,6 +2559,182 @@ static void ath12k_htt_sawf_info_ind_han
+ #endif /* CPTCFG_ATH12K_SAWF */
+ 
+ static void
++ath12k_dp_primary_peer_migrate_setup(struct ath12k_dp *dp, void *ctx,
++				     enum hal_reo_cmd_status status)
++{
++	struct ath12k_base *ab;
++	struct ath12k_dp_rx_tid *rx_tid = ctx;
++	struct ath12k_peer *peer;
++	struct ath12k_link_sta *arsta;
++	struct ath12k_sta *ahsta;
++	struct ath12k *ar;
++	struct crypto_shash *tfm = rx_tid->tfm;
++	int ret, tid;
++
++	if (status != HAL_REO_CMD_SUCCESS)
++		goto migration_fail;
++
++	ab = dp->ab->ag->ab[rx_tid->chip_id];
++
++	spin_lock_bh(&ab->base_lock);
++
++	peer = ath12k_peer_find_by_id(ab, rx_tid->peer_id);
++	if (!peer) {
++		ath12k_warn(ab, "failed to find peer for peer_id %d\n", rx_tid->peer_id);
++		spin_unlock_bh(&ab->base_lock);
++		goto migration_fail;
++	}
++
++	ath12k_info(ab, "htt new primary peer to %pM peer_id 0x%x ml_peer_id 0x%x link_id 0x%x chip_id 0x%x\n",
++		    peer->addr, peer->peer_id, peer->ml_peer_id, peer->link_id, rx_tid->chip_id);
++
++	ahsta = ath12k_sta_to_ahsta(peer->sta);
++	arsta = ahsta->link[peer->link_id];
++	if (!arsta || !arsta->arvif || !arsta->arvif->ar) {
++		spin_unlock_bh(&ab->base_lock);
++		goto migration_fail;
++	}
++
++	if (peer->dp_setup_done) {
++		ath12k_warn(ab, "peer tid setup is already done for the peer_id %x in migration event\n",
++			    peer->peer_id);
++		WARN_ON(1);
++		goto migration_success;
++	}
++
++	ar = arsta->arvif->ar;
++
++	for (tid = 0; tid <= IEEE80211_NUM_TIDS; tid++) {
++		rx_tid = &peer->rx_tid[tid];
++
++		ret = ath12k_dp_rx_peer_tid_setup(ar, tid, 1, 0, HAL_PN_TYPE_NONE, peer);
++		if (ret) {
++			ath12k_warn(ab, "failed to setup rxd tid queue for tid %d: %d in migration event\n",
++				    tid, ret);
++			goto peer_tid_clean;
++		}
++	}
++
++	ret = ath12k_dp_rx_peer_frag_setup(ar, peer, tfm);
++	if (ret) {
++		ath12k_warn(ab, "failed to setup rx defrag context for peer_id %x in migration event\n",
++			    peer->peer_id);
++		goto peer_tid_clean;
++	}
++
++migration_success:
++	arsta->arvif->primary_sta_link = true;
++	peer->primary_link = true;
++	spin_unlock_bh(&ab->base_lock);
++	complete(&ahsta->dp_migration_event);
++	return;
++
++peer_tid_clean:
++	for (tid--; tid >= 0; tid--)
++		ath12k_dp_rx_peer_tid_delete(ar, peer, tid);
++	spin_unlock_bh(&ab->base_lock);
++migration_fail:
++	crypto_free_shash(tfm);
++	complete(&ahsta->dp_migration_event);
++}
++
++static int
++ath12k_dp_peer_migrate(struct ath12k_sta *ahsta, u16 peer_id,
++		       u8 chip_id)
++{
++	struct ath12k_base *ab;
++	struct ath12k_peer *peer;
++	struct ath12k_dp_rx_tid *rx_tid;
++	struct ath12k_hal_reo_cmd cmd = {0};
++	struct ath12k_link_sta *arsta;
++	struct ath12k *ar;
++	int ret, tid;
++
++	arsta = ahsta->link[ahsta->primary_link_id];
++	if (!arsta->arvif || !arsta->arvif->ar || !arsta->arvif->ar->ab)
++		goto out;
++
++	ar = arsta->arvif->ar;
++	ab = ar->ab;
++
++	spin_lock_bh(&ab->base_lock);
++
++	peer = ath12k_peer_find(ab,
++				arsta->arvif->vdev_id, arsta->addr);
++	if (!peer || !peer->primary_link) {
++		ath12k_warn(ab,
++			    "failed to fetch primary peer for peer addr %pM in MLO pri link migration event\n",
++			    arsta->addr);
++		goto unlock;
++	}
++
++	ath12k_info(ab, "htt current primary peer  %pM peer_id 0x%x ml_peer_id 0x%x link_id 0x%x\n",
++		    peer->addr, peer->peer_id, peer->ml_peer_id, peer->link_id);
++
++	peer->primary_link = false;
++	arsta->arvif->primary_sta_link = false;
++
++	for (tid = 0; tid <= IEEE80211_NUM_TIDS; tid++) {
++		rx_tid = &peer->rx_tid[tid];
++
++		cmd.addr_lo = lower_32_bits(rx_tid->paddr);
++		cmd.addr_hi = upper_32_bits(rx_tid->paddr);
++		cmd.flag |= HAL_REO_CMD_FLG_NEED_STATUS;
++		ret = ath12k_dp_reo_cmd_send(ab, rx_tid, HAL_REO_CMD_FLUSH_QUEUE,
++					     &cmd, NULL);
++		if (ret) {
++			ath12k_warn(ab, "failed to flush rx tid queue, tid %d (%d)\n",
++				    rx_tid->tid, ret);
++			goto unlock;
++		}
++	}
++
++	cmd.flag = 0;
++	rx_tid = &peer->rx_tid[0];
++	rx_tid->chip_id = chip_id;
++	rx_tid->peer_id = peer_id;
++	rx_tid->tfm = peer->tfm_mmic;
++
++	/* TODO: Synchronize with DP fragment path */
++	peer->tfm_mmic = NULL;
++
++	cmd.addr_lo = lower_32_bits(rx_tid->paddr);
++	cmd.addr_hi = upper_32_bits(rx_tid->paddr);
++	cmd.flag |= HAL_REO_CMD_FLG_NEED_STATUS;
++	cmd.flag |= HAL_REO_CMD_FLG_FLUSH_ALL;
++
++	ret = ath12k_dp_reo_cmd_send(ab, rx_tid,
++				     HAL_REO_CMD_FLUSH_CACHE,
++				     &cmd, ath12k_dp_primary_peer_migrate_setup);
++	if (ret) {
++		ath12k_warn(ab, "failed to flush cache for peer_id %x\n", peer->peer_id);
++		goto unlock;
++	}
++
++	cmd.flag = 0;
++	cmd.flag = HAL_REO_CMD_FLG_UNBLK_CACHE;
++
++	ret = ath12k_dp_reo_cmd_send(ab, rx_tid, HAL_REO_CMD_UNBLOCK_CACHE, &cmd, NULL);
++	if (ret) {
++		ath12k_warn(ab, "failed to unblock cache for peer_id %x\n", peer->peer_id);
++		goto unlock;
++	}
++
++	/* TODO: Synchronize with DP fragment path */
++	ath12k_dp_rx_peer_tid_cleanup(ar, peer);
++	peer->dp_setup_done = false;
++
++	spin_unlock_bh(&ab->base_lock);
++	return 0;
++
++unlock:
++	spin_unlock_bh(&ab->base_lock);
++out:
++	complete(&ahsta->dp_migration_event);
++	return -EINVAL;
++}
++
++static void
+ ath12k_htt_pri_link_peer_migrate_indication(struct ath12k_base *ab,
+ 					    struct sk_buff *skb)
+ {
+@@ -2615,19 +2792,21 @@ ath12k_htt_pri_link_peer_migrate_indicat
+ 	if (!peer) {
+ 		ath12k_warn(pri_ab, "htt can not find peer fo peer id %d\n",
+ 			    peer_id);
+-		goto exit_pri_link_migr_ind;
++		spin_unlock_bh(&pri_ab->base_lock);
++		goto err_pri_link_migr_ind;
+ 	}
+ 
+ 	if (peer->ml_peer_id != ml_peer_id) {
+ 		ath12k_warn(pri_ab, "htt ML peer id mis-match. Expected %d got %d\n",
+ 			    peer->ml_peer_id, ml_peer_id);
+-
+-		goto exit_pri_link_migr_ind;
++		spin_unlock_bh(&pri_ab->base_lock);
++		goto err_pri_link_migr_ind;
+ 	}
+ 
+ 	if (peer->primary_link) {
+ 		ath12k_warn(pri_ab, "htt ML peer is already primary\n");
+-		goto exit_pri_link_migr_ind;
++		spin_unlock_bh(&pri_ab->base_lock);
++		goto err_pri_link_migr_ind;
+ 	}
+ 
+ 	ahsta = ath12k_sta_to_ahsta(peer->sta);
+@@ -2641,12 +2820,12 @@ ath12k_htt_pri_link_peer_migrate_indicat
+ 
+ 	reinit_completion(&ahsta->dp_migration_event);
+ 
+-	/* TODO: DP migration changes */
++	spin_unlock_bh(&pri_ab->base_lock);
++
++	ret = ath12k_dp_peer_migrate(ahsta, peer_id, chip_id);
+ 	if (ret)
+ 		ath12k_warn(pri_ab, "htt ML peer failed to migrate (%d)\n", ret);
+ 
+-exit_pri_link_migr_ind:
+-	spin_unlock_bh(&pri_ab->base_lock);
+ err_pri_link_migr_ind:
+ 	queue_work(ab->workqueue, &ahsta->migration_wk);
+ }
+--- a/drivers/net/wireless/ath/ath12k/hal_desc.h
++++ b/drivers/net/wireless/ath/ath12k/hal_desc.h
+@@ -2552,7 +2552,7 @@ struct hal_reo_update_rx_queue {
+ struct hal_reo_unblock_cache {
+ 	struct hal_reo_cmd_hdr cmd;
+ 	__le32 info0;
+-	__le32 rsvd[7];
++	__le32 rsvd[8];
+ } __packed;
+ 
+ enum hal_reo_exec_status {
+--- a/drivers/net/wireless/ath/ath12k/hal_rx.c
++++ b/drivers/net/wireless/ath/ath12k/hal_rx.c
+@@ -45,6 +45,49 @@ static int ath12k_hal_reo_cmd_queue_stat
+ 	return le32_get_bits(desc->cmd.info0, HAL_REO_CMD_HDR_INFO0_CMD_NUMBER);
+ }
+ 
++static int ath12k_hal_reo_cmd_flush_queue(struct hal_tlv_64_hdr *tlv,
++					  struct ath12k_hal_reo_cmd *cmd)
++{
++	struct hal_reo_flush_queue *desc = (struct hal_reo_flush_queue *)tlv->value;
++
++	tlv->tl = u32_encode_bits(HAL_REO_FLUSH_QUEUE, HAL_TLV_HDR_TAG) |
++		  u32_encode_bits(sizeof(*desc), HAL_TLV_HDR_LEN);
++
++	memset_startat(desc, 0, desc_addr_lo);
++
++	desc->cmd.info0 &= ~cpu_to_le32(HAL_REO_CMD_HDR_INFO0_STATUS_REQUIRED);
++
++	if (cmd->flag & HAL_REO_CMD_FLG_NEED_STATUS)
++		desc->cmd.info0 |= cpu_to_le32(HAL_REO_CMD_HDR_INFO0_STATUS_REQUIRED);
++
++	desc->desc_addr_lo = cpu_to_le32(cmd->addr_lo);
++	desc->info0 = le32_encode_bits(cmd->addr_hi,
++				       HAL_REO_FLUSH_QUEUE_INFO0_DESC_ADDR_HI);
++
++	return le32_get_bits(desc->cmd.info0, HAL_REO_CMD_HDR_INFO0_CMD_NUMBER);
++}
++
++static int ath12k_hal_reo_cmd_unblock_cache(struct hal_tlv_64_hdr *tlv,
++					    struct ath12k_hal_reo_cmd *cmd)
++{
++	struct hal_reo_unblock_cache *desc =
++		(struct hal_reo_unblock_cache *)tlv->value;
++
++	tlv->tl = u32_encode_bits(HAL_REO_UNBLOCK_CACHE, HAL_TLV_HDR_TAG) |
++		u32_encode_bits(sizeof(*desc), HAL_TLV_HDR_LEN);
++
++	memset_startat(desc, 0, info0);
++
++	desc->cmd.info0 &= ~cpu_to_le32(HAL_REO_CMD_HDR_INFO0_STATUS_REQUIRED);
++
++	if (cmd->flag & HAL_REO_CMD_FLG_NEED_STATUS)
++		desc->cmd.info0 |= cpu_to_le32(HAL_REO_CMD_HDR_INFO0_STATUS_REQUIRED);
++
++	desc->info0 = HAL_REO_UNBLOCK_CACHE_INFO0_UNBLK_CACHE;
++
++	return le32_get_bits(desc->cmd.info0, HAL_REO_CMD_HDR_INFO0_CMD_NUMBER);
++}
++
+ static int ath12k_hal_reo_cmd_flush_cache(struct ath12k_hal *hal,
+ 					  struct hal_tlv_64_hdr *tlv,
+ 					  struct ath12k_hal_reo_cmd *cmd)
+@@ -247,7 +290,11 @@ int ath12k_hal_reo_cmd_send(struct ath12
+ 		ret = ath12k_hal_reo_cmd_update_rx_queue(reo_desc, cmd);
+ 		break;
+ 	case HAL_REO_CMD_FLUSH_QUEUE:
++		ret = ath12k_hal_reo_cmd_flush_queue(reo_desc, cmd);
++		break;
+ 	case HAL_REO_CMD_UNBLOCK_CACHE:
++		ret = ath12k_hal_reo_cmd_unblock_cache(reo_desc, cmd);
++		break;
+ 	case HAL_REO_CMD_FLUSH_TIMEOUT_LIST:
+ 		ath12k_warn(ab, "Unsupported reo command %d\n", type);
+ 		ret = -ENOTSUPP;
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.h
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.h
+@@ -64,6 +64,11 @@ struct ath12k_dp_rx_tid {
+ 	struct sk_buff_head rx_frags;
+ 	struct hal_reo_dest_ring *dst_ring_desc;
+ 
++	/* Info related to UMAC migration */
++	u16     peer_id;
++	u8      chip_id;
++	struct crypto_shash *tfm;
++
+ 	/* Timer info related to fragments */
+ 	struct timer_list frag_timer;
+ 	struct ath12k_base *ab;

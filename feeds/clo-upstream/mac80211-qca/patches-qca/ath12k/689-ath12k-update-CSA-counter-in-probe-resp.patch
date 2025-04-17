@@ -50,7 +50,7 @@ index 44c8de9..e9f6158 100644
 -			ieee80211_csa_finish(arvif->ahvif->vif);
 +		if (arvif->is_up && link_conf->csa_active) {
 +			if (!ev->current_switch_count)
-+				ieee80211_csa_finish(arvif->ahvif->vif);
++				ieee80211_csa_finish(arvif->ahvif->vif, arvif->link_id);
 +			else if (ev->current_switch_count > 1)
 +				ieee80211_beacon_update_cntdwn(arvif->ahvif->vif);
 +		}

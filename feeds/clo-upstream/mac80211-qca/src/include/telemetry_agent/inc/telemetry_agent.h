@@ -100,6 +100,7 @@ struct agent_peer_db {
 	void *peer_obj_ptr;
 	void *pdev_obj_ptr;
 	void *psoc_obj_ptr;
+	uint16_t peer_id;
 	uint8_t peer_mac_addr[6];
 	uint32_t tx_mpdu_retried;
 	uint32_t tx_mpdu_total;
@@ -146,12 +147,16 @@ struct agent_rm_telemetry {
 	struct rchan *rfs_channel_pmlo;
 	/* delyed work for pmlo service */
 	struct delayed_work stats_work_init_pmlo;
+	/* delyed work for containerized pmlo service */
+	struct delayed_work stats_work_init_cont_pmlo;
 	/* delyed work periodic for pmlo service*/
 	struct delayed_work stats_work_periodic_pmlo;
 	/* relay(fs) telemetry channel for deterministic scheduler*/
 	struct rchan *rfs_channel_deter;
 	/* delyed work for deter sched service */
 	struct delayed_work stats_work_init_deter;
+	/* delyed work for containerized deter sched service */
+	struct delayed_work stats_work_init_cont_deter;
 	/* delayed telemetry deterministic stats work periodic*/
 	struct delayed_work stats_work_periodic_deter;
 	/* relay(fs) channel for erp service */
@@ -166,12 +171,16 @@ struct agent_rm_telemetry {
 	struct rchan *rfs_channel_admctrl;
 	/* delayed work init for admission control service */
 	struct delayed_work stats_work_init_admctrl;
+	/* delayed work init for containerized admission control service */
+	struct delayed_work stats_work_init_cont_admctrl;
 	/* delayed work periodic for admission control stats */
 	struct delayed_work stats_work_periodic_admctrl;
 	/* relay(fs) channel for energy service */
 	struct rchan *rfs_channel_energysvc;
 	/* delayed work init for energy service */
 	struct delayed_work stats_work_init_energysvc;
+	/* delayed work init for containerized energy service */
+	struct delayed_work stats_work_init_cont_energysvc;
 	/* delayed work periodic for energy service */
 	struct delayed_work stats_work_periodic_energysvc;
 	/* delyed work for dynamic service init */
@@ -195,6 +204,7 @@ struct telemetry_agent_object {
 	/* lock for agent_db */
 	spinlock_t agent_lock;
 	struct timer_list peer_stats_timer;
+	bool peer_stats_timer_enabled;
 };
 
 

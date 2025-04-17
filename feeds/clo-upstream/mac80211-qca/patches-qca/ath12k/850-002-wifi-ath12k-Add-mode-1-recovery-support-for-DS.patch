@@ -28,7 +28,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -3310,6 +3310,7 @@ static void ath12k_core_disable_ppe_rtnl
+@@ -3293,6 +3293,7 @@ static void ath12k_core_disable_ppe_rtnl
  	struct ath12k *ar;
  	struct ath12k_pdev *pdev;
  	struct ath12k_link_vif *arvif;
@@ -36,7 +36,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  	int i;
  
  	rtnl_lock();
-@@ -3324,16 +3325,21 @@ static void ath12k_core_disable_ppe_rtnl
+@@ -3307,16 +3308,21 @@ static void ath12k_core_disable_ppe_rtnl
  		mutex_lock(&ar->conf_mutex);
  		list_for_each_entry(arvif, &ar->arvifs, list) {
  			if (arvif->ndev_pvt) {
@@ -62,7 +62,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  				}
  			}
  		}
-@@ -3350,19 +3356,12 @@ static void ath12k_core_reset(struct wor
+@@ -3333,19 +3339,12 @@ static void ath12k_core_reset(struct wor
  	struct ath12k_hw_group *ag = ab->ag;
  	struct ath12k_hw *ah;
  	struct ath12k_base *partner_ab;
@@ -85,7 +85,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  	/* Initializing this flag to false, as this flag will be only
  	 * set true on Mode1 SSR.
  	 */
-@@ -3388,6 +3387,15 @@ static void ath12k_core_reset(struct wor
+@@ -3371,6 +3370,15 @@ static void ath12k_core_reset(struct wor
  		ath12k_info(ab, "Recovery is initiated with Mode%s\n",
  			   (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0 ? "0" : "1"));
  
@@ -101,13 +101,13 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  	/* Sometimes the recovery will fail and then the next all recovery fail,
  	 * this is to avoid infinite recovery since it can not recovery success.
  	 */
-@@ -3449,8 +3457,26 @@ static void ath12k_core_reset(struct wor
+@@ -3432,8 +3440,26 @@ static void ath12k_core_reset(struct wor
  	if (ag->num_started && ab->fw_recovery_support)
  		ag->num_started--;
  
 -	if (!ag->hw_queues_stopped)
 +	if (!ag->hw_queues_stopped) {
- 		ath12k_core_mlo_hw_queues_stop(ag, ab);
+ 		ath12k_core_mlo_hw_queues_stop(ag);
 +#ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
 +		if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE1) {
 +			for (i = 0; i < ag->num_chip; i++) {
@@ -129,7 +129,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  
  	for (i = 0; i < ag->num_chip; i++) {
  		partner_ab = ag->ab[i];
-@@ -3498,6 +3524,7 @@ static void ath12k_core_reset(struct wor
+@@ -3481,6 +3507,7 @@ static void ath12k_core_reset(struct wor
  			 * failed
  			 */
  			ag->recovery_mode = ATH12K_MLO_RECOVERY_MODE0;
@@ -137,7 +137,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  			ath12k_info(ab, "Recovery is falling back to Mode0\n");
  		} else {
  			/* wake queues here as ping should continue for
-@@ -3509,9 +3536,24 @@ static void ath12k_core_reset(struct wor
+@@ -3492,9 +3519,24 @@ static void ath12k_core_reset(struct wor
  					continue;
  
  				ieee80211_wake_queues(ah->hw);
@@ -166,7 +166,7 @@ Signed-off-by: Ramya Gnanasekar <quic_rgnanase@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -10811,8 +10811,7 @@ static void ath12k_update_obss_color_not
+@@ -10791,8 +10791,7 @@ static void ath12k_update_obss_color_not
  				ath12k_free_bonddev_for_sfe(wdev, vif, link_id);
  				arvif->ndev_pvt = NULL;
  				arvif->ppe_vp_num = -1;

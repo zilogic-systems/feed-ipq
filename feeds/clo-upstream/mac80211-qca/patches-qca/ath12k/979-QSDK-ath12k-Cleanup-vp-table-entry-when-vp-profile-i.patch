@@ -15,15 +15,12 @@ Signed-off-by: Pavankumar Nandeshwar <quic_pnandesh@quicinc.com>
  drivers/net/wireless/ath/ath12k/ppe.c | 142 +++++++++++++-------------
  1 file changed, 72 insertions(+), 70 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/ppe.c b/drivers/net/wireless/ath/ath12k/ppe.c
-index 9adc914..51b84de 100644
 --- a/drivers/net/wireless/ath/ath12k/ppe.c
 +++ b/drivers/net/wireless/ath/ath12k/ppe.c
-@@ -647,11 +647,56 @@ end:
- 	return i;
+@@ -648,10 +648,57 @@ end:
  }
  
-+static void
+ static void
 +ath12k_dp_ppeds_dealloc_vp_search_idx_tbl_entry(struct ath12k_base *ab,
 +                                              int ppe_vp_search_idx)
 +{
@@ -55,7 +52,9 @@ index 9adc914..51b84de 100644
 +		return;
 +	}
 +
-+	ath12k_hal_tx_set_ppe_vp_entry(ab, vp_cfg, ppe_vp_num_idx);
++	/* Prevent register write if SOC is in recovery */
++	if (!test_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags))
++		ath12k_hal_tx_set_ppe_vp_entry(ab, vp_cfg, ppe_vp_num_idx);
 +
 +	if (!ab->ppe.ppe_vp_tbl_registered[ppe_vp_num_idx]) {
 +		ath12k_err(ab, "PPE VP is not configured at idx:%d", ppe_vp_num_idx);
@@ -66,7 +65,7 @@ index 9adc914..51b84de 100644
 +	ab->ppe.num_ppe_vp_entries--;
 +}
 +
- static void
++static void
  ath12k_dp_ppeds_dealloc_ppe_vp_profile(struct ath12k_base *ab,
 -				       int ppe_vp_profile_idx)
 +				       int ppe_vp_profile_idx,
@@ -77,7 +76,7 @@ index 9adc914..51b84de 100644
  
  	if (ppe_vp_profile_idx < 0 || ppe_vp_profile_idx >= PPE_VP_ENTRIES_MAX) {
  		ath12k_err(ab, "Invalid PPE VP profile free index");
-@@ -659,18 +704,26 @@ ath12k_dp_ppeds_dealloc_ppe_vp_profile(struct ath12k_base *ab,
+@@ -659,18 +706,26 @@ ath12k_dp_ppeds_dealloc_ppe_vp_profile(s
  	}
  
  	mutex_lock(&ab->ppe.ppe_vp_tbl_lock);
@@ -108,7 +107,7 @@ index 9adc914..51b84de 100644
  	}
  	mutex_unlock(&ab->ppe.ppe_vp_tbl_lock);
  
-@@ -707,30 +760,6 @@ static int ath12k_dp_ppeds_alloc_vp_tbl_entry(struct ath12k_base *ab)
+@@ -707,30 +762,6 @@ static int ath12k_dp_ppeds_alloc_vp_tbl_
  	return i;
  }
  
@@ -139,7 +138,7 @@ index 9adc914..51b84de 100644
  static int ath12k_dp_ppeds_alloc_vp_search_idx_tbl_entry(struct ath12k_base *ab)
  {
  	int i;
-@@ -761,31 +790,6 @@ static int ath12k_dp_ppeds_alloc_vp_search_idx_tbl_entry(struct ath12k_base *ab)
+@@ -761,31 +792,6 @@ static int ath12k_dp_ppeds_alloc_vp_sear
  	return i;
  }
  
@@ -171,7 +170,7 @@ index 9adc914..51b84de 100644
  static void ath12k_dp_ppeds_setup_vp_entry(struct ath12k_base *ab,
  					   struct ath12k *ar,
  					   struct ath12k_link_vif *arvif,
-@@ -879,6 +883,7 @@ static int ath12k_ppeds_attach_link_apvlan_vif(struct ath12k_link_vif *arvif, in
+@@ -879,6 +885,7 @@ static int ath12k_ppeds_attach_link_apvl
  	int ppe_vp_search_tbl_idx = -1;
  	int vdev_id = arvif->vdev_id;
  	int ret;
@@ -179,7 +178,7 @@ index 9adc914..51b84de 100644
  
  	if (wdev == NULL)
  		return -EOPNOTSUPP;
-@@ -917,7 +922,7 @@ static int ath12k_ppeds_attach_link_apvlan_vif(struct ath12k_link_vif *arvif, in
+@@ -917,7 +924,7 @@ static int ath12k_ppeds_attach_link_apvl
  				ath12k_err(ab,
  						"Failed to allocate PPE VP search table idx for vdev_id:%d", vdev_id);
  				ret = -ENOSR;
@@ -188,7 +187,7 @@ index 9adc914..51b84de 100644
  			}
  			vp_profile->search_idx_reg_num = ppe_vp_search_tbl_idx;
  		}
-@@ -963,10 +968,9 @@ static int ath12k_ppeds_attach_link_apvlan_vif(struct ath12k_link_vif *arvif, in
+@@ -963,10 +970,9 @@ static int ath12k_ppeds_attach_link_apvl
  
  	return 0;
  
@@ -201,7 +200,7 @@ index 9adc914..51b84de 100644
  
  	return ret;
  }
-@@ -1013,6 +1017,7 @@ int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
+@@ -1013,6 +1019,7 @@ int ath12k_ppeds_attach_link_vif(struct
  	int ppe_vp_search_tbl_idx = -1;
  	int vdev_id = arvif->vdev_id;
  	int ret;
@@ -209,7 +208,7 @@ index 9adc914..51b84de 100644
  
  	if (wdev == NULL)
  		return -EOPNOTSUPP;
-@@ -1057,7 +1062,7 @@ int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
+@@ -1057,7 +1064,7 @@ int ath12k_ppeds_attach_link_vif(struct
  				ath12k_err(ab,
  						"Failed to allocate PPE VP search table idx for vdev_id:%d", vdev_id);
  				ret = -ENOSR;
@@ -218,7 +217,7 @@ index 9adc914..51b84de 100644
  			}
  			vp_profile->search_idx_reg_num = ppe_vp_search_tbl_idx;
  		}
-@@ -1135,10 +1140,9 @@ int ath12k_ppeds_attach_link_vif(struct ath12k_link_vif *arvif, int vp_num,
+@@ -1135,10 +1142,9 @@ int ath12k_ppeds_attach_link_vif(struct
  
  	return 0;
  
@@ -231,7 +230,7 @@ index 9adc914..51b84de 100644
  
  	return ret;
  }
-@@ -1181,6 +1185,7 @@ void ath12k_ppeds_detach_link_apvlan_vif(struct ath12k_link_vif *arvif,
+@@ -1181,6 +1187,7 @@ void ath12k_ppeds_detach_link_apvlan_vif
  	struct ath12k_base *ab = ar->ab;
  	struct ath12k_dp_ppe_vp_profile *vp_profile;
  	int ppe_vp_profile_idx = vlan_iface->ppe_vp_profile_idx[link_id];
@@ -239,7 +238,7 @@ index 9adc914..51b84de 100644
  
  	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
  		return;
-@@ -1195,8 +1200,8 @@ void ath12k_ppeds_detach_link_apvlan_vif(struct ath12k_link_vif *arvif,
+@@ -1195,8 +1202,8 @@ void ath12k_ppeds_detach_link_apvlan_vif
  		return;
  	}
  
@@ -250,7 +249,7 @@ index 9adc914..51b84de 100644
  	vlan_iface->ppe_vp_profile_idx[link_id] = ATH12K_INVALID_VP_PROFILE_IDX;
  	ath12k_dbg(ab, ATH12K_DBG_PPE,
  		   "PPEDS vdev detach success vpnum %d  ppe_vp_profile_idx %d\n",
-@@ -1209,6 +1214,7 @@ void ath12k_ppeds_detach_link_vif(struct ath12k_link_vif *arvif, int ppe_vp_prof
+@@ -1209,6 +1216,7 @@ void ath12k_ppeds_detach_link_vif(struct
  	struct ath12k_vif *ahvif = arvif->ahvif;
  	struct ath12k_base *ab = ar->ab;
  	struct ath12k_dp_ppe_vp_profile *vp_profile;
@@ -258,7 +257,7 @@ index 9adc914..51b84de 100644
  
  	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
  		return;
-@@ -1223,12 +1229,8 @@ void ath12k_ppeds_detach_link_vif(struct ath12k_link_vif *arvif, int ppe_vp_prof
+@@ -1223,12 +1231,8 @@ void ath12k_ppeds_detach_link_vif(struct
  		return;
  	}
  
@@ -273,6 +272,3 @@ index 9adc914..51b84de 100644
  	ath12k_dbg(ab, ATH12K_DBG_PPE,
  		   "PPEDS vdev detach success vpnum %d  ppe_vp_profile_idx %d\n",
  		   vp_profile->vp_num, ppe_vp_profile_idx);
--- 
-2.34.1
-

@@ -1,0 +1,520 @@
+From 72a0d46455c474aee8d4dce6f9d40b4d63a82c23 Mon Sep 17 00:00:00 2001
+From: Shreedhar Parande <quic_sparande@quicinc.com>
+Date: Thu, 27 Feb 2025 16:56:19 +0530
+Subject: [PATCH] UPSTREAM:CP:wifi: ath12k: Add ftm responder LCI and LCR
+ support
+
+Add support to parse buffer received from user space,
+construct the WMI command and send WMI command to configure
+the Location Configuration Information(LCI) and
+Location Configuration Report(LCR) values in the target.
+
+Target uses these values in Fine Time Measurement Report (FTMR)
+frames during FTM operation.
+
+Patch-dependency: 993-wifi-ath12k-Add-ftm-responder-support.patch
+
+Signed-off-by: Shreedhar Parande <quic_sparande@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.h |   2 +
+ drivers/net/wireless/ath/ath12k/mac.c  | 111 +++++++++++++++++
+ drivers/net/wireless/ath/ath12k/mac.h  |  32 +++++
+ drivers/net/wireless/ath/ath12k/wmi.c  | 120 +++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/wmi.h  | 158 +++++++++++++++++++++++++
+ 5 files changed, 423 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index 831e202e..97c2221e 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -504,6 +504,8 @@ struct ath12k_link_vif {
+ 	bool is_scan_vif;
+ 	bool is_up;
+ 	bool ftm_responder;
++	u16 ftm_lci_req_id;
++	u16 ftm_lcr_req_id;
+ 	bool pending_up;
+ 	bool pending_stop;
+ 	bool spectral_enabled;
+diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
+index 8dc24581..bc7d3019 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -5296,6 +5296,116 @@ ieee80211_link_sta *ath12k_mac_inherit_radio_cap(struct ath12k *ar,
+ 	return link_sta;
+ }
+ 
++
++static int ath12k_mac_read_lci_data(struct ath12k_link_vif *arvif,
++				    struct ieee80211_ftm_responder_params *ftm_resp_param,
++				    struct ath12k_mac_wifi_pos_lci_info *wmi_lci_data)
++{
++	const u8 *lci, *lci_field;
++	int len;
++	size_t sub_el_len;
++	u64 lci_info;
++
++	if (!arvif || !ftm_resp_param || !wmi_lci_data)
++		return -EINVAL;
++
++	lci = ftm_resp_param->lci;
++	len = ftm_resp_param->lci_len;
++
++	/* minimum len of subelement (id + len) */
++	if (len < 2)
++		return -EINVAL;
++
++	while (len > 0) {
++		sub_el_len = *(lci + 1);
++		/* interested only in LCI and Z subelements */
++		if ((*lci == 0) && (sub_el_len == 16)) {
++			lci_field = lci + 2;
++
++			lci_info = *(u64 *)lci_field;
++			wmi_lci_data->lci.latitude_unc = u8_get_bits(lci_info,
++								     ATH12K_MAC_LCI_LATITUDE_UNC);
++			wmi_lci_data->lci.latitude = u64_get_bits(ATH12K_MAC_LCI_LATITUDE,
++								  ATH12K_MAC_LCI_LATITUDE);
++			lci_field += 5;
++			lci_info = *(u64 *)lci_field;
++			wmi_lci_data->lci.longitude_unc = u8_get_bits(lci_info,
++								      ATH12K_MAC_LCI_LONGI_UNC);
++			wmi_lci_data->lci.longitude = u64_get_bits(lci_info,
++								   ATH12K_MAC_LCI_LONGITUDE);
++			wmi_lci_data->lci.altitude_unc = u64_get_bits(lci_info,
++								      ATH12K_MAC_LCI_ALTITUDE_UNC);
++			lci_field += 6;
++			lci_info = *(u32 *)lci_field;
++			wmi_lci_data->lci.altitude = u32_get_bits(lci_info,
++								  ATH12K_MAC_LCI_ALTITUDE);
++		} else if ((*lci == 4) && (sub_el_len == 6)) {
++			lci_field = lci + 2;
++
++			lci_info = *(u16 *)lci_field;
++			wmi_lci_data->z.expected_to_move = u8_get_bits(lci_info,
++								       ATH12K_MAC_LCI_Z_EXP_TO_MOVE);
++			wmi_lci_data->z.floor_num = u16_get_bits(lci_info,
++								 ATH12K_MAC_LCI_Z_FLOOR_NUM);
++			lci_field += 2;
++			lci_info = *(u32 *)lci_field;
++			wmi_lci_data->z.height_above_floor = u32_get_bits(lci_info,
++									  ATH12K_MAC_LCI_Z_HEIGHT_ABV_FLR);
++			wmi_lci_data->z.height_above_floor_unc = u32_get_bits(lci_info,
++									      ATH12K_MAC_LCI_Z_HEIGHT_ABV_FLR_UNC);
++		}
++		/* next subelement (id + len + subelement length) */
++		lci += 1 + 1 + sub_el_len;
++		len -= (1 + 1 + sub_el_len);
++	}
++
++	return 0;
++}
++
++static int ath12k_mac_update_lci_lcr(struct ath12k *ar,
++				     struct ath12k_link_vif *arvif,
++				     struct ieee80211_bss_conf *info)
++{
++	struct ath12k_mac_wifi_pos_lci_info ath12k_lci_data = {0};
++	u16 req_id;
++	int ret = 0;
++
++	if (!ar || !arvif || !info || !info->ftmr_params)
++		return -EINVAL;
++
++	if (info->ftmr_params->lci &&
++	    info->ftmr_params->lci_len) {
++		ret = ath12k_mac_read_lci_data(arvif, info->ftmr_params,
++					       &ath12k_lci_data);
++		if (ret) {
++			ath12k_warn(ar->ab, "Invalid LCI data %i: %d\n",
++				    arvif->vdev_id, ret);
++			return ret;
++		}
++		ath12k_lci_data.req_id = arvif->ftm_lci_req_id++;
++		ret = ath12k_wmi_vdev_set_lci_data_cmd(ar,
++						       &ath12k_lci_data);
++		if (ret) {
++			ath12k_warn(ar->ab, "Failed to send LCI WMI cmd%i: %d\n",
++				    arvif->vdev_id, ret);
++			return ret;
++		}
++	}
++	if (info->ftmr_params->civicloc &&
++	    info->ftmr_params->civicloc_len) {
++		req_id = arvif->ftm_lcr_req_id++;
++		ret = ath12k_wmi_vdev_set_lcr_data_cmd(ar, req_id,
++				info->ftmr_params->civicloc,
++				info->ftmr_params->civicloc_len);
++		if (ret) {
++			ath12k_warn(ar->ab, "Failed to send LCR WMI cmd%i: %d\n",
++				    arvif->vdev_id, ret);
++			return ret;
++		}
++	}
++	return ret;
++}
++
+ void ath12k_mac_bss_info_changed(struct ath12k *ar,
+ 				 struct ath12k_link_vif *arvif,
+ 				 struct ieee80211_bss_conf *info,
+@@ -5365,6 +5475,7 @@ void ath12k_mac_bss_info_changed(struct ath12k *ar,
+ 				    arvif->vdev_id, ret);
+ 		else
+ 			arvif->ftm_responder = info->ftm_responder;
++		ath12k_mac_update_lci_lcr(ar, arvif, info);
+ 	}
+ 
+ 	if (changed & BSS_CHANGED_BEACON_INT) {
+diff --git a/drivers/net/wireless/ath/ath12k/mac.h b/drivers/net/wireless/ath/ath12k/mac.h
+index 567850a6..b1d63797 100644
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -45,6 +45,38 @@ struct ath12k_mac_tx_mgmt_free_arg {
+ 	u8 link_id;
+ };
+ 
++#define ATH12K_MAC_LCI_LATITUDE_UNC GENMASK_ULL(5, 0)
++#define ATH12K_MAC_LCI_LATITUDE GENMASK_ULL(39, 6)
++#define ATH12K_MAC_LCI_LONGI_UNC GENMASK_ULL(5, 0)
++#define ATH12K_MAC_LCI_LONGITUDE GENMASK_ULL(39, 6)
++#define ATH12K_MAC_LCI_ALTITUDE_UNC GENMASK_ULL(49, 44)
++#define ATH12K_MAC_LCI_ALTITUDE GENMASK(31, 2)
++struct ath12k_mac_lci_sub_elem {
++        u8 latitude_unc;
++        u8 longitude_unc;
++        u8 altitude_unc;
++        u64 latitude;
++        u64 longitude;
++        u32 altitude;
++};
++
++#define ATH12K_MAC_LCI_Z_EXP_TO_MOVE GENMASK(1, 0)
++#define ATH12K_MAC_LCI_Z_FLOOR_NUM GENMASK(15, 2)
++#define ATH12K_MAC_LCI_Z_HEIGHT_ABV_FLR GENMASK(23, 0)
++#define ATH12K_MAC_LCI_Z_HEIGHT_ABV_FLR_UNC GENMASK(31, 24)
++struct ath12k_mac_z_sub_elem {
++        u8 expected_to_move;
++        u8 height_above_floor_unc;
++        u16 floor_num;
++        u32 height_above_floor;
++};
++
++struct ath12k_mac_wifi_pos_lci_info {
++	u16 req_id;
++	struct ath12k_mac_lci_sub_elem lci;
++	struct ath12k_mac_z_sub_elem z;
++};
++
+ struct ath12k_latency_params {
+ 	u32 service_interval;
+ 	u32 burst_size;
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
+index b07391b8..860c5342 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.c
++++ b/drivers/net/wireless/ath/ath12k/wmi.c
+@@ -2710,6 +2710,126 @@ int ath12k_wmi_force_fw_hang_cmd(struct ath12k *ar, u32 type, u32 delay_time_ms,
+ 	return ret;
+ }
+ 
++int ath12k_wmi_vdev_set_lci_data_cmd(struct ath12k *ar,
++				     struct ath12k_mac_wifi_pos_lci_info *ath12k_lci_info)
++{
++	struct ath12k_wmi_pdev *wmi = ar->wmi;
++	struct ath12k_wmi_rtt_oem_req_head *req_head;
++	struct ath12k_wmi_rtt_oem_lci_cfg_head *lci_config;
++	size_t req_head_len = sizeof(struct ath12k_wmi_rtt_oem_req_head);
++	size_t lci_cfg_head_len = sizeof(struct ath12k_wmi_rtt_oem_lci_cfg_head);
++	size_t len = req_head_len + lci_cfg_head_len;
++	struct sk_buff *skb;
++	u8 *cmd;
++	int ret = 0;
++
++	skb = ath12k_wmi_alloc_skb(wmi->wmi_ab, TLV_HDR_SIZE + len);
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (u8 *)skb->data;
++	*(__le32 *)cmd = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_ARRAY_BYTE, len);
++	cmd += TLV_HDR_SIZE;
++
++	/* Adding the ath12k_wmi_rtt_oem_req_head TLV */
++	req_head = (struct ath12k_wmi_rtt_oem_req_head *)cmd;
++	req_head->tlv_header = ath12k_wmi_tlv_cmd_hdr(ATH12K_WMI_RTT_TLV_OEM_REQ_HEAD,
++						      req_head_len);
++	req_head->sub_type = ATH12K_RTT_MSG_SUBTYPE_CONFIGURE_LCI;
++	req_head->pdev_id = cpu_to_le32(ar->pdev->pdev_id);
++	req_head->req_id = le16_encode_bits(ath12k_lci_info->req_id,
++					    ATH12K_WMI_RTT_REQ_ID);
++	req_head->req_id = cpu_to_le32(req_head->req_id);
++
++	/* Adding the ath12k_wmi_rtt_oem_lci_cfg_head TLV */
++	lci_config = (struct ath12k_wmi_rtt_oem_lci_cfg_head *)(cmd + req_head_len);
++	lci_config->tlv_header = ath12k_wmi_tlv_cmd_hdr(ATH12K_WMI_RTT_TLV_OEM_LCI_CFG_HEAD,
++							lci_cfg_head_len);
++	lci_config->latitude = cpu_to_le64(ath12k_lci_info->lci.latitude);
++	lci_config->longitude = cpu_to_le64(ath12k_lci_info->lci.longitude);
++	lci_config->altitude = cpu_to_le32(ath12k_lci_info->lci.altitude);
++	lci_config->lci_cfg_param_info = le32_encode_bits(ath12k_lci_info->lci.latitude_unc,
++							  ATH12K_WMI_RTT_LCI_LAT_UNC) |
++					 le32_encode_bits(ath12k_lci_info->lci.longitude_unc,
++							  ATH12K_WMI_RTT_LCI_LON_UNC) |
++					 le32_encode_bits(ath12k_lci_info->lci.altitude_unc,
++							  ATH12K_WMI_RTT_LCI_ALT_UNC) |
++					 le32_encode_bits(ath12k_lci_info->z.expected_to_move,
++							  ATH12K_WMI_RTT_LCI_Z_MOT_PAT);
++	lci_config->lci_cfg_param_info = cpu_to_le32(lci_config->lci_cfg_param_info);
++	lci_config->floor = cpu_to_le32(ath12k_lci_info->z.floor_num);
++	lci_config->floor_param_info = le32_encode_bits(ath12k_lci_info->z.height_above_floor,
++							ATH12K_WMI_RTT_LCI_Z_FLOOR_INFO) |
++				       le32_encode_bits(ath12k_lci_info->z.height_above_floor_unc,
++							ATH12K_WMI_RTT_LCI_Z_FLOOR_UNC);
++	lci_config->floor_param_info = cpu_to_le32(lci_config->floor_param_info);
++	lci_config->usage_rules = 0x1;
++
++	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_OEM_REQ_CMDID);
++	if (ret) {
++		ath12k_warn(ar->ab,
++			    "failed to send WMI_OEM_REQ_CMDID\n");
++		dev_kfree_skb(skb);
++	}
++
++	return ret;
++}
++
++int ath12k_wmi_vdev_set_lcr_data_cmd(struct ath12k *ar,
++				     u16 req_id, const u8 *civicloc,
++				     size_t civicloc_len)
++{
++	struct ath12k_wmi_pdev *wmi = ar->wmi;
++	struct ath12k_wmi_rtt_oem_req_head *req_head;
++	struct ath12k_wmi_rtt_oem_lcr_cfg_head *lcr_config;
++	size_t req_head_len = sizeof(struct ath12k_wmi_rtt_oem_req_head);
++	size_t lcr_cfg_head_len = sizeof(struct ath12k_wmi_rtt_oem_lcr_cfg_head);
++	size_t len = req_head_len + lcr_cfg_head_len;
++	struct sk_buff *skb;
++	u8 *cmd;
++	int ret = 0;
++
++	civicloc_len = (civicloc_len > (ATH12K_WMI_RTT_CIVIC_INFO_MAX_LENGTH * sizeof(u32))) ?
++		       (ATH12K_WMI_RTT_CIVIC_INFO_MAX_LENGTH * sizeof(u32)) : civicloc_len;
++
++	skb = ath12k_wmi_alloc_skb(wmi->wmi_ab, TLV_HDR_SIZE + len);
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (u8 *)skb->data;
++	*(__le32 *)cmd = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_ARRAY_BYTE, len);
++	cmd += TLV_HDR_SIZE;
++
++	/* Adding the ath12k_wmi_rtt_oem_req_head TLV */
++	req_head = (struct ath12k_wmi_rtt_oem_req_head *)cmd;
++	req_head->tlv_header = ath12k_wmi_tlv_cmd_hdr(ATH12K_WMI_RTT_TLV_OEM_REQ_HEAD,
++						      req_head_len);
++	req_head->sub_type = ATH12K_RTT_MSG_SUBTYPE_CONFIGURE_LCR;
++	req_head->pdev_id = cpu_to_le32(ar->pdev->pdev_id);
++	req_head->req_id = le16_encode_bits(req_id,
++					    ATH12K_WMI_RTT_REQ_ID);
++	req_head->req_id = cpu_to_le32(req_head->req_id);
++
++	/* Adding the ath12k_wmi_rtt_oem_lcr_cfg_head TLV */
++	lcr_config = (struct ath12k_wmi_rtt_oem_lcr_cfg_head *)(cmd + req_head_len);
++	lcr_config->tlv_header = ath12k_wmi_tlv_cmd_hdr(ATH12K_WMI_RTT_TLV_OEM_LCR_CFG_HEAD,
++							lcr_cfg_head_len);
++	lcr_config->loc_civic_params = le32_encode_bits(civicloc_len,
++							ATH12K_WMI_RTT_CIVIC_LEN);
++	lcr_config->loc_civic_params = cpu_to_le32(lcr_config->loc_civic_params);
++
++	memcpy(lcr_config->civic_info, civicloc, civicloc_len);
++
++	ret = ath12k_wmi_cmd_send(wmi, skb, WMI_OEM_REQ_CMDID);
++	if (ret) {
++		ath12k_warn(ar->ab,
++			    "failed to send WMI_OEM_REQ_CMDID\n");
++		dev_kfree_skb(skb);
++	}
++
++	return ret;
++}
++
+ int ath12k_wmi_vdev_set_param_cmd(struct ath12k *ar, u32 vdev_id,
+ 				  u32 param_id, u32 param_value)
+ {
+diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
+index 9729e942..c4a259ea 100644
+--- a/drivers/net/wireless/ath/ath12k/wmi.h
++++ b/drivers/net/wireless/ath/ath12k/wmi.h
+@@ -9295,6 +9295,156 @@ struct wmi_mlo_pri_link_peer_migr_compl_event {
+ 	struct wmi_mlo_primary_link_peer_migration_status *peer_info[100];
+ };
+ 
++#define ATH12K_WMI_RTT_TLV_OEM_REQ_HEAD 32
++#define ATH12K_WMI_RTT_TLV_OEM_LCR_CFG_HEAD 46
++#define ATH12K_WMI_RTT_TLV_OEM_LCI_CFG_HEAD 47
++
++#define ATH12K_WMI_RTT_REQ_ID GENMASK(15, 0)
++#define ATH12K_WMI_RTT_LCI_LAT_UNC GENMASK(7, 0)
++#define ATH12K_WMI_RTT_LCI_LON_UNC GENMASK(15, 8)
++#define ATH12K_WMI_RTT_LCI_ALT_UNC GENMASK(23, 16)
++#define ATH12K_WMI_RTT_LCI_Z_MOT_PAT GENMASK(31, 24)
++#define ATH12K_WMI_RTT_LCI_Z_FLOOR_INFO GENMASK(15, 0)
++#define ATH12K_WMI_RTT_LCI_Z_FLOOR_UNC GENMASK(23, 16)
++#define ATH12K_WMI_RTT_CIVIC_LEN GENMASK(7, 0)
++/* For backward compatibility reason, ATH12K_WMI_RTT_CIVIC_INFO_MAX_LENGTH
++ * shouldn't be changed from value 64.
++ */
++#define ATH12K_WMI_RTT_CIVIC_INFO_MAX_LENGTH 64
++
++/**
++ * ath12k_wmi_rtt_oem_req_head - RTT OEM request head structure
++ * @tlv_header: TLV tag and len; tag equals
++ *              ATH12K_WMI_RTT_TLV_OEM_REQ_HEAD
++ * @sub_type: ATH12K_WMI_RTT_OEM_MSG_SUBTYPE
++ * @req_id: Unique request ID for this RTT oem req;
++ *          bit 15:0       Request ID
++ *          bit 16:        sps enable  0- disable  1--enable
++ *          bit 31:17      reserved
++ * @pdev_id: pdev_id for identifying the MAC.
++ */
++struct ath12k_wmi_rtt_oem_req_head {
++	__le32 tlv_header;
++	__le32 sub_type;
++	__le32 req_id;
++	__le32 pdev_id;
++}__packed;
++
++/**
++ * ath12k_wmi_rtt_oem_lci_cfg_head - LCI config structure
++ * @tlv_header: TLV tag and len; tag equals
++ *              ATH12K_WMI_RTT_TLV_OEM_LCI_CFG_HEAD
++ * @latitude: LS 34 bits - latitude in degrees * 2^25 , 2's complement; Lower
++ *            32 bits comes first followed by higher 32 bytes
++ * @longitude: LS 34 bits - latitude in degrees * 2^25 , 2's complement; Lower
++ *             32 bits comes first followed by higher 32 bytes
++ * @altitude: LS 30bits - Altitude in units of 1/256 m
++ * @lci_cfg_param_info: Uncertainities & motion pattern cfg
++ *                      bits 7:0 - Latitude_uncertainity as defined in Section
++                                   2.3.2 of IETF RFC 6225
++ *                      bits 15:8 - Longitude_uncertainity as defined in Section
++ *                                  2.3.2 of IETF RFC 6225
++ *                      bits 23:16 - Altitude_uncertainity as defined in Section
++ *                                   2.4.5 of IETF RFC 6225
++ *                      bits 31:24 - motion_pattern for use with z subelement
++ *                                   cfg as per wmi_rtt_z_subelem_motion_pattern
++ * @floor: in units 1/16th of floor # if known.
++ *         value is 80000000 if unknown
++ * @floor_param_info: height_above_floor & uncertainity
++ *                    bits 15:0 - Height above floor in units of 1/64 m
++ *                    bits 23:16 - Height uncertainity as defined in 802.11REVmc
++ *                                 D4.0 Z subelem format.
++ *                                 value 0 means unknown, values 1-18 are valid
++ *                                 and 19 and above are reserved.
++ *                    bits 31:24 - reserved
++ * @usage_rules:
++ *   bit  0     - usage_rules: retransmittion allowed: 0-No 1-Yes
++ *   bit  1     - usage_rules: retention expires relative present: 0-No 1-Yes
++ *   bit  2     - usage_rules: STA Location policy for Additional neighbor info:
++ *                             0-No 1-Yes
++ *   bits 7:3   - usage_rules: reserved
++ *   bits 23:8  - usage_rules: retention expires relative, if present, as per
++ *                             IETF RFC 4119
++ *   bits 31:24 - reserved
++ */
++struct ath12k_wmi_rtt_oem_lci_cfg_head {
++	__le32 tlv_header;
++	__le64 latitude;
++	__le64 longitude;
++	__le32 altitude;
++	__le32 lci_cfg_param_info;
++	__le32 floor;
++	__le32 floor_param_info;
++	__le32 usage_rules;
++}__packed;
++
++/**
++ * ATH12K_WMI_RTT_OEM_MSG_SUBTYPE - RTT message subtype definitions
++ * @ATH12K_RTT_MSG_SUBTYPE_INVALID: Invalid message subtype
++ * @ATH12K_RTT_MSG_SUBTYPE_CAPABILITY_REQ: Capability request
++ * @ATH12K_RTT_MSG_SUBTYPE_CAPABILITY_RSP: Capability response
++ * @ATH12K_RTT_MSG_SUBTYPE_MEASUREMENT_REQ: Measurement request
++ * @ATH12K_RTT_MSG_SUBTYPE_MEASUREMENT_RSP: Measurement response
++ * @ATH12K_RTT_MSG_SUBTYPE_ERROR_REPORT_RSP: Error report response
++ * @ATH12K_RTT_MSG_SUBTYPE_CONFIGURE_LCR: Configure LCR
++ * @ATH12K_RTT_MSG_SUBTYPE_CONFIGURE_LCI: Configure LCI
++ * @ATH12K_RTT_MSG_SUBTYPE_CLEANUP_REQ: Cleanup request
++ * @ATH12K_RTT_MSG_SUBTYPE_CLEANUP_RSP: Cleanup response
++ * @ATH12K_RTT_MSG_SUBTYPE_GET_CHANNEL_INFO_REQ: Request for channel info
++ * @ATH12K_RTT_MSG_SUBTYPE_GET_CHANNEL_INFO_RSP: RESPONSE for channel info
++ * @ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MODE_REQ: Request to enable/disable responder
++ *                                          mode
++ * @ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MODE_RSP: Response for enable mode
++ * @ATH12K_RTT_MSG_SUBTYPE_CANCEL_MEASUREMENT_REQ: Request to cancel measurement
++ *                                          request
++ * @ATH12K_RTT_MSG_SUBTYPE_CANCEL_MEASUREMENT_RSP: Response for cancel measurement
++ *                                          request
++ * @ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MEASUREMENT_REQ: Request to enable or disable
++ *                                                 responder measurement
++ * @ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MEASUREMENT_RSP: Response to responder
++ *                                           measurement enable/disable request
++ * @ATH12K_RTT_MSG_SUBTYPE_RESPONDER_MEASUREMENT_RSP: Responder measurement report
++ */
++enum ATH12K_WMI_RTT_OEM_MSG_SUBTYPE {
++        ATH12K_RTT_MSG_SUBTYPE_INVALID                  = 0x00,
++        ATH12K_RTT_MSG_SUBTYPE_CAPABILITY_REQ           = 0x01,
++        ATH12K_RTT_MSG_SUBTYPE_CAPABILITY_RSP           = 0x02,
++        ATH12K_RTT_MSG_SUBTYPE_MEASUREMENT_REQ          = 0x03,
++        ATH12K_RTT_MSG_SUBTYPE_MEASUREMENT_RSP          = 0x04,
++        ATH12K_RTT_MSG_SUBTYPE_ERROR_REPORT_RSP         = 0x05,
++        ATH12K_RTT_MSG_SUBTYPE_CONFIGURE_LCR            = 0x06,
++        ATH12K_RTT_MSG_SUBTYPE_CONFIGURE_LCI            = 0x07,
++        ATH12K_RTT_MSG_SUBTYPE_CLEANUP_REQ              = 0x08,
++        ATH12K_RTT_MSG_SUBTYPE_CLEANUP_RSP              = 0x09,
++        ATH12K_RTT_MSG_SUBTYPE_GET_CHANNEL_INFO_REQ     = 0x10,
++        ATH12K_RTT_MSG_SUBTYPE_GET_CHANNEL_INFO_RSP     = 0x11,
++        ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MODE_REQ   = 0x12,
++        ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MODE_RSP   = 0x13,
++        ATH12K_RTT_MSG_SUBTYPE_CANCEL_MEASUREMENT_REQ   = 0x14,
++        ATH12K_RTT_MSG_SUBTYPE_CANCEL_MEASUREMENT_RSP   = 0x15,
++        ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MEASUREMENT_REQ = 0x16,
++        ATH12K_RTT_MSG_SUBTYPE_CFG_RESPONDER_MEASUREMENT_RSP = 0x17,
++        ATH12K_RTT_MSG_SUBTYPE_RESPONDER_MEASUREMENT_RSP = 0x18,
++};
++
++/**
++ * ath12k_wmi_rtt_oem_lcr_cfg_head - LCR config structure
++ * @tlv_header: TLV tag and len; tag equals
++ *              ATH12K_WMI_RTT_TLV_OEM_LCR_CFG_HEAD
++ * @loc_civic_params:
++ *     bit 7:0 - len in bytes. civic_info to be used in reference to this.
++ *     bit 31:8 - reserved
++ * @civic_info: Civic info including country_code to be copied in FTM frame.
++ *              256 bytes max. Based on len, FW will copy byte-wise into
++ *              local buffers and transfer OTA. This is packed as a 4 bytes
++ *              aligned buffer at this interface for transfer to FW though.
++ */
++struct ath12k_wmi_rtt_oem_lcr_cfg_head {
++	__le32 tlv_header;
++	__le32 loc_civic_params;
++	__le32 civic_info[ATH12K_WMI_RTT_CIVIC_INFO_MAX_LENGTH];
++}__packed;
++
+ void ath12k_wmi_init_qcn9274(struct ath12k_base *ab,
+ 			     struct ath12k_wmi_resource_config_arg *config);
+ void ath12k_wmi_init_wcn7850(struct ath12k_base *ab,
+@@ -9336,6 +9486,14 @@ int ath12k_wmi_vdev_create(struct ath12k *ar, u8 *macaddr,
+ 			   struct ath12k_wmi_vdev_create_arg *arg);
+ int ath12k_wmi_send_peer_create_cmd(struct ath12k *ar,
+ 				    struct ath12k_wmi_peer_create_arg *arg);
++int ath12k_wmi_send_start_oem_data_cmd(struct ath12k *ar, size_t data_len,
++				       u8 *data);
++int ath12k_wmi_vdev_set_lci_data_cmd(struct ath12k *ar,
++				     struct ath12k_mac_wifi_pos_lci_info *ath12k_lci_info);
++int ath12k_wmi_vdev_set_lcr_data_cmd(struct ath12k *ar,
++				     u16 req_id, const u8 *civicloc,
++				     size_t civicloc_len);
++
+ int ath12k_wmi_vdev_set_param_cmd(struct ath12k *ar, u32 vdev_id,
+ 				  u32 param_id, u32 param_value);
+ 
+-- 
+2.34.1
+

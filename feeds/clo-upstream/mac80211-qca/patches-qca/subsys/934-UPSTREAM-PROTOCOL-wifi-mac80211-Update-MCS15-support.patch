@@ -1,0 +1,59 @@
+From c25447728a1af2200dd61508690117f59c4ec07f Mon Sep 17 00:00:00 2001
+From: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Date: Fri, 29 Nov 2024 09:54:24 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL:wifi: mac80211: Update MCS15 support in
+ link_conf
+
+An EHT AP can set the 'MCS15 Disable' bit in the EHT Operation element
+to 1,indicating that it does not support the reception of MCS15.
+
+As per IEEE P802.11be/D7.0 section 9.4.2.321, EHT operation element
+contains disable_mcs15 as the 6th bit and is set to 1 when mcs15
+support is not advertised.
+
+Update mcs15 support in link_conf during set beacon.
+
+Patch-depdendency: None
+
+Patch-work: None
+
+Feature: MCS15
+
+Signed-off-by: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Signed-off-by: Dhanavandhana Kannan <quic_dhanavan1@quicinc.com>
+---
+ include/net/mac80211.h | 1 +
+ net/mac80211/cfg.c     | 1 +
+ 2 files changed, 2 insertions(+)
+
+--- a/include/net/mac80211.h
++++ b/include/net/mac80211.h
+@@ -794,6 +794,7 @@ struct ieee80211_bss_conf {
+ 	bool eht_su_beamformee;
+ 	bool eht_mu_beamformer;
+ 	bool eht_80mhz_full_bw_ul_mumimo;
++	bool enable_mcs15;
+ 
+ 	bool csa_active;
+ 	u16 csa_punct_bitmap;
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -1606,6 +1606,8 @@ static int ieee80211_start_ap(struct wip
+ 		link_conf->eht_80mhz_full_bw_ul_mumimo =
+ 			params->eht_cap->fixed.phy_cap_info[7] &
+ 				IEEE80211_EHT_PHY_CAP7_NON_OFDMA_UL_MU_MIMO_80MHZ;
++		link_conf->enable_mcs15 = !(u8_get_bits(params->eht_oper->params,
++							IEEE80211_EHT_OPER_MCS15_DISABLE));
+ 	} else {
+ 		link_conf->eht_su_beamformer = false;
+ 		link_conf->eht_su_beamformee = false;
+--- a/include/linux/ieee80211.h
++++ b/include/linux/ieee80211.h
+@@ -2246,6 +2246,7 @@ struct ieee80211_eht_cap_elem {
+ #define IEEE80211_EHT_OPER_EHT_DEF_PE_DURATION	                0x04
+ #define IEEE80211_EHT_OPER_GROUP_ADDRESSED_BU_IND_LIMIT         0x08
+ #define IEEE80211_EHT_OPER_GROUP_ADDRESSED_BU_IND_EXP_MASK      0x30
++#define IEEE80211_EHT_OPER_MCS15_DISABLE			0x40
+ 
+ #define IEEE80211_EHT_OPERATION_FIXED_LEN			0x5
+ #define IEEE80211_EHT_OPERATION_INFO_FIXED_LEN			0x3

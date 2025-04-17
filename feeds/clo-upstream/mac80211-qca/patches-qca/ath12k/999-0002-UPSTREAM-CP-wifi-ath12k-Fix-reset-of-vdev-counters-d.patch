@@ -1,0 +1,119 @@
+From 4beffaf08d074790e06821d54e64068208276f16 Mon Sep 17 00:00:00 2001
+From: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
+Date: Fri, 28 Feb 2025 23:17:32 +0530
+Subject: [PATCH] UPSTREAM:CP wifi:ath12k: Fix reset of vdev counters during
+ recovery
+
+During recovery in STA/Repeater mode, repeater try to flush the scan vifs
+and will reset all vifs associated to it.
+
+This scan flush will be scheduled in workqueue during the recovery and all vdev
+counters are reset in the core halt scenario during post recovery.
+
+There is race condition before flushing the scan vifs, core halt will
+reset all vdev counters. So during the flusing of scan vifs, vdev counters
+will decrement less than zero to negative value.
+
+This eventually results in infinit loop while accessing the vdev counters and
+results in RCU stall during the vif get state. to fix this case all vdev
+counters are added during the crash reconfigure instead of core halt.
+
+So, this helps in flushing the scan vifs during recovery with correct vdev
+counters.
+
+Patch-dependency: 707-b-ath12k-add-support-for-MLO-SSR-Mode0.patch,
+		  961-01-wifi-ath12k-n-link-mlo-bridge-vdev-basic-handling.patch
+Patch-work: None
+Feature: SSR Mode 1
+
+Signed-off-by: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 20 +++++++++++++++-----
+ drivers/net/wireless/ath/ath12k/mac.c  | 13 +++++++++----
+ 2 files changed, 24 insertions(+), 9 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -2219,7 +2219,9 @@ exit:
+ 
+ static int ath12k_core_reconfigure_on_crash(struct ath12k_base *ab)
+ {
+-	int ret;
++	int ret, j;
++	struct ath12k *ar = NULL;
++	struct ath12k_pdev *pdev;
+ 	u8 total_vdevs;
+ 
+ 	mutex_lock(&ab->core_lock);
+@@ -2240,6 +2242,18 @@ static int ath12k_core_reconfigure_on_cr
+ 	ab->free_vdev_stats_id_map = 0;
+ 	ab->num_db_cap = 0;
+ 
++	for (j = 0; j < ab->num_radios; j++) {
++		pdev = &ab->pdevs[j];
++		ar = pdev->ar;
++		if (ar) {
++			mutex_lock(&ar->conf_mutex);
++			ar->num_created_vdevs = 0;
++			ar->num_created_bridge_vdevs = 0;
++			ar->allocated_vdev_map = 0;
++			mutex_unlock(&ar->conf_mutex);
++		}
++	}
++
+ 	ret = ath12k_hal_srng_init(ab);
+ 	if (ret)
+ 		return ret;
+@@ -2447,10 +2461,6 @@ void ath12k_core_halt(struct ath12k *ar)
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+ 
+-	ar->num_created_vdevs = 0;
+-	ar->num_created_bridge_vdevs = 0;
+-	ar->allocated_vdev_map = 0;
+-
+ 	/* Send low ack disassoc to hostapd to free the peers from host
+ 	 * to associate fresh after recovery. It is expected that, this
+ 	 * low ack event to hostapd must free the stas from hostapd and
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -1775,6 +1775,7 @@ int ath12k_mac_monitor_vdev_delete(struc
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac monitor vdev %d deleted\n",
+ 		   ar->monitor_vdev_id);
+ 	spin_unlock_bh(&ar->ab->base_lock);
++	WARN_ON(!ar->num_created_vdevs);
+ 	ar->num_created_vdevs--;
+ 	ar->monitor_vdev_id = -1;
+ 	clear_bit(MONITOR_VDEV_CREATED, &ar->monitor_flags);
+@@ -5859,10 +5860,13 @@ vdev_clean_up:
+ 
+ 	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
+ 	ar->ab->free_vdev_stats_id_map &= ~(1LL << arvif->vdev_stats_id);
+-	if (!ath12k_mac_is_bridge_vdev(arvif))
++	if (!ath12k_mac_is_bridge_vdev(arvif)) {
++		WARN_ON(!ar->num_created_vdevs);
+ 		ar->num_created_vdevs--;
+-	else
++	} else {
++		WARN_ON(!ar->num_created_bridge_vdevs);
+ 		ar->num_created_bridge_vdevs--;
++	}
+ 	arvif->ahvif->num_vdev_created--;
+ 
+ 	ath12k_dbg(ar->ab, ATH12K_DBG_SET(MAC, L1), "mac vdev delete id %d type %d subtype %d map %llx\n",
+@@ -13239,10 +13243,13 @@ err_peer_del:
+ 
+ err_vdev_del:
+ 	ath12k_wmi_vdev_delete(ar, arvif->vdev_id);
+-	if (is_bridge_vdev)
++	if (is_bridge_vdev) {
++		WARN_ON(!ar->num_created_bridge_vdevs);
+ 		ar->num_created_bridge_vdevs--;
+-	else
++	} else {
++		WARN_ON(!ar->num_created_vdevs);
+ 		ar->num_created_vdevs--;
++	}
+ 	arvif->is_created = false;
+ 	ar->allocated_vdev_map &= ~(1LL << arvif->vdev_id);
+ 	spin_lock_bh(&ar->ab->base_lock);

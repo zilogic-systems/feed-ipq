@@ -61,7 +61,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -627,7 +627,7 @@ int wmi_ctrl_path_btcoex_stat(struct ath
+@@ -628,7 +628,7 @@ int wmi_ctrl_path_btcoex_stat(struct ath
  	return ret_val;
  }
  
@@ -70,7 +70,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  			   size_t count, loff_t *ppos)
  {
  	struct wmi_ctrl_path_stats_list *stats, *tmp;
-@@ -2428,7 +2428,7 @@ static const struct file_operations fops
+@@ -2429,7 +2429,7 @@ static const struct file_operations fops
  
  #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
  static ssize_t ath12k_debug_write_dbs_power_reduction(struct file *file,
@@ -79,7 +79,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  						      size_t count, loff_t *ppos)
  {
  	struct ath12k_base *ab = file->private_data;
-@@ -2470,7 +2470,7 @@ static const struct file_operations dbs_
+@@ -2471,7 +2471,7 @@ static const struct file_operations dbs_
  };
  
  static ssize_t ath12k_debug_write_eth_power_reduction(struct file *file,
@@ -88,7 +88,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  						      size_t count, loff_t *ppos)
  {
  	struct ath12k_base *ab = file->private_data;
-@@ -3133,7 +3133,7 @@ int ath12k_print_arvif_link_stats(struct
+@@ -3260,7 +3260,7 @@ int ath12k_print_arvif_link_stats(struct
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
  static ssize_t ath12k_debugfs_dump_ppeds_stats(struct file *file,
@@ -97,7 +97,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  					       size_t count, loff_t *ppos)
  {
  	struct ath12k_base *ab = file->private_data;
-@@ -3428,7 +3428,7 @@ void ath12k_debugfs_fw_stats_init(struct
+@@ -3558,7 +3558,7 @@ void ath12k_debugfs_fw_stats_init(struct
  }
  
  int ath12k_pktlog_rx_filter_setting(struct ath12k *ar,
@@ -106,16 +106,25 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
                                      *tlv_filter)
  {
  	int ret = 0, i;
-@@ -3439,7 +3439,7 @@ int ath12k_pktlog_rx_filter_setting(stru
+@@ -3569,7 +3569,7 @@ int ath12k_pktlog_rx_filter_setting(stru
  	                                           ar->dp.mac_id + i,
  	                                           HAL_RXDMA_MONITOR_DST,
- 	                                           DP_RXDMA_REFILL_RING_SIZE,
+ 						   DP_RX_MON_BUFFER_SIZE,
 -	                                           &tlv_filter);
 +	                                           tlv_filter);
  		if(ret)
  			break;
  	}
-@@ -6169,7 +6169,7 @@ static const struct file_operations ath1
+@@ -5803,7 +5803,7 @@ exit:
+ 	return ret;
+ }
+ 
+-static size_t ath12k_debugfs_read_dp_mon_stats(struct file *file,
++static ssize_t ath12k_debugfs_read_dp_mon_stats(struct file *file,
+ 					       char __user *user_buf,
+ 					       size_t count, loff_t *ppos)
+ {
+@@ -6468,7 +6468,7 @@ static const struct file_operations ath1
  };
  
  static ssize_t ath12k_write_power_save_gtx(struct file *file,
@@ -124,7 +133,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  					   size_t count, loff_t *ppos)
  {
  	struct ath12k_link_vif *arvif = file->private_data;
-@@ -6238,7 +6238,7 @@ out:
+@@ -6537,7 +6537,7 @@ out:
  }
  
  static ssize_t ath12k_read_ppe_rfs_core_mask(struct file *file,
@@ -157,7 +166,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	}
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -8777,7 +8777,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+@@ -8955,7 +8955,7 @@ static int ath12k_mac_reconfig_ahsta_lin
  		ath12k_mac_unmap_link_sta(ahsta, link);
  
  		ath12k_dbg(NULL, ATH12K_DBG_MAC | ATH12K_DBG_BOOT,
@@ -166,7 +175,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  			   link, ahsta->links_map,
  			   ahvif->links_map, sta->valid_links);
  	}
-@@ -8788,7 +8788,7 @@ static int ath12k_mac_reconfig_ahsta_lin
+@@ -8966,7 +8966,7 @@ static int ath12k_mac_reconfig_ahsta_lin
  						 ahsta->link[link],
  						 ahvif, link);
  		ath12k_dbg(NULL, ATH12K_DBG_MAC | ATH12K_DBG_BOOT,
@@ -175,7 +184,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  			   link, ahsta->links_map,
  			   ahvif->links_map, sta->valid_links);
  		if (ret)
-@@ -10501,7 +10501,7 @@ static int ath12k_mac_mgmt_action_frame_
+@@ -10738,7 +10738,7 @@ static int ath12k_mac_mgmt_action_frame_
  	}
  
  	mgmt = (struct ieee80211_mgmt *)hdr;
@@ -184,7 +193,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	/* FCTL_PROTECTED frame might have extra space added for HDR_LEN. Offset that
  	 * many bytes if it is there
-@@ -10876,11 +10876,11 @@ static u8 ath12k_mac_get_tx_link(struct
+@@ -11116,11 +11116,11 @@ static u8 ath12k_mac_get_tx_link(struct
  
  
  			ath12k_dbg(NULL, ATH12K_DBG_MAC,
@@ -198,7 +207,61 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  				   hdr->frame_control, link, vif->valid_links,
  				   sta->valid_links, ahvif->links_map, ahsta->links_map);
  			link = IEEE80211_MLD_MAX_NUM_LINKS;
-@@ -15509,7 +15509,7 @@ stop_primary:
+@@ -14977,7 +14977,7 @@ static inline bool ath12k_reg_is_320_opc
+ 
+ static s8 ath12k_mac_find_eirp_in_afc_eirp_obj(struct ath12k_chan_eirp_obj *eirp_obj,
+ 					       u32 freq,
+-					       u16 center_freq,
++					       u32 center_freq,
+ 					       u8 nchans,
+ 					       u8 opclass)
+ {
+@@ -15009,7 +15009,7 @@ static s8 ath12k_mac_find_eirp_in_afc_ei
+ 
+ static s8 ath12k_mac_find_eirp_in_afc_chan_obj(struct ath12k_afc_chan_obj *chan_obj,
+ 					       u32 freq,
+-					       u16 center_freq,
++					       u32 center_freq,
+ 					       u8 opclass)
+ {
+ 	s8 afc_eirp_pwr = ATH12K_MAX_TX_POWER;
+@@ -15041,7 +15041,7 @@ fail:
+ 
+ static s8 ath12k_mac_get_afc_eirp_power(struct ath12k *ar,
+ 					u32 freq,
+-					u16 center_freq,
++					u32 center_freq,
+ 					u16 bw)
+ {
+ 	struct ath12k_afc_sp_reg_info *power_info = ar->afc.afc_reg_info;
+@@ -15390,7 +15390,7 @@ static void ath12k_mac_get_eirp_arr_for_
+ 					   s8 *max_eirp_arr,
+ 					   u16 start_freq,
+ 					   u16 oper_freq,
+-					   u16 *cfreqs)
++					   u32 *cfreqs)
+ {
+ 	s8 max_reg_eirp = ATH12K_MAX_TX_POWER;
+ 	s8 psd_eirp = ATH12K_MAX_TX_POWER;
+@@ -15453,7 +15453,7 @@ void ath12k_mac_get_client_power_for_con
+ }
+ 
+ static inline void ath12k_mac_fill_cfreqs(struct cfg80211_chan_def *chan_def,
+-					  u16 *cfreqs)
++					  u32 *cfreqs)
+ {
+ 	cfreqs[0] = chan_def->chan->center_freq;
+ 	if (chan_def->width != NL80211_CHAN_WIDTH_20)
+@@ -15472,7 +15472,7 @@ void ath12k_mac_fill_reg_tpc_info_with_e
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+ 	struct ieee80211_vif *vif = ahvif->vif;
+ 	struct ieee80211_bss_conf *bss_conf;
+-	u16 cfreqs[ATH12K_MAX_EIRP_VALS];
++	u32 cfreqs[ATH12K_MAX_EIRP_VALS];
+ 	u16 start_freq = 0, oper_freq = 0;
+ 	bool is_tpe_present = false;
+ 	u8 reg_6g_power_mode;
+@@ -16155,7 +16155,7 @@ stop_primary:
  		else
  			sta = ieee80211_find_sta_by_ifaddr(hw, peer->addr, NULL);
  		ath12k_dbg(ab, ATH12K_DBG_MAC,
@@ -207,7 +270,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  			   vif->valid_links, arvif->vdev_id,
  			   peer->addr, sta_link_id, sta);
  
-@@ -18308,8 +18308,9 @@ static bool ath12k_mac_op_removed_link_i
+@@ -18961,8 +18961,9 @@ static bool ath12k_mac_op_removed_link_i
  {
  	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
  	u16 link_id;
@@ -218,7 +281,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  		if (ahsta->primary_link_id == link_id)
  			return true;
  
-@@ -19061,7 +19062,8 @@ static int __ath12k_mac_register(struct
+@@ -19724,7 +19725,8 @@ static int __ath12k_mac_register(struct
  static int ath12k_setup_per_hw_if_comb(struct ath12k_hw *ah) {
  	struct ieee80211_iface_per_hw *if_per_hw;
  	struct ieee80211_hw *hw = ah->hw;
@@ -228,7 +291,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	int i;
  
  	if_per_hw  = kzalloc(sizeof(struct ieee80211_iface_per_hw) * ah->num_radio,
-@@ -19201,7 +19203,7 @@ static int ath12k_alloc_per_hw_mac_addr(
+@@ -19864,7 +19866,7 @@ static int ath12k_alloc_per_hw_mac_addr(
  		return -ENOMEM;
  
  	for (i = 0; i < ah->num_radio; i++) {
@@ -237,8 +300,8 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  		ar++;
  	}
  	hw->wiphy->addresses = addresses;
-@@ -19614,7 +19616,7 @@ int ath12k_mac_allocate(struct ath12k_hw
- 	int mac_id, chip_id;
+@@ -20284,7 +20286,7 @@ int ath12k_mac_allocate(struct ath12k_hw
+ 	int mac_id, chip_id, pdev_index;
  	u8 link_id, num_hw, total_vdevs;
  	struct ath12k_pdev *pdev;
 -	char *mlo_phy_name;
@@ -246,7 +309,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	total_radio = 0;
  	for (i = 0; i < ag->num_chip; i++)
-@@ -19770,10 +19772,10 @@ err_mac_destroy:
+@@ -20444,10 +20446,10 @@ err_mac_destroy:
  void ath12k_mac_destroy(struct ath12k_hw_group *ag)
  {
  	struct ath12k_base *ab;
@@ -261,16 +324,16 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/sawf.c
 +++ b/drivers/net/wireless/ath/ath12k/sawf.c
-@@ -22,7 +22,7 @@ bool ath12k_sawf_enable;
+@@ -22,7 +22,7 @@ bool ath12k_sawf_enable = true;
  module_param_named(sawf, ath12k_sawf_enable, bool, 0444);
- MODULE_PARM_DESC(sawf, "Enable SAWF feature (Default: false)");
+ MODULE_PARM_DESC(sawf, "Enable SAWF feature (Default: true)");
  
 -static const struct ath_sawf_callbacks ath_wifi_sawf_callback = {
 +static struct ath_sawf_callbacks ath_wifi_sawf_callback = {
  	.sawf_dl_callback = ath12k_sawf_get_msduq,
  	.sawf_ul_callback = ath12k_sawf_config_ul,
  };
-@@ -745,7 +745,7 @@ int ath12k_sawf_htt_h2t_def_q_map_req(st
+@@ -750,7 +750,7 @@ int ath12k_sawf_htt_h2t_def_q_map_req(st
  	}
  
  	skb_put(skb, len);
@@ -279,7 +342,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	cmd->info = u32_encode_bits(HTT_H2T_MSG_TYPE_SAWF_DEF_Q_MAP_REQ,
  				    HTT_H2T_MSG_TYPE_ID) |
  		    u32_encode_bits(DRV_TO_FW_SVC_ID(svc_id),
-@@ -780,7 +780,7 @@ int ath12k_sawf_htt_h2t_def_q_unmap_req(
+@@ -785,7 +785,7 @@ int ath12k_sawf_htt_h2t_def_q_unmap_req(
  	}
  
  	skb_put(skb, len);
@@ -288,7 +351,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	cmd->info = u32_encode_bits(HTT_H2T_MSG_TYPE_SAWF_DEF_Q_UNMAP_REQ,
  				    HTT_H2T_MSG_TYPE_ID) |
  		    u32_encode_bits(DRV_TO_FW_SVC_ID(svc_id),
-@@ -815,7 +815,7 @@ int ath12k_sawf_htt_h2t_def_q_map_report
+@@ -820,7 +820,7 @@ int ath12k_sawf_htt_h2t_def_q_map_report
  	}
  
  	skb_put(skb, len);
@@ -297,7 +360,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	cmd->info = u32_encode_bits(HTT_H2T_MSG_TYPE_SAWF_DEF_Q_MAP_REPORT_REQ,
  				    HTT_H2T_MSG_TYPE_ID) |
-@@ -1333,23 +1333,22 @@ void ath12k_htt_sawf_streaming_stats_ind
+@@ -1343,26 +1343,25 @@ void ath12k_htt_sawf_streaming_stats_ind
  	struct htt_stats_strm_gen_mpdus_tlv *mpdus_tlv;
          struct htt_stats_strm_gen_mpdus_details_tlv *mpdus_detail_tlv;
  	const struct htt_tlv *tlv;
@@ -322,9 +385,23 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
 -		tlv_data = (u8 *)data;
 +		tlv_data = data;
  		tlv = (struct htt_tlv *)data;
- 		tlv_tag = u32_get_bits(*data, HTT_TLV_TAG);
- 		tlv_len = u32_get_bits(*data, HTT_TLV_LEN);
-@@ -1405,7 +1404,7 @@ void ath12k_htt_sawf_streaming_stats_ind
+-		tlv_tag = u32_get_bits(*data, HTT_TLV_TAG);
+-		tlv_len = u32_get_bits(*data, HTT_TLV_LEN);
++		tlv_tag = le32_get_bits(tlv->header, HTT_TLV_TAG);
++		tlv_len = le32_get_bits(tlv->header, HTT_TLV_LEN);
+ 
+ 		if (!tlv_len)
+ 			break;
+@@ -1372,7 +1371,7 @@ void ath12k_htt_sawf_streaming_stats_ind
+ 			break;
+ 		}
+ 
+-		data++;
++		data += sizeof(*tlv);
+ 		if (tlv_tag == HTT_STATS_STRM_GEN_MPDUS_TAG) {
+ 			u16 svc_interval_success, svc_interval_failure, burst_size_success, burst_size_failure, peer_id;
+ 			mpdus_tlv = (struct htt_stats_strm_gen_mpdus_tlv*)data;
+@@ -1415,7 +1414,7 @@ void ath12k_htt_sawf_streaming_stats_ind
  				   __le16_to_cpu(mpdus_detail_tlv->burst_size_burst_size_spec),
  				   __le16_to_cpu(mpdus_detail_tlv->burst_size_margin_bytes));
  		}
@@ -346,7 +423,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/telemetry.c
 +++ b/drivers/net/wireless/ath/ath12k/telemetry.c
-@@ -211,7 +211,7 @@ int ath12k_telemetry_sawf_sla_detection_
+@@ -223,7 +223,7 @@ int ath12k_telemetry_sawf_sla_detection_
  bool ath12k_telemetry_get_sla_mov_avg_num_pkt(u32 *mov_avg)
  {
  	if (!telemetry_ctx) {
@@ -355,7 +432,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  		return false;
  	}
  
-@@ -222,7 +222,7 @@ bool ath12k_telemetry_get_sla_mov_avg_nu
+@@ -234,7 +234,7 @@ bool ath12k_telemetry_get_sla_mov_avg_nu
  bool ath12k_telemetry_get_sla_num_pkts(u32 *pkt_num)
  {
  	if (!telemetry_ctx) {
@@ -375,7 +452,16 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  ath12k_vendor_erp_config_trigger_range = {
  	.min = 1,
  	.max = BIT(QCA_WLAN_VENDOR_TRIGGER_TYPE_MAX) - 1,
-@@ -2082,7 +2082,7 @@ out:
+@@ -1733,7 +1733,7 @@ static int ath12k_erp_set_pkt_filter(str
+ }
+ 
+ static void ath12k_erp_config_pcie_speed_width(struct ath12k *ar,
+-					       const struct pci_dev *root,
++					       struct pci_dev *root,
+ 					       struct ath12k_erp_pci_root *erp_pci_root,
+ 					       bool enter)
+ {
+@@ -2192,7 +2192,7 @@ out:
  }
  
  static ssize_t ath12k_read_erp_rescan_pcie(struct file *file,
@@ -384,7 +470,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  					   size_t count, loff_t *ppos)
  {
  	int len = 0;
-@@ -2623,7 +2623,7 @@ static int ath12k_vendor_receive_afc_res
+@@ -2737,7 +2737,7 @@ static int ath12k_vendor_receive_afc_res
  	struct ath12k_hw *ah = hw->priv;
  	struct ath12k *ar;
  	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_AFC_RESP_MAX + 1];
@@ -392,10 +478,10 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
 +	struct ath12k_afc_host_resp *afc_rsp = NULL;
  	int afc_resp_len = 0;
  	enum ath12k_nl_afc_resp_type afc_resp_format;
- 	int ret = 0;
+ 	int ret = 0, chan_idx, hw_idx = -1;
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -2102,7 +2102,7 @@ int ath12k_wmi_set_peer_intra_bss_cmd(st
+@@ -2104,7 +2104,7 @@ int ath12k_wmi_set_peer_intra_bss_cmd(st
  	if (!skb)
  		return -ENOMEM;
  
@@ -404,7 +490,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_PEER_SET_INTRA_BSS_PARAMS,
  						 sizeof(*cmd));
  	ether_addr_copy(cmd->peer_macaddr.addr, peer_addr);
-@@ -2873,8 +2873,8 @@ static void ath12k_wmi_bcn_fill_ml_info(
+@@ -2875,8 +2875,8 @@ static void ath12k_wmi_bcn_fill_ml_info(
  	struct ieee80211_bss_conf *link_conf, *tx_link_conf;
  	struct ath12k_link_vif *arvif_iter;
  	u32 vdev_id = arvif->vdev_id;
@@ -415,7 +501,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	rcu_read_lock();
  
-@@ -8344,7 +8344,7 @@ static int ath12k_wmi_tlv_mgmt_rx_parse(
+@@ -8349,7 +8349,7 @@ static int ath12k_wmi_tlv_mgmt_rx_parse(
  		} else if (!parse->bpcc_buf_done) {
  			if (len == 0)
  				break;
@@ -424,7 +510,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  			parse->bpcc_buf_done = true;
  		}
  		break;
-@@ -8473,7 +8473,7 @@ ath12k_update_link_removal_params(struct
+@@ -8478,7 +8478,7 @@ ath12k_update_link_removal_params(struct
  {
  	struct ath12k *ar;
  	struct ath12k_link_vif *arvif;
@@ -433,7 +519,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	u32 i;
  
  	/*
-@@ -14077,8 +14077,9 @@ ath12k_wmi_pktlog_decode_info(struct ath
+@@ -14097,8 +14097,9 @@ ath12k_wmi_pktlog_decode_info(struct ath
  	struct ath12k *ar;
          const void **tb;
  	int ret;
@@ -444,7 +530,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	if (!test_bit(WMI_TLV_SERVICE_PKTLOG_DECODE_INFO_SUPPORT, ab->wmi_ab.svc_map)) {
                  ath12k_warn(ab, "firmware doesn't support pktlog decode info support\n");
-@@ -14097,7 +14098,7 @@ ath12k_wmi_pktlog_decode_info(struct ath
+@@ -14117,7 +14118,7 @@ ath12k_wmi_pktlog_decode_info(struct ath
                  return;
          }
  
@@ -453,7 +539,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
          ath12k_dbg(ab, ATH12K_DBG_WMI,
                     "pktlog pktlog_defs_json_version: %d", pktlog_info->pktlog_defs_json_version);
  	ath12k_dbg(ab, ATH12K_DBG_WMI,
-@@ -14105,11 +14106,11 @@ ath12k_wmi_pktlog_decode_info(struct ath
+@@ -14125,11 +14126,11 @@ ath12k_wmi_pktlog_decode_info(struct ath
  	ath12k_dbg(ab, ATH12K_DBG_WMI,
                     "pktlog chip_info: %s", pktlog_info->chip_info);
  	 ath12k_dbg(ab, ATH12K_DBG_WMI,
@@ -468,7 +554,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
                  kfree(tb);
                  return;
          }
-@@ -14365,7 +14366,7 @@ static void ath12k_wmi_thermal_throt_sta
+@@ -14385,7 +14386,7 @@ static void ath12k_wmi_thermal_throt_sta
  	struct ath12k *ar;
  	const void **tb;
  	int ret;
@@ -477,7 +563,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  
  	tb = ath12k_wmi_tlv_parse_alloc(ab, skb->data, skb->len, GFP_ATOMIC);
  	if (IS_ERR(tb)) {
-@@ -16487,7 +16488,7 @@ int ath12k_wmi_mlo_teardown(struct ath12
+@@ -16511,7 +16512,7 @@ int ath12k_wmi_mlo_teardown(struct ath12
  }
  
  int ath12k_wmi_mlo_reconfig_link_removal(struct ath12k *ar, u32 vdev_id,
@@ -506,7 +592,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
 -			       u8 tid)
 +			       u8 tid, u8 queue)
  {
- 	ath12k_telemetry_notify_breach(mac_addr, svc_id, param, set_clear, tid);
+ 	ath12k_telemetry_breach_indication(mac_addr, svc_id, param, set_clear, tid);
  }
 --- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
 +++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.h
@@ -521,7 +607,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  				      u8 svc_id, u8 hostq_id);
 --- a/drivers/net/wireless/ath/ath12k/reg.c
 +++ b/drivers/net/wireless/ath/ath12k/reg.c
-@@ -1096,7 +1096,7 @@ ret:
+@@ -1103,7 +1103,7 @@ ret:
  	return eirp_pwr;
  }
  
@@ -530,7 +616,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  					  u16 *center_freq, int pwr_level,
  					  struct cfg80211_chan_def *chan_def,
  					  s8 *tx_power)
-@@ -1106,7 +1106,7 @@ void ath12k_reg_get_afc_eirp_power_for_b
+@@ -1113,7 +1113,7 @@ void ath12k_reg_get_afc_eirp_power_for_b
  	if (chan_def->width == NL80211_CHAN_WIDTH_80P80 && pwr_level == 3)
  		*center_freq = (u16)chan_def->center_freq2;
  	else
@@ -541,7 +627,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  	if (pwr_level != 0)
 --- a/drivers/net/wireless/ath/ath12k/reg.h
 +++ b/drivers/net/wireless/ath/ath12k/reg.h
-@@ -314,7 +314,7 @@ int ath12k_reg_get_num_chans_in_band(str
+@@ -355,7 +355,7 @@ int ath12k_reg_get_num_chans_in_band(str
  			             u32 freq_low, u32 freq_high);
  s8 ath12k_reg_get_afc_eirp_power(struct ath12k *ar, enum nl80211_chan_width bw,
  				 int cfi);
@@ -552,7 +638,7 @@ Signed-off-by: Kaviarasu Sanjeevi <quic_kaviaras@quicinc.com>
  					  s8 *tx_power);
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -9181,7 +9181,7 @@ void ath12k_wmi_peer_chan_width_switch_w
+@@ -9184,7 +9184,7 @@ void ath12k_wmi_peer_chan_width_switch_w
  int ath12k_wmi_set_latency(struct ath12k *ar, struct ath12k_latency_params *params);
  int ath12k_wmi_pdev_get_ani_level(struct ath12k *ar, u32 param_id, u8 pdev_id);
  int ath12k_wmi_mlo_reconfig_link_removal(struct ath12k *ar, u32 vdev_id,

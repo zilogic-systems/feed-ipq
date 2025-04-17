@@ -1,0 +1,27 @@
+From 657c4631eb531bf5a28ec126f327f67cd9ee9f99 Mon Sep 17 00:00:00 2001
+From: Sidhanta Sahu <quic_sidhanta@quicinc.com>
+Date: Tue, 5 Nov 2024 03:58:47 -0800
+Subject: [PATCH 1/5] QSDK CP: wifi: ath12k: Add rm.c to Makefile
+
+Include rm specific file to support qca specific applicaton services in ATH.
+
+Patch-dependency: None
+Patch-work: None
+
+Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/Makefile | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/ath/ath12k/Makefile
++++ b/drivers/net/wireless/ath/ath12k/Makefile
+@@ -24,7 +24,8 @@ ath12k-y += core.o \
+ 	    vendor.o \
+ 	    umac_reset.o \
+ 	    fse.o \
+-	    accel_cfg.o
++	    accel_cfg.o \
++	    vendor_services.o
+ 
+ ath12k-$(CPTCFG_ATH12K_DEBUGFS) += debugfs.o debugfs_htt_stats.o debugfs_sta.o
+ ath12k-$(CPTCFG_NL80211_TESTMODE) += testmode.o

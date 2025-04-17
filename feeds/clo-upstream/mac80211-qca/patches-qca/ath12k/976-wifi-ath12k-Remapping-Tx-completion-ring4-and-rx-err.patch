@@ -28,11 +28,9 @@ Signed-off-by: Girish Kumar M P <quic_gmp@quicinc.com>
  drivers/net/wireless/ath/ath12k/hw.c     | 14 ++++++++------
  5 files changed, 16 insertions(+), 13 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/dp_rx.c b/drivers/net/wireless/ath/ath12k/dp_rx.c
-index df1966b..4bc8e75 100644
 --- a/drivers/net/wireless/ath/ath12k/dp_rx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
-@@ -4095,7 +4095,7 @@ static int ath12k_dp_rx_h_defrag_reo_reinject(struct ath12k *ar,
+@@ -4294,7 +4294,7 @@ static int ath12k_dp_rx_h_defrag_reo_rei
  
  	ath12k_hal_rx_buf_addr_info_set(&msdu0->buf_addr_info, buf_paddr,
  					desc_info->cookie,
@@ -41,7 +39,7 @@ index df1966b..4bc8e75 100644
  
  	/* Fill mpdu details into reo entrance ring */
  	srng = &ab->hal.srng_list[dp->reo_reinject_ring.ring_id];
-@@ -4576,7 +4576,7 @@ int ath12k_dp_rx_process_err(struct ath12k_base *ab, struct napi_struct *napi,
+@@ -4775,7 +4775,7 @@ int ath12k_dp_rx_process_err(struct ath1
  		ath12k_hal_rx_msdu_link_info_get(link_desc_va, &num_msdus, msdu_cookies,
  						 &rbm);
  		if (rbm != dp->idle_link_rbm_id &&
@@ -50,11 +48,9 @@ index df1966b..4bc8e75 100644
  		    rbm != src_ab->hw_params->hal_params->rx_buf_rbm) {
  			ab->soc_stats.invalid_rbm++;
  			ath12k_warn(ab, "invalid return buffer manager %d\n", rbm);
-diff --git a/drivers/net/wireless/ath/ath12k/hal.c b/drivers/net/wireless/ath/ath12k/hal.c
-index a781ff3..01e8119 100644
 --- a/drivers/net/wireless/ath/ath12k/hal.c
 +++ b/drivers/net/wireless/ath/ath12k/hal.c
-@@ -235,8 +235,8 @@ ath12k_hal_qcn9274_tcl_to_wbm_rbm_map[DP_TCL_NUM_RING_MAX] = {
+@@ -235,8 +235,8 @@ ath12k_hal_qcn9274_tcl_to_wbm_rbm_map[DP
  		.rbm_id = HAL_RX_BUF_RBM_SW2_BM,
  	},
  	{
@@ -65,8 +61,6 @@ index a781ff3..01e8119 100644
  	}
  };
  
-diff --git a/drivers/net/wireless/ath/ath12k/hal.h b/drivers/net/wireless/ath/ath12k/hal.h
-index f3dbd31..d0636fd 100644
 --- a/drivers/net/wireless/ath/ath12k/hal.h
 +++ b/drivers/net/wireless/ath/ath12k/hal.h
 @@ -328,6 +328,7 @@ struct ath12k_hw_group;
@@ -86,11 +80,9 @@ index f3dbd31..d0636fd 100644
  #define HAL_WBM2SW_PPEDS_TX_CMPLN_MAP_ID 11
  #define HAL_WBM2SW_PPEDS_TX_CMPLN_RING_NUM 6
  /* Add any other errors here and return them in
-diff --git a/drivers/net/wireless/ath/ath12k/hal_rx.c b/drivers/net/wireless/ath/ath12k/hal_rx.c
-index 17992d2..3da1884 100644
 --- a/drivers/net/wireless/ath/ath12k/hal_rx.c
 +++ b/drivers/net/wireless/ath/ath12k/hal_rx.c
-@@ -377,7 +377,7 @@ int ath12k_hal_wbm_desc_parse_err(struct ath12k_base *ab, void *desc,
+@@ -377,7 +377,7 @@ int ath12k_hal_wbm_desc_parse_err(struct
  	if (!hw_cc_done) {
  		val = le32_get_bits(wbm_desc->buf_addr_info.info1,
  				    BUFFER_ADDR_INFO1_RET_BUF_MGR);
@@ -99,7 +91,7 @@ index 17992d2..3da1884 100644
  			ab->soc_stats.invalid_rbm++;
  			return -EINVAL;
  		}
-@@ -389,7 +389,7 @@ int ath12k_hal_wbm_desc_parse_err(struct ath12k_base *ab, void *desc,
+@@ -389,7 +389,7 @@ int ath12k_hal_wbm_desc_parse_err(struct
  	} else {
  		val = le32_get_bits(wbm_cc_desc->info0,
  				    HAL_WBM_RELEASE_RX_CC_INFO0_RBM);
@@ -108,11 +100,9 @@ index 17992d2..3da1884 100644
  			ab->soc_stats.invalid_rbm++;
  			return -EINVAL;
  		}
-diff --git a/drivers/net/wireless/ath/ath12k/hw.c b/drivers/net/wireless/ath/ath12k/hw.c
-index 84f0857..e5849d9 100644
 --- a/drivers/net/wireless/ath/ath12k/hw.c
 +++ b/drivers/net/wireless/ath/ath12k/hw.c
-@@ -945,7 +945,7 @@ static struct ath12k_hw_ring_mask ath12k_hw_ring_mask_qcn9274_msi8 = {
+@@ -945,7 +945,7 @@ static struct ath12k_hw_ring_mask ath12k
          .tx  = {
                  ATH12K_TX_RING_MASK_0,
                  ATH12K_TX_RING_MASK_1,
@@ -121,7 +111,7 @@ index 84f0857..e5849d9 100644
                  0, 0, 0, 0, 0
          },
          .rx_mon_dest = {
-@@ -1011,7 +1011,7 @@ static struct ath12k_hw_ring_mask ath12k_hw_ring_mask_qcn9274 = {
+@@ -1011,7 +1011,7 @@ static struct ath12k_hw_ring_mask ath12k
  		ATH12K_TX_RING_MASK_1,
  		ATH12K_TX_RING_MASK_2,
  		0, 0, 0, 0, 0, 0, 0, 0,
@@ -130,7 +120,7 @@ index 84f0857..e5849d9 100644
  		0, 0, 0
  	},
  	.rx_mon_dest = {
-@@ -1079,7 +1079,7 @@ static struct ath12k_hw_ring_mask ath12k_hw_ring_mask_ipq5332 = {
+@@ -1079,7 +1079,7 @@ static struct ath12k_hw_ring_mask ath12k
  		ATH12K_TX_RING_MASK_0,
  		ATH12K_TX_RING_MASK_1,
  		ATH12K_TX_RING_MASK_2,
@@ -139,7 +129,7 @@ index 84f0857..e5849d9 100644
  		0, 0, 0, 0, 0, 0, 0, 0,
  	},
  	.rx_mon_dest = {
-@@ -1747,12 +1747,13 @@ const struct ath12k_hw_regs qcn6432_regs = {
+@@ -1747,12 +1747,13 @@ const struct ath12k_hw_regs qcn6432_regs
  };
  
  static const struct ath12k_hw_hal_params ath12k_hw_hal_params_qcn9274 = {
@@ -154,7 +144,7 @@ index 84f0857..e5849d9 100644
  			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW6_EN,
  };
  
-@@ -1810,12 +1811,13 @@ struct pmm_remap ath12k_external_pmm[ATH12K_MAX_HW_INDEX] = {
+@@ -1810,12 +1811,14 @@ struct pmm_remap ath12k_external_pmm[ATH
  };
  
  static const struct ath12k_hw_hal_params ath12k_hw_hal_params_ipq5332 = {
@@ -166,10 +156,8 @@ index 84f0857..e5849d9 100644
  			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW3_EN |
 -			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW4_EN,
 +			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW4_EN |
-+			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW5_EN,
++			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW5_EN |
++			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW6_EN,
  };
  
  static struct ath12k_hw_params ath12k_hw_params[] = {
--- 
-2.34.1
-

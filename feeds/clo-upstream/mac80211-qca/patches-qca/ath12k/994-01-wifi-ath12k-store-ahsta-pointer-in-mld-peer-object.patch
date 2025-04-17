@@ -1,0 +1,35 @@
+From 20e322931f8d976a450735224314650bb198c5c6 Mon Sep 17 00:00:00 2001
+From: Aditya Kumar Singh <quic_adisi@quicinc.com>
+Date: Sat, 26 Oct 2024 14:10:36 +0530
+Subject: [PATCH 1/10] wifi: ath12k: store ahsta pointer in mld peer object
+
+There is a requirement to access each link peer from the mld peer object.
+Currently that is not possible. Hence store ahsta pointer in mld peer
+object. Now using ahsta, each individual peer object can be accessed.
+
+Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/peer.c | 1 +
+ drivers/net/wireless/ath/ath12k/peer.h | 1 +
+ 2 files changed, 2 insertions(+)
+
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -1141,6 +1141,7 @@ int ath12k_ml_peer_create(struct ath12k_
+ 	ether_addr_copy(ml_peer->addr, sta->addr);
+ 	ml_peer->id = ahsta->ml_peer_id;
+ 	list_add(&ml_peer->list, &ah->ml_peers);
++	ml_peer->ahsta = ahsta;
+ 	ah->num_ml_peers++;
+ 	spin_unlock_bh(&ah->data_lock);
+ 
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -129,6 +129,7 @@ struct ath12k_peer {
+ 
+ struct ath12k_ml_peer {
+ 	struct list_head list;
++	struct ath12k_sta *ahsta;
+ 	u8 addr[ETH_ALEN];
+ 	u16 id;
+ };

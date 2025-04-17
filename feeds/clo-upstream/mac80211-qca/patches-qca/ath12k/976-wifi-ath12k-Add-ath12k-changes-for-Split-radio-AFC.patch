@@ -114,7 +114,7 @@ Signed-off-by: Hariharan Basuthkar <quic_hbasuthk@quicinc.com>
 +	mutex_lock(&ah->conf_mutex);
 +	if (tb[QCA_WLAN_VENDOR_ATTR_AFC_RESP_HW_IDX]) {
 +		hw_idx = nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_AFC_RESP_HW_IDX]);
-+		if (hw_idx < 0 || hw_idx >= wiphy->num_hw) {
++		if (hw_idx >= wiphy->num_hw) {
 +			ath12k_warn(NULL, "Invalid hw_idx attribute\n");
 +			ret = -EINVAL;
 +			goto out;

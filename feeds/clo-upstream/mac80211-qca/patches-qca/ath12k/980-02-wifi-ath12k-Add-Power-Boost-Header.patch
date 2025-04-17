@@ -1,4 +1,4 @@
-From cb6f536d9b783815b4764e5a2ab150f8c0c9c001 Mon Sep 17 00:00:00 2001
+From 35e862c5ca7f82809bbc12ac0d028df3e73eaba3 Mon Sep 17 00:00:00 2001
 From: Thomas Wu <quic_wthomas@quicinc.com>
 Date: Wed, 9 Oct 2024 13:22:43 -0700
 Subject: [PATCH 2/6] wifi: ath12k: Add Power Boost - Header
@@ -15,7 +15,7 @@ Signed-off-by: Thomas Wu <quic_wthomas@quicinc.com>
  create mode 100644 drivers/net/wireless/ath/ath12k/power_boost.h
 
 diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
-index 240c6ca..e3d4b0c 100644
+index 7781f64..aa19524 100644
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
 @@ -31,6 +31,7 @@
@@ -45,7 +45,7 @@ index 240c6ca..e3d4b0c 100644
  	u8 id;
  	u8 num_chip;
  	u8 num_probed;
-@@ -1746,6 +1752,7 @@ struct ath12k_base {
+@@ -1744,6 +1750,7 @@ struct ath12k_base {
  
  	bool ce_pipe_init_done;
  	bool rxgainlut_support;

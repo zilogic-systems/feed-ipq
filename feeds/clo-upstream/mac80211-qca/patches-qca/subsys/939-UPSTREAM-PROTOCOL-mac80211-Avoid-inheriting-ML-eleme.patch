@@ -1,0 +1,102 @@
+From 587493791b5273aec7f82295684f07014552bf63 Mon Sep 17 00:00:00 2001
+From: Yuvarani V <quic_yuvarani@quicinc.com>
+Date: Sat, 8 Feb 2025 20:31:20 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL: mac80211: Avoid inheriting ML element for
+ non-transmitting profiles in MBSSID
+
+As per IEEE 802.11be - 2024 (35.3.20 MLO in a multiple BSSID set or
+co-hosted BSSID set - Note 2). An AP MLD, which is non-transmitting
+BSS in an MBSSID set shall not include Multi-link(ML) element in its 
+non-inheritance elements list as ML IE shall never be inherited from
+Transmitting BSS frame body. A non-AP MLD should always consider ML IE
+(all variants) present in its non-transmitting BSS profile.
+
+Currently, when a non-AP MLD parses the beacon/probe response, it
+inherits the Multi-Link element and adds it to the non-transmitting
+BSS profile. When ML Reconfiguration link removal is triggered
+on the Transmitting BSS, the non-AP MLD(s) associated to the
+non-transmitted BSS of that MBSSID set inherits the Multi-Link
+Reconfiguration element and removes the link(s) Associated.
+
+Current check_inherit in _ieee802_11_parse_elems_full() is based
+on presence of non-inheritance element, but there could be cases
+where there is no non-inheritance element present, but still
+certain IEs (MBSSID IE, ML IE) should not be inherited from
+Transmitted BSS. cfg80211_is_element_inherited() already has
+necessary conditions to avoid inheriting such IEs, hence
+pass an additional argument to _ieee802_11_parse_elems_full()
+to indicate when to(while parsing a Non-TX profile) perform
+inheritance checks.
+
+Patch-dependency: None
+
+Patch-work:
+
+Signed-off-by: Yuvarani V <quic_yuvarani@quicinc.com>
+---
+ net/mac80211/util.c | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/net/mac80211/util.c b/net/mac80211/util.c
+index 9106141..5962cad 100644
+--- a/net/mac80211/util.c
++++ b/net/mac80211/util.c
+@@ -1196,7 +1196,8 @@ static void ieee802_11_parse_elems_vendor_qcn(const u8 *pos, u8 elen,
+ static u32
+ _ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params,
+ 			     struct ieee802_11_elems *elems,
+-			     const struct element *check_inherit)
++			     bool check_inherit,
++			     const struct element *inherit_ie)
+ {
+ 	const struct element *elem;
+ 	bool calc_crc = params->filter != 0;
+@@ -1214,7 +1215,7 @@ _ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params,
+ 
+ 		if (check_inherit &&
+ 		    !cfg80211_is_element_inherited(elem,
+-						   check_inherit))
++						   inherit_ie))
+ 			continue;
+ 
+ 		switch (id) {
+@@ -1793,7 +1794,7 @@ static void ieee80211_mle_parse_link(struct ieee802_11_elems *elems,
+ 
+ 	non_inherit = cfg80211_find_ext_elem(WLAN_EID_EXT_NON_INHERITANCE,
+ 					     sub.start, sub.len);
+-	_ieee802_11_parse_elems_full(&sub, elems, non_inherit);
++	_ieee802_11_parse_elems_full(&sub, elems, non_inherit ? true : false, non_inherit);
+ }
+ 
+ struct ieee802_11_elems *
+@@ -1804,6 +1805,7 @@ ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params)
+ 	u8 *nontransmitted_profile;
+ 	int nontransmitted_profile_len = 0;
+ 	size_t scratch_len = params->scratch_len ?: 2 * params->len;
++	bool check_inherit = false;
+ 
+ 	elems = kzalloc(sizeof(*elems) + scratch_len, GFP_ATOMIC);
+ 	if (!elems)
+@@ -1824,7 +1826,9 @@ ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params)
+ 					     nontransmitted_profile,
+ 					     nontransmitted_profile_len);
+ 
+-	elems->crc = _ieee802_11_parse_elems_full(params, elems, non_inherit);
++	if (non_inherit || nontransmitted_profile_len)
++		check_inherit = true;
++	elems->crc = _ieee802_11_parse_elems_full(params, elems, check_inherit, non_inherit);
+ 
+ 	/* Override with nontransmitted profile, if found */
+ 	if (nontransmitted_profile_len) {
+@@ -1835,7 +1839,7 @@ ieee802_11_parse_elems_full(struct ieee80211_elems_parse_params *params)
+ 			.link_id = params->link_id,
+ 		};
+ 
+-		_ieee802_11_parse_elems_full(&sub, elems, NULL);
++		_ieee802_11_parse_elems_full(&sub, elems, false, NULL);
+ 	}
+ 
+ 	ieee80211_mle_parse_link(elems, params);
+-- 
+2.34.1
+

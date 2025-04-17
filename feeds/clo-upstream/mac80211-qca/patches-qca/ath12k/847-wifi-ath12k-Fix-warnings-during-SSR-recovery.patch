@@ -42,7 +42,17 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  				} else {
  					/* Send low ack to disassoc the MLD station
  					 * Need to check on the sequence as FW has
-@@ -7589,7 +7589,7 @@ int ath12k_mac_update_sta_state(struct i
+@@ -1631,6 +1631,9 @@ int ath12k_mac_monitor_stop(struct ath12
+ 	if (!test_bit(MONITOR_VDEV_STARTED, &ar->monitor_flags))
+ 		return 0;
+ 
++	if (test_bit(ATH12K_FLAG_RECOVERY, &ar->ab->dev_flags))
++		return -EHOSTDOWN;
++
+ 	ret = ath12k_mac_monitor_vdev_stop(ar);
+ 	if (ret) {
+ 		ath12k_warn(ar->ab, "failed to stop monitor vdev: %d\n", ret);
+@@ -7597,7 +7600,7 @@ int ath12k_mac_update_sta_state(struct i
  	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
  	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
  	int ret = 0;
@@ -51,7 +61,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  
  	mutex_lock(&ah->conf_mutex);
  
-@@ -7640,6 +7640,18 @@ int ath12k_mac_update_sta_state(struct i
+@@ -7648,6 +7651,18 @@ int ath12k_mac_update_sta_state(struct i
  	/* assign default link to the first link sta */
  	if (!ahsta->links_map && hweight16(sta->valid_links) == 1 &&
  	    new_state == IEEE80211_STA_NONE && old_state == IEEE80211_STA_NOTEXIST) {
@@ -70,7 +80,7 @@ Signed-off-by: Vignesh C <quic_vignc@quicinc.com>
  		ret = ath12k_ml_peer_create(ah, sta);
  		if (ret) {
  			ath12k_err(NULL, "unable to create ML peer for sta %pM", sta->addr);
-@@ -11250,6 +11262,9 @@ static void ath12k_mac_op_remove_interfa
+@@ -11230,6 +11245,9 @@ static void ath12k_mac_op_remove_interfa
  		if (WARN_ON(arvif->link_id != link_id))
  			continue;
  

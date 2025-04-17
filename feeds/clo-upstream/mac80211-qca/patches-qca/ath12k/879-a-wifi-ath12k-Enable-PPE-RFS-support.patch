@@ -71,7 +71,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  static DEFINE_MUTEX(ath12k_hw_lock);
  static struct list_head ath12k_hw_groups = LIST_HEAD_INIT(ath12k_hw_groups);
  
-@@ -4246,7 +4256,6 @@ static int ath12k_init(void)
+@@ -4269,7 +4279,6 @@ static int ath12k_init(void)
  		goto error_pci;
  
  	return 0;
@@ -91,13 +91,14 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #define ATH12K_PHY_2GHZ "phy00"
  #define ATH12K_PHY_5GHZ "phy01"
  #define ATH12K_PHY_5GHZ_LOW "phy01"
-@@ -507,10 +510,14 @@ struct ath12k_vif {
+@@ -507,11 +510,15 @@ struct ath12k_vif {
  #ifdef CPTCFG_ATH12K_DEBUGFS
  	struct dentry *debugfs_linkstats;
  	struct dentry *debugfs_primary_link;
 +	struct dentry *debugfs_rfs_core_mask;
  #endif /* CPTCFG_ATH12K_DEBUGFS */
  	bool mcast_to_ucast_en;
+ 	u8 hw_link_id;
  	bool chanctx_peer_del_done;
 - };
 +
@@ -117,7 +118,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  static struct dentry *debugfs_ath12k;
  
-@@ -5494,6 +5495,65 @@ static const struct file_operations ath1
+@@ -5593,6 +5594,65 @@ static const struct file_operations ath1
  	.llseek = default_llseek,
  };
  
@@ -183,7 +184,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  void ath12k_debugfs_add_interface(struct ath12k_link_vif *arvif)
  {
  	struct ath12k_vif *ahvif = arvif->ahvif;
-@@ -5581,6 +5641,12 @@ void ath12k_debugfs_add_interface(struct
+@@ -5680,6 +5740,12 @@ void ath12k_debugfs_add_interface(struct
  		ahvif->debugfs_linkstats = NULL;
  	}
  
@@ -196,7 +197,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	/* Note: Add new AP mode only debugfs file before "ap_and_sta_debugfs_file" label.
  	 * Add new debugfs file for both AP and STA mode after the "ap_and_sta_debugfs_file"
  	 * label.
-@@ -5611,6 +5677,9 @@ void ath12k_debugfs_remove_interface(str
+@@ -5721,6 +5787,9 @@ void ath12k_debugfs_remove_interface(str
  	debugfs_remove(ahvif->debugfs_primary_link);
  	ahvif->debugfs_primary_link = NULL;
  
@@ -216,7 +217,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #ifdef CPTCFG_ATH12K_BONDED_DS_SUPPORT
  #include "bondif.h"
  #endif
-@@ -11241,7 +11242,7 @@ static int ath12k_mac_op_add_interface(s
+@@ -11235,7 +11236,7 @@ static int ath12k_mac_op_add_interface(s
  {
  	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
  	struct ath12k_hw *ah = hw->priv;
@@ -225,7 +226,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	/* The ar in which this vif will be assigned can be determined since
  	 * it depends on the channel in which the vif is brought up.
-@@ -11252,6 +11253,11 @@ static int ath12k_mac_op_add_interface(s
+@@ -11246,6 +11247,11 @@ static int ath12k_mac_op_add_interface(s
  	 */
  
  	mutex_lock(&ah->conf_mutex);
@@ -237,7 +238,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	memset(ahvif, 0, sizeof(*ahvif));
  
  	ahvif->vdev_type = vif->type;
-@@ -11261,6 +11267,15 @@ static int ath12k_mac_op_add_interface(s
+@@ -11255,6 +11261,15 @@ static int ath12k_mac_op_add_interface(s
  	ahvif->deflink.ahvif = ahvif;
  	ahvif->deflink.link_id = 0;
  	ahvif->mcbc_gsn = 0;
@@ -253,7 +254,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	INIT_LIST_HEAD(&ahvif->deflink.list);
  	INIT_WORK(&ahvif->deflink.update_obss_color_notify_work,
  		  ath12k_update_obss_color_notify_work);
-@@ -11456,6 +11471,9 @@ static void ath12k_mac_op_remove_interfa
+@@ -11453,6 +11468,9 @@ static void ath12k_mac_op_remove_interfa
  		ath12k_mac_unassign_link_vif(arvif);
  	}
  
@@ -265,7 +266,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/ppe.c
 +++ b/drivers/net/wireless/ath/ath12k/ppe.c
-@@ -1269,3 +1269,129 @@ void ath12k_dp_srng_ppeds_cleanup(struct
+@@ -1270,3 +1270,129 @@ void ath12k_dp_srng_ppeds_cleanup(struct
  	ath12k_dp_srng_cleanup(ab, &dp->ppeds_comp_ring.ppe_wbm2sw_ring);
  }
  

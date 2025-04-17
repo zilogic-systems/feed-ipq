@@ -1,0 +1,294 @@
+From a2afbb665efa5030d5b006d6b9c38269bd2467b9 Mon Sep 17 00:00:00 2001
+From: Sarika Sharma <quic_sarishar@quicinc.com>
+Date: Wed, 30 Oct 2024 09:31:36 +0530
+Subject: [PATCH] wifi: ath12k: correctly handle 4addr mcast packets
+
+Currently is_mcbc is set for 4addr packets as DA is mcbc, but packets
+are actually unicast as RA is not mcast address.
+But 4addr packets with da_mcbc set packets are going through reo
+path and PN validation is already done for these packets.
+
+Hence, properly handle da_mcbc set packets for 4addr.
+
+patch-dependency: 641-0001-ath12k-fix-4-addr-tx-failure-for-AP-and-STA-modes.patch
+
+Signed-off-by: Sarika Sharma <quic_sarishar@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_mon.c |  2 +
+ drivers/net/wireless/ath/ath12k/dp_rx.c  | 53 +++++++++++++++++++++---
+ drivers/net/wireless/ath/ath12k/dp_rx.h  |  3 ++
+ drivers/net/wireless/ath/ath12k/hal.c    |  2 +
+ drivers/net/wireless/ath/ath12k/mac.c    |  8 +++-
+ drivers/net/wireless/ath/ath12k/peer.h   |  1 +
+ 6 files changed, 62 insertions(+), 7 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp_mon.c
++++ b/drivers/net/wireless/ath/ath12k/dp_mon.c
+@@ -2276,11 +2276,9 @@ static int ath12k_dp_mon_rx_deliver(stru
+ 	struct ath12k_pdev_dp *dp = &ar->dp;
+ 	struct sk_buff *mon_skb, *skb_next, *header;
+ 	struct ieee80211_rx_status *rxs = &dp->rx_status;
+-	struct ath12k_dp_rx_info rx_info;
++	struct ath12k_dp_rx_info rx_info = {0};
+ 	bool fcs_err = false;
+ 
+-	rx_info.filled = 0;
+-	rx_info.is_invalid_rate_drop = 0;
+ 	rx_info.rx_status = rxs;
+ 
+ 	mon_skb = ath12k_dp_mon_rx_merg_msdus(ar, mpdu_idx, head_msdu,
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.c
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.c
+@@ -3077,6 +3077,15 @@ static void ath12k_dp_rx_h_undecap(struc
+ 			break;
+ 		}
+ 
++		/* Drop the 3addr da_mcbc packets for 4addr sta as it will
++		 * double the packet for connected clients.
++		 */
++		if (rx_info->is_4addr_sta && rx_info->is_mcbc &&
++		    !rx_info->is_to_ds) {
++			rx_info->is_drop_packet = true;
++			return;
++		}
++
+ 		/* PN for mcast packets will be validated in mac80211;
+ 		 * remove eth header and add 802.11 header.
+ 		 */
+@@ -3210,7 +3219,6 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 				struct ath12k_dp_rx_info *rx_info,
+ 				bool *fast_rx)
+ {
+-	bool  fill_crypto_hdr;
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_skb_rxcb *rxcb;
+ 	enum hal_encrypt_type enctype;
+@@ -3222,10 +3230,8 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 
+ 	/* PN for multicast packets will be checked in mac80211 */
+ 	rxcb = ATH12K_SKB_RXCB(msdu);
+-	fill_crypto_hdr = rx_info->is_mcbc;
+-	rxcb->is_mcbc = fill_crypto_hdr;
+ 
+-	if (rxcb->is_mcbc)
++	if (rx_info->is_mcbc)
+ 		rxcb->peer_id = rx_info->peer_id;
+ 
+ 	msdu->ip_summed = (rx_info->ip_csum_fail || rx_info->l4_csum_fail) ?
+@@ -3233,6 +3239,11 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 	rcu_read_lock();
+ 	peer = ath12k_peer_find_by_peer_list_index(ar, rxcb->peer_id);
+ 	if (likely(peer)) {
++		/* restting 4addr da mcbc packets as in 4addr mcbc packets are
++		 * unicast only and sta send sends unicast pkts only.
++		 */
++		rxcb->is_mcbc = rx_info->is_mcbc && !peer->is_reset_mcbc;
++
+ 		/* If the pkt is a valid IP packet and peer supports
+ 		 * fast rx, deliver directly to net, also note that
+ 		 * pkts with crypto error are not expected to arrive in this
+@@ -3260,6 +3271,7 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 				return;
+ 		        }
+ 		}
++		rx_info->is_4addr_sta = peer->vdev_type_4addr & BIT(NL80211_IFTYPE_STATION);
+ 		enctype =
+ 			ath12k_dp_rx_update_peer_dependent_param(ar, msdu,
+ 								 rx_info, peer);
+@@ -3270,6 +3282,8 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 
+ 		peer = ath12k_dp_rx_h_find_peer(ar, msdu, rx_info);
+ 		if (peer) {
++			rxcb->is_mcbc = rx_info->is_mcbc && !peer->is_reset_mcbc;
++			rx_info->is_4addr_sta = peer->vdev_type_4addr & BIT(NL80211_IFTYPE_STATION);
+ 			enctype =
+ 				ath12k_dp_rx_update_peer_dependent_param(ar, msdu,
+ 									 rx_info, peer);
+@@ -3304,7 +3318,7 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 	if (is_decrypted) {
+ 		rx_status->flag |= RX_FLAG_DECRYPTED | RX_FLAG_MMIC_STRIPPED;
+ 
+-		if (fill_crypto_hdr)
++		if (rxcb->is_mcbc)
+ 			rx_status->flag |= RX_FLAG_MIC_STRIPPED |
+ 					RX_FLAG_ICV_STRIPPED;
+ 		else
+@@ -3315,7 +3329,7 @@ static void ath12k_dp_rx_h_mpdu(struct a
+ 	ath12k_dp_rx_h_undecap(ar, msdu, rx_desc,
+ 			       enctype, rx_info, is_decrypted);
+ 
+-	if (!is_decrypted || fill_crypto_hdr)
++	if (!is_decrypted || rxcb->is_mcbc)
+ 		return;
+ 
+ 	if (rx_info->decap_type != DP_RX_DECAP_TYPE_ETHERNET2_DIX) {
+@@ -3729,6 +3743,12 @@ static int ath12k_dp_rx_process_msdu(str
+ 	}
+ 
+ 	ath12k_dp_rx_h_mpdu(ar, msdu, rx_desc, rx_info, fast_rx);
++
++	if (rx_info->is_drop_packet) {
++		ret = -EINVAL;
++		goto free_out;
++	}
++
+ 	if (*fast_rx)
+ 		return 0;
+ 
+@@ -4116,6 +4136,8 @@ try_again:
+ 
+ 		rx_info.filled = 0;
+ 		rx_info.is_invalid_rate_drop = 0;
++		rx_info.is_drop_packet = 0;
++		rx_info.is_4addr_sta = 0;
+ 		rx_info.rx_status = &rx_status;
+ 		ret = ath12k_dp_rx_process_msdu(ar, msdu, &msdu_list, &rx_info,
+ 						&fast_rx);
+@@ -4224,7 +4246,7 @@ static int ath12k_dp_rx_h_verify_tkip_mi
+ 	struct ieee80211_key_conf *key_conf;
+ 	struct ieee80211_hdr *hdr;
+ 	u8 mic[IEEE80211_CCMP_MIC_LEN];
+-	struct ath12k_dp_rx_info rx_info;
++	struct ath12k_dp_rx_info rx_info = {0};
+ 	int head_len, tail_len, ret;
+ 	size_t data_len;
+ 	u32 hdr_len, hal_rx_desc_sz = ar->ab->hw_params->hal_desc_sz;
+@@ -4234,8 +4256,6 @@ static int ath12k_dp_rx_h_verify_tkip_mi
+ 	if (ath12k_dp_rx_h_enctype(ab, rx_desc) != HAL_ENCRYPT_TYPE_TKIP_MIC)
+ 		return 0;
+ 
+-	rx_info.filled = 0;
+-	rx_info.is_invalid_rate_drop = 0;
+ 	rx_info.rx_status = rxs;
+ 
+ 	hdr = (struct ieee80211_hdr *)(msdu->data + hal_rx_desc_sz);
+@@ -4285,6 +4305,10 @@ mic_fail:
+ 
+ 	ath12k_dp_rx_h_undecap(ar, msdu, rx_desc,
+ 			       HAL_ENCRYPT_TYPE_TKIP_MIC, &rx_info, true);
++
++	if (rx_info.is_drop_packet)
++		return -EINVAL;
++
+ 	ieee80211_rx(ar->ah->hw, msdu);
+ 	return -EINVAL;
+ }
+@@ -5123,6 +5147,11 @@ static int ath12k_dp_rx_h_null_q_desc(st
+ 	fast_rx = false;
+ 	ath12k_dp_rx_h_mpdu(ar, msdu, desc, rx_info, &fast_rx);
+ 
++	if (rx_info->is_drop_packet) {
++		ret = -EINVAL;
++		goto exit;
++	}
++
+ 	rxcb->tid = ath12k_dp_rx_h_tid(ab, desc);
+ 
+ 	/* Please note that caller will having the access to msdu and completing
+@@ -5245,6 +5274,9 @@ static bool ath12k_dp_rx_h_tkip_mic_err(
+ 	ath12k_dp_rx_h_undecap(ar, msdu, desc,
+ 			       HAL_ENCRYPT_TYPE_TKIP_MIC, rx_info, false);
+ 
++	if (rx_info->is_drop_packet)
++		drop = true;
++
+ exit:
+ 	if (!ab->stats_disable) {
+ 		peer_id = ath12k_dp_rx_h_peer_id(ab, desc);
+@@ -5369,6 +5401,11 @@ static bool ath12k_dp_rx_h_4addr_null_fr
+ 
+ 	ath12k_dp_rx_h_mpdu(ar, msdu, rx_desc, rx_info, &fast_rx);
+ 
++	if (rx_info->is_drop_packet) {
++		drop = true;
++		goto exit;
++	}
++
+ 	rxcb->tid = ath12k_dp_rx_h_tid(ab, rx_desc);
+ 
+ 	hdr = (struct ieee80211_hdr *)msdu->data;
+@@ -5446,11 +5483,9 @@ static void ath12k_dp_rx_wbm_err(struct
+ {
+ 	struct ath12k_skb_rxcb *rxcb = ATH12K_SKB_RXCB(msdu);
+ 	struct ieee80211_rx_status rxs = {0};
+-	struct ath12k_dp_rx_info rx_info;
++	struct ath12k_dp_rx_info rx_info = {0};
+ 	bool drop = true;
+ 
+-	rx_info.filled = 0;
+-	rx_info.is_invalid_rate_drop = 0;
+ 	rx_info.rx_status = &rxs;
+ 
+ 	switch (rxcb->err_rel_src) {
+--- a/drivers/net/wireless/ath/ath12k/dp_rx.h
++++ b/drivers/net/wireless/ath/ath12k/dp_rx.h
+@@ -153,6 +153,9 @@ struct ath12k_dp_rx_info {
+ 	bool flow_idx_timeout;
+ 	u16 flow_metadata;
+ 	bool is_invalid_rate_drop;
++	bool is_drop_packet;
++	bool is_to_ds;
++	bool is_4addr_sta;
+ };
+ 
+ #define ATH12K_DP_MIN_FST_CORE_MASK 0x1
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -845,6 +845,8 @@ static void ath12k_hw_qcn9274_get_rx_des
+ 				     RX_MSDU_END_INFO5_TID);
+ 	rx_info->is_intra_bss = !!le32_get_bits(desc->u.qcn9274.msdu_end.info9,
+ 						RX_MSDU_END_INFO9_INTRA_BSS);
++	rx_info->is_to_ds = !!le32_get_bits(desc->u.qcn9274.msdu_end.info5,
++					    RX_MSDU_END_INFO5_TO_DS);
+ }
+ 
+ const struct hal_ops hal_qcn9274_ops = {
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -8090,11 +8090,20 @@ static void ath12k_sta_set_4addr_wk(stru
+ 			ath12k_warn(ar->ab, "failed to set peer %pM 4addr capability: %d\n",
+ 				    arsta->addr, ret);
+ 
+-		if (ahvif->tx_encap_type != ATH12K_HW_TXRX_ETHERNET)
+-			continue;
+-
+ 		spin_lock_bh(&ar->ab->base_lock);
+ 		peer = ath12k_peer_find_by_addr(ar->ab, arsta->addr);
++
++		/* Below block is always required irrespective of enacp_type */
++		if (peer) {
++			peer->vdev_type_4addr |= BIT(peer->vif->type);
++			peer->is_reset_mcbc = true;
++		}
++
++		if (ahvif->tx_encap_type != ATH12K_HW_TXRX_ETHERNET) {
++			spin_unlock_bh(&ar->ab->base_lock);
++			continue;
++		}
++
+ 		if (!peer) {
+ 			spin_unlock_bh(&ar->ab->base_lock);
+ 			ath12k_warn(ar->ab,
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -120,6 +120,8 @@ struct ath12k_peer {
+ #endif
+ 	bool assoc_success; /* information on peer assoc status from firmware */
+ 	struct ath12k_dp_mon_peer_stats stats;
++	u8 vdev_type_4addr;
++	bool is_reset_mcbc;
+ };
+ 
+ struct ath12k_ml_peer {
+--- a/drivers/net/wireless/ath/ath12k/peer.c
++++ b/drivers/net/wireless/ath/ath12k/peer.c
+@@ -901,6 +901,9 @@ int ath12k_peer_create(struct ath12k *ar
+ 			peer->stats_disable = ATH12K_PEER_STATS_DSBL_SFE;
+ 	}
+ 
++	if (peer->vif->type == NL80211_IFTYPE_AP)
++		peer->is_reset_mcbc = true;
++
+ 	if (sta) {
+ 		ahsta = ath12k_sta_to_ahsta(sta);
+ 		arsta = ahsta->link[link_id];

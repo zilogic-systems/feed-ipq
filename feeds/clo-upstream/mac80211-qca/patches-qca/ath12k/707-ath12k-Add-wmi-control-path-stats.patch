@@ -76,7 +76,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  };
  
  struct ath12k_per_peer_tx_stats {
-@@ -804,6 +807,11 @@ struct ath12k {
+@@ -803,6 +806,11 @@ struct ath12k {
  	u32 cached_ppdu_id;
  #ifdef CPTCFG_ATH12K_DEBUGFS
  	struct ath12k_debug debug;
@@ -388,7 +388,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  static int ath12k_debugfs_fw_stats_request(struct ath12k *ar,
  					   struct stats_request_params *req_param)
  {
-@@ -2442,6 +2733,7 @@ int ath12k_debugfs_register(struct ath12
+@@ -2453,6 +2744,7 @@ int ath12k_debugfs_register(struct ath12
  
  	ath12k_debugfs_htt_stats_init(ar);
  
@@ -396,7 +396,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  	ath12k_debugfs_fw_stats_init(ar);
  	ath12k_init_pktlog(ar);
  
-@@ -2491,6 +2783,10 @@ int ath12k_debugfs_register(struct ath12
+@@ -2502,6 +2794,10 @@ int ath12k_debugfs_register(struct ath12
  void ath12k_debugfs_unregister(struct ath12k *ar)
  {
  	ath12k_deinit_pktlog(ar);
@@ -420,7 +420,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  void ath12k_debugfs_soc_destroy(struct ath12k_base *ab);
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -4002,6 +4002,93 @@ int ath12k_wmi_send_twt_add_dialog_cmd(s
+@@ -3921,6 +3921,93 @@ int ath12k_wmi_send_twt_add_dialog_cmd(s
  	return ret;
  }
  
@@ -514,7 +514,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  int ath12k_wmi_send_twt_del_dialog_cmd(struct ath12k *ar,
  				       struct wmi_twt_del_dialog_params *params)
  {
-@@ -4039,6 +4126,258 @@ int ath12k_wmi_send_twt_del_dialog_cmd(s
+@@ -3958,6 +4045,258 @@ int ath12k_wmi_send_twt_del_dialog_cmd(s
  	return ret;
  }
  
@@ -555,6 +555,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
 +	if (!ar) {
 +		ath12k_warn(ab, "Failed to get ar for wmi ctrl stats\n");
 +		kfree(pdev_stats);
++		list_del(&stats->list);
 +		kfree(stats);
 +		return -EINVAL;
 +	}
@@ -593,6 +594,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
 +	if (!ar) {
 +		ath12k_warn(ab, "Failed to get ar for wmi ctrl cal stats\n");
 +		kfree(cal_stats);
++		list_del(&stats->list);
 +		kfree(stats);
 +		return -EINVAL;
 +	}
@@ -634,6 +636,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
 +	if (!ar) {
 +		ath12k_warn(ab, "Failed to get ar for wmi ctrl cal stats\n");
 +		kfree(btcoex_stats);
++		list_del(&stats->list);
 +		kfree(stats);
 +		return -EINVAL;
 +	}
@@ -681,9 +684,6 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
 +				const void *ptr, void *data)
 +{
 +	int ret = 0;
-+
-+	ath12k_dbg(ab, ATH12K_DBG_WMI, "wmi ctrl path stats tag 0x%x of len %d rcvd\n",
-+			tag, len);
 +
 +	switch (tag) {
 +	case WMI_CTRL_PATH_STATS_EV_FIXED_PARAM:
@@ -773,7 +773,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  int ath12k_wmi_send_twt_pause_dialog_cmd(struct ath12k *ar,
  					 struct wmi_twt_pause_dialog_params *params)
  {
-@@ -10386,6 +10725,9 @@ static void ath12k_wmi_op_rx(struct ath1
+@@ -10481,6 +10820,9 @@ static void ath12k_wmi_op_rx(struct ath1
  	case WMI_PDEV_PKTLOG_DECODE_INFO_EVENTID:
  		ath12k_wmi_pktlog_decode_info(ab, skb);
  		break;
@@ -785,7 +785,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  		break;
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -2062,10 +2062,17 @@ enum wmi_tlv_tag {
+@@ -2067,10 +2067,17 @@ enum wmi_tlv_tag {
  	WMI_TAG_PDEV_SRG_OBSS_BSSID_ENABLE_BITMAP_CMD,
  	WMI_TAG_PDEV_NON_SRG_OBSS_COLOR_ENABLE_BITMAP_CMD,
  	WMI_TAG_PDEV_NON_SRG_OBSS_BSSID_ENABLE_BITMAP_CMD,
@@ -803,7 +803,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  	WMI_TAG_EHT_RATE_SET = 0x3C4,
  	WMI_TAG_DCS_AWGN_INT_TYPE = 0x3C5,
  	WMI_TAG_MLO_TX_SEND_PARAMS,
-@@ -5606,6 +5613,254 @@ struct wmi_twt_resume_dialog_params_cmd
+@@ -5652,6 +5659,254 @@ struct wmi_twt_resume_dialog_params_cmd
  	u32 next_twt_size;
  } __packed;
  
@@ -1058,7 +1058,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  struct wmi_obss_spatial_reuse_params_cmd {
  	__le32 tlv_header;
  	__le32 pdev_id;
-@@ -6161,6 +6416,7 @@ struct wmi_dbglog_config_cmd_fixed_param
+@@ -6207,6 +6462,7 @@ struct wmi_dbglog_config_cmd_fixed_param
  #define WMI_MLO_CMD_TIMEOUT_HZ		(5 * HZ)
  #define WMI_SERVICE_READY_TIMEOUT_HZ (5 * HZ)
  #define WMI_SEND_TIMEOUT_HZ (3 * HZ)
@@ -1066,7 +1066,7 @@ Signed-off-by: Rajat Soni <quic_rajson@quicinc.com>
  
  struct ath12k_wmi_pdev {
  	struct ath12k_wmi_base *wmi_ab;
-@@ -6517,6 +6773,8 @@ int ath12k_wmi_pdev_ap_ps_cmd_send(struc
+@@ -6563,6 +6819,8 @@ int ath12k_wmi_pdev_ap_ps_cmd_send(struc
  int ath12k_wmi_pdev_m3_dump_enable(struct ath12k *ar, u32 enable);
  int ath12k_wmi_pdev_get_tpc_table_cmdid(struct ath12k *ar);
  void ath12k_wmi_free_tpc_stats_mem(struct ath12k *ar);

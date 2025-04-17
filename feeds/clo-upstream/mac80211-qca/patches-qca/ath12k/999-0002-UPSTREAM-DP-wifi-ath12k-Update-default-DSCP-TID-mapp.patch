@@ -1,0 +1,215 @@
+From 7ee0be87154dbee1d4e068d43266cccac724053e Mon Sep 17 00:00:00 2001
+From: Aishwarya R <quic_aisr@quicinc.com>
+Date: Thu, 27 Feb 2025 15:48:13 +0530
+Subject: [PATCH] UPSTREAM:DP:wifi:ath12k: Update default DSCP TID mapping
+ based on the RFC8325
+
+Update DSCP TID mapping to align with recommendations provided in RFC8325.
+The mapping ensures consistent Quality of Service (QoS) treatment between
+wireless networks, prioritizing critical traffic and reducing latency.
+
+/* DSCP TID mapping as per RFC 8325
+ * ===============================
+ * DSCP         User Priority (UP)
+ * ===============================
+ * 56           7
+ * 48           7
+ * 46           6
+ * 44           6
+ * 40           5
+ * 34, 36, 38   4
+ * 32           4
+ * 26, 28, 30   4
+ * 24           4
+ * 18, 20, 22   3
+ * 16           0
+ * 10, 12, 14   0
+ * 0            0
+ * 8            1
+ */
+
+Patch-dependency: none
+Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp.c     | 13 ++++-
+ drivers/net/wireless/ath/ath12k/hal.h    |  1 +
+ drivers/net/wireless/ath/ath12k/hal_tx.c | 70 ++++++------------------
+ drivers/net/wireless/ath/ath12k/hal_tx.h | 24 +++++++-
+ 4 files changed, 52 insertions(+), 56 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/dp.c b/drivers/net/wireless/ath/ath12k/dp.c
+index 9b1a377..8e42414 100644
+--- a/drivers/net/wireless/ath/ath12k/dp.c
++++ b/drivers/net/wireless/ath/ath12k/dp.c
+@@ -19,6 +19,17 @@
+ #define ATH12K_DP_LMAC_PEER_ID_MLO	3
+ #define ATH12K_DP_PEER_ROUTING_LMAC_ID_MASK	GENMASK(7,6)
+ 
++u8 default_dscp_tid_map[DSCP_TID_MAP_TBL_ENTRY_SIZE] = {
++        0, 0, 0, 0, 0, 0, 0, 0,
++        1, 1, 0, 1, 0, 1, 0, 1,
++        0, 2, 3, 2, 3, 2, 3, 2,
++        4, 3, 4, 3, 4, 3, 4, 3,
++        4, 4, 4, 4, 4, 4, 4, 4,
++        5, 5, 5, 5, 6, 5, 6, 5,
++        7, 6, 6, 6, 6, 6, 6, 6,
++        7, 7, 7, 7, 7, 7, 7, 7,
++};
++
+ static void ath12k_dp_htt_htc_tx_complete(struct ath12k_base *ab,
+ 					  struct sk_buff *skb)
+ {
+@@ -2466,7 +2477,7 @@ int ath12k_dp_alloc(struct ath12k_base *ab)
+ 	}
+ 
+ 	for (i = 0; i < HAL_DSCP_TID_MAP_TBL_NUM_ENTRIES_MAX; i++)
+-		ath12k_hal_tx_set_dscp_tid_map(ab, i);
++		ath12k_hal_tx_set_dscp_tid_map(ab, default_dscp_tid_map, i);
+ 
+ 	ret = ath12k_dp_rx_alloc(ab);
+ 	if (ret)
+diff --git a/drivers/net/wireless/ath/ath12k/hal.h b/drivers/net/wireless/ath/ath12k/hal.h
+index 2587914..b1a383b 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.h
++++ b/drivers/net/wireless/ath/ath12k/hal.h
+@@ -35,6 +35,7 @@ struct ath12k_hw_group;
+ /* TODO: 16 entries per radio times MAX_VAPS_SUPPORTED */
+ #define HAL_DSCP_TID_MAP_TBL_NUM_ENTRIES_MAX	32
+ #define HAL_DSCP_TID_TBL_SIZE			24
++#define DSCP_TID_MAP_TBL_ENTRY_SIZE		64
+ 
+ /* calculate the register address from bar0 of shadow register x */
+ #define HAL_SHADOW_BASE_ADDR			0x000008fc
+diff --git a/drivers/net/wireless/ath/ath12k/hal_tx.c b/drivers/net/wireless/ath/ath12k/hal_tx.c
+index 467de34..d9c988b 100644
+--- a/drivers/net/wireless/ath/ath12k/hal_tx.c
++++ b/drivers/net/wireless/ath/ath12k/hal_tx.c
+@@ -11,29 +11,11 @@
+ 
+ #define DSCP_TID_MAP_TBL_ENTRY_SIZE 64
+ 
+-/* dscp_tid_map - Default DSCP-TID mapping
+- *=================
+- * DSCP        TID
+- *=================
+- * 000xxx      0
+- * 001xxx      1
+- * 010xxx      2
+- * 011xxx      3
+- * 100xxx      4
+- * 101xxx      5
+- * 110xxx      6
+- * 111xxx      7
+- */
+-static inline u8 dscp2tid(u8 dscp)
+-{
+-	return dscp >> 3;
+-}
+-
+-void ath12k_hal_tx_set_dscp_tid_map(struct ath12k_base *ab, int id)
++void ath12k_hal_tx_set_dscp_tid_map(struct ath12k_base *ab, u8 *map, int id)
+ {
+ 	u32 ctrl_reg_val;
+ 	u32 addr;
+-	u8 hw_map_val[HAL_DSCP_TID_TBL_SIZE], dscp, tid;
++	u8 hw_map_val[HAL_DSCP_TID_TBL_SIZE], count = 0;
+ 	int i;
+ 	u32 value;
+ 
+@@ -50,40 +32,20 @@ void ath12k_hal_tx_set_dscp_tid_map(struct ath12k_base *ab, int id)
+ 	/* Configure each DSCP-TID mapping in three bits there by configure
+ 	 * three bytes in an iteration.
+ 	 */
+-	for (i = 0, dscp = 0; i < HAL_DSCP_TID_TBL_SIZE; i += 3) {
+-		tid = dscp2tid(dscp);
+-		value = u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP0);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP1);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP2);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP3);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP4);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP5);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP6);
+-		dscp++;
+-
+-		tid = dscp2tid(dscp);
+-		value |= u32_encode_bits(tid, HAL_TCL1_RING_FIELD_DSCP_TID_MAP7);
+-		dscp++;
+-
+-		memcpy(&hw_map_val[i], &value, 3);
++	for (i = 0; i < DSCP_TID_MAP_TBL_ENTRY_SIZE; i += 8) {
++		value = 0;
++
++		value |= u32_encode_bits(map[i], HAL_TCL1_RING_FIELD_DSCP_TID_MAP0);
++		value |= u32_encode_bits(map[i + 1], HAL_TCL1_RING_FIELD_DSCP_TID_MAP1);
++		value |= u32_encode_bits(map[i + 2], HAL_TCL1_RING_FIELD_DSCP_TID_MAP2);
++		value |= u32_encode_bits(map[i + 3], HAL_TCL1_RING_FIELD_DSCP_TID_MAP3);
++		value |= u32_encode_bits(map[i + 4], HAL_TCL1_RING_FIELD_DSCP_TID_MAP4);
++		value |= u32_encode_bits(map[i + 5], HAL_TCL1_RING_FIELD_DSCP_TID_MAP5);
++		value |= u32_encode_bits(map[i + 6], HAL_TCL1_RING_FIELD_DSCP_TID_MAP6);
++		value |= u32_encode_bits(map[i + 7], HAL_TCL1_RING_FIELD_DSCP_TID_MAP7);
++
++		memcpy(&hw_map_val[count], &value, 3);
++		count += 3;
+ 	}
+ 
+ 	for (i = 0; i < HAL_DSCP_TID_TBL_SIZE; i += 4) {
+diff --git a/drivers/net/wireless/ath/ath12k/hal_tx.h b/drivers/net/wireless/ath/ath12k/hal_tx.h
+index 057b570..8bad85e 100644
+--- a/drivers/net/wireless/ath/ath12k/hal_tx.h
++++ b/drivers/net/wireless/ath/ath12k/hal_tx.h
+@@ -211,11 +211,33 @@ struct hal_tx_fes_status_end {
+ #define HAL_TX_PPE_VP_CFG_TO_FW			BIT(28)
+ #define HAL_TX_PPE_VP_CFG_DROP_PREC_EN		BIT(29)
+ 
++/* DSCP TID mapping as per RFC 8325
++ * ===============================
++ * DSCP         User Priority (UP)
++ * ===============================
++ * 56           7
++ * 48           7
++ * 46           6
++ * 44           6
++ * 40           5
++ * 34, 36, 38   4
++ * 32           4
++ * 26, 28, 30   4
++ * 24           4
++ * 18, 20, 22   3
++ * 16           0
++ * 10, 12, 14   0
++ * 0            0
++ * 8            1
++ */
++
++extern u8 default_dscp_tid_map[DSCP_TID_MAP_TBL_ENTRY_SIZE];
++
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ void ath12k_hal_tx_set_ppe_vp_entry(struct ath12k_base *ab, u32 ppe_vp_config,
+                                     u32 ppe_vp_index);
+ #endif
+-void ath12k_hal_tx_set_dscp_tid_map(struct ath12k_base *ab, int id);
++void ath12k_hal_tx_set_dscp_tid_map(struct ath12k_base *ab, uint8_t *map, int id);
+ int ath12k_hal_reo_cmd_send(struct ath12k_base *ab, struct hal_srng *srng,
+ 			    enum hal_reo_cmd_type type,
+ 			    struct ath12k_hal_reo_cmd *cmd);
+-- 
+2.34.1
+

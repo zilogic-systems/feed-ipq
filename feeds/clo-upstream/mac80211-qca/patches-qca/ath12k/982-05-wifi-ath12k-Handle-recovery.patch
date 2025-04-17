@@ -68,7 +68,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  		ath12k_ahb_release_all_userpd(ab);
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -190,6 +190,55 @@ void ath12k_core_put_hw_group(struct ath
+@@ -210,6 +210,55 @@ void ath12k_core_put_hw_group(struct ath
   * scenarios driver can queue ab->reset_work for all ahb and
   * hybrid chipset's.
   */
@@ -124,7 +124,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  static void ath12k_core_update_userpd_state(struct work_struct *work)
  {
  	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_work);
-@@ -199,8 +248,29 @@ static void ath12k_core_update_userpd_st
+@@ -219,8 +268,29 @@ static void ath12k_core_update_userpd_st
  
  	for (i = 0; i < ag->num_chip; i++) {
  		ab = ag->ab[i];
@@ -155,7 +155,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  
  		ab_ahb = ath12k_ahb_priv(ab);
  		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
-@@ -1949,73 +2019,6 @@ err_firmware_stop:
+@@ -1975,73 +2045,6 @@ err_firmware_stop:
  	return ret;
  }
  
@@ -229,7 +229,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  u8 ath12k_core_get_total_num_vdevs(struct ath12k_base *ab)
  {
  	if (ab->ag && ab->ag->num_chip >= ATH12K_MIN_NUM_DEVICES_NLINK)
-@@ -3277,181 +3280,26 @@ static void ath12k_core_mode1_recovery_w
+@@ -3305,181 +3308,23 @@ static void ath12k_core_mode1_recovery_w
  		   "queued recovery work\n");
  	ath12k_mode1_recovery_reconfig(ab);
  }
@@ -378,7 +378,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 +		ath12k_hif_power_down(ab);
  
  	ath12k_qmi_free_target_mem_chunk(ab);
- 
+-
 -	if (!ag->num_userpd_started) {
 -		ret = ath12k_core_rproc_start(rootpd_rproc);
 -		if (ret)
@@ -410,14 +410,12 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
 -		}
 -
 -	}
-+	/* Free upd Fw remapped load region */
-+	devm_iounmap(ab->dev, ab_ahb->mem_region);
 +	ab_ahb->crash_type = ATH12K_NO_CRASH;
 +	ath12k_hif_power_up(ab);
  }
  
  /*
-@@ -3711,8 +3559,9 @@ static void ath12k_core_reset(struct wor
+@@ -3739,8 +3584,9 @@ static void ath12k_core_reset(struct wor
  	 */
  	if (ab->hif.bus == ATH12K_BUS_PCI) {
  		ath12k_coredump_download_rddm(ab);
@@ -429,7 +427,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  	}
  	if (ab->is_qdss_tracing)
  		ab->is_qdss_tracing = false;
-@@ -3725,8 +3574,6 @@ static void ath12k_core_reset(struct wor
+@@ -3753,8 +3599,6 @@ static void ath12k_core_reset(struct wor
  		} else if (ab->hif.bus == ATH12K_BUS_AHB ||
  			   ab->hif.bus == ATH12K_BUS_HYBRID) {
  			ath12k_core_upd_rproc_boot_recovery(ab);
@@ -438,7 +436,7 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  		}
  		ath12k_dbg(ab, ATH12K_DBG_BOOT, "reset started\n");
  	}
-@@ -4371,7 +4218,7 @@ static int ath12k_rddm_notifier(struct n
+@@ -4457,7 +4301,7 @@ static int ath12k_rddm_notifier(struct n
  			ab->in_panic = true;
  			if (ab->hif.bus == ATH12K_BUS_AHB ||
  			    ab->hif.bus == ATH12K_BUS_HYBRID)
@@ -447,3 +445,26 @@ Signed-off-by: Sowmiya Sree Elavalagan <quic_ssreeela@quicinc.com>
  			else
  				ath12k_coredump_download_rddm(ab);
  		}
+--- a/drivers/net/wireless/ath/ath12k/qmi.c
++++ b/drivers/net/wireless/ath/ath12k/qmi.c
+@@ -3670,6 +3670,7 @@ static void ath12k_qmi_qdss_mem_free(str
+ void ath12k_qmi_free_target_mem_chunk(struct ath12k_base *ab)
+ {
+ 	struct ath12k_hw_group *ag = ab->ag;
++	struct ath12k_ahb *ab_ahb;
+ 	int i, mlo_idx;
+ 
+ 	for (i = 0, mlo_idx = 0; i < ab->qmi.mem_seg_count; i++) {
+@@ -3709,6 +3710,12 @@ void ath12k_qmi_free_target_mem_chunk(st
+ 		ab->mem = NULL;
+ 	}
+ 
++	if (ab->hif.bus == ATH12K_BUS_HYBRID || ab->hif.bus == ATH12K_BUS_AHB) {
++		ab_ahb = ath12k_ahb_priv(ab);
++		if (ab_ahb->mem_region)
++			devm_iounmap(ab->dev, ab_ahb->mem_region);
++	}
++
+ 	ab->ce_pipe_init_done = false;
+ }
+ 

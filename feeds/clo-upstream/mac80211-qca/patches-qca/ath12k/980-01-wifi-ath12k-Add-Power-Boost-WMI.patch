@@ -1,4 +1,4 @@
-From 5d41302e0f22369decbb8345e0b9d610c78b835d Mon Sep 17 00:00:00 2001
+From 341d5de16216f39ddc2ce03200f43825eba25a1a Mon Sep 17 00:00:00 2001
 From: Thomas Wu <quic_wthomas@quicinc.com>
 Date: Wed, 9 Oct 2024 12:42:51 -0700
 Subject: [PATCH 1/6] wifi: ath12k: Add Power Boost - WMI

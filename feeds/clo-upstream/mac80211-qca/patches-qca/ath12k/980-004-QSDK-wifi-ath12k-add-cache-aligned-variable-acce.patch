@@ -28,7 +28,7 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
  
  #define MAX_RXDMA_PER_PDEV     2
  
-@@ -324,13 +325,14 @@ struct ath12k_hp_update_timer {
+@@ -319,13 +320,14 @@ struct ath12k_hp_update_timer {
  
  struct ath12k_rx_desc_info {
  	struct list_head list;
@@ -55,7 +55,7 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
  
  		desc = ath12k_hal_srng_src_get_next_entry(ab, srng);
  		if (unlikely(!desc)) {
-@@ -3556,7 +3557,6 @@ try_again:
+@@ -3739,7 +3740,6 @@ try_again:
  		src_ab = ar->ab;
  		rcu_read_unlock();
  
@@ -63,7 +63,7 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
  		/* retry manual desc retrieval */
  		if (unlikely(!desc_info)) {
  			desc_info = ath12k_dp_get_rx_desc(src_ab, cookie);
-@@ -3566,26 +3566,29 @@ try_again:
+@@ -3749,26 +3749,29 @@ try_again:
  			}
  		}
  
@@ -101,3 +101,21 @@ Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
  		rxcb->ar = ar;
  		rxcb->hw_link_id = hw_link_id;
  		rxcb->peer_id = le32_get_bits(desc.rx_mpdu_info.peer_meta_data,
+@@ -4272,6 +4275,8 @@ static int ath12k_dp_rx_h_defrag_reo_rei
+ 
+ 	desc_info->skb = defrag_skb;
+ 	desc_info->in_use = true;
++	desc_info->paddr = buf_paddr;
++	desc_info->skb_data = defrag_skb->data;
+ 
+ 	list_del(&desc_info->list);
+ 	spin_unlock_bh(&dp->rx_desc_lock);
+@@ -4341,6 +4346,8 @@ err_free_desc:
+ 	spin_lock_bh(&dp->rx_desc_lock);
+ 	desc_info->skb = NULL;
+ 	desc_info->in_use = false;
++	desc_info->paddr = 0;
++	desc_info->skb_data = NULL;
+ 	list_add_tail(&desc_info->list, &dp->rx_desc_free_list);
+ 	spin_unlock_bh(&dp->rx_desc_lock);
+ err_unmap_dma:

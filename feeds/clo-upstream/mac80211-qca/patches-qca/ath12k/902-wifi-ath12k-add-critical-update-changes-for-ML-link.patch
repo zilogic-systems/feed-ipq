@@ -18,11 +18,9 @@ Signed-off-by: Rameshkumar Sundaram <quic_ramess@quicinc.com>
  drivers/net/wireless/ath/ath12k/wmi.c | 59 ++++++++++++++-------------
  1 file changed, 31 insertions(+), 28 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
-index 95c3c27..7dbdc7a 100644
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -2864,42 +2864,53 @@ int ath12k_wmi_send_bcn_offload_control_cmd(struct ath12k *ar,
+@@ -2823,42 +2823,53 @@ int ath12k_wmi_send_bcn_offload_control_
  }
  
  static void ath12k_wmi_bcn_fill_ml_info(struct ath12k_link_vif *arvif,
@@ -92,10 +90,10 @@ index 95c3c27..7dbdc7a 100644
  err_fill_ml_info:
  	ml_info->cu_vdev_map_cat1_lo =
  			   cpu_to_le32(ATH12K_GET_LOWER_32_BITS(vdev_map_cat1));
-@@ -2911,29 +2922,21 @@ err_fill_ml_info:
+@@ -2870,29 +2881,21 @@ err_fill_ml_info:
  			   cpu_to_le32(ATH12K_GET_UPPER_32_BITS(vdev_map_cat2));
  
- 	ath12k_dbg(ab, ATH12K_DBG_WMI,
+ 	ath12k_dbg(ab, ATH12K_DBG_SET(WMI, L3),
 -		   "wmi CU filled ml info cat1_lo=0x%x cat1_hi=0x%x cat2_lo=0x%x cat2_hi=0x%x non_tx_ml_bmap=%llu\n",
 +		   "wmi CU filled ml info cat1_lo=0x%x cat1_hi=0x%x cat2_lo=0x%x cat2_hi=0x%x\n",
  		   ml_info->cu_vdev_map_cat1_lo, ml_info->cu_vdev_map_cat1_hi,
@@ -125,7 +123,7 @@ index 95c3c27..7dbdc7a 100644
  		return;
  
  	/* Fill ML params
-@@ -2956,7 +2959,7 @@ static void ath12k_wmi_fill_cu_arg(struct ath12k_link_vif *arvif,
+@@ -2915,7 +2918,7 @@ static void ath12k_wmi_fill_cu_arg(struc
  	} else {
  		for (i = 0; i < cu_arg->num_ml_info; i++) {
  			ml_info = &cu_arg->ml_info[i];
@@ -134,6 +132,3 @@ index 95c3c27..7dbdc7a 100644
  			/* Retain copy of CU vdev bitmap. Which are used to
  			 * update cu_vdev_map in 20TU probe response template.
  			 */
--- 
-2.34.1
-

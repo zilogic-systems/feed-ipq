@@ -14,11 +14,9 @@ Signed-off-by: Balamurugan Selvarajan <quic_bselvara@quicinc.com>
  drivers/net/wireless/ath/ath12k/qmi.c      | 110 +++++++++++++--------
  4 files changed, 93 insertions(+), 41 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
-index 64e186c..1945f32 100644
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -863,6 +863,8 @@ static void ath12k_core_reset(struct work_struct *work)
+@@ -890,6 +890,8 @@ static void ath12k_core_reset(struct wor
  	ath12k_dbg(ab, ATH12K_DBG_BOOT, "reset starting\n");
  
  	ab->is_reset = true;
@@ -27,11 +25,9 @@ index 64e186c..1945f32 100644
  	/* prepare coredump */
  	ath12k_coredump_download_rddm(ab);
  
-diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
-index 872a7a2..6777c7e 100644
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -839,6 +839,7 @@ struct ath12k_base {
+@@ -906,6 +906,7 @@ struct ath12k_base {
  	bool static_window_map;
  	
  	struct device_node *hremote_node;
@@ -39,7 +35,7 @@ index 872a7a2..6777c7e 100644
  
  	/* must be last */
  	u8 drv_priv[] __aligned(sizeof(void *));
-@@ -864,6 +865,9 @@ void ath12k_core_halt(struct ath12k *ar);
+@@ -1055,6 +1056,9 @@ void ath12k_core_halt(struct ath12k *ar)
  int ath12k_core_resume(struct ath12k_base *ab);
  int ath12k_core_suspend(struct ath12k_base *ab);
  int ath12k_config_qdss(struct ath12k_base *ab);
@@ -49,11 +45,9 @@ index 872a7a2..6777c7e 100644
  
  const struct firmware *ath12k_core_firmware_request(struct ath12k_base *ab,
  						    const char *filename);
-diff --git a/drivers/net/wireless/ath/ath12k/coredump.c b/drivers/net/wireless/ath/ath12k/coredump.c
-index 4fc722b..ec5b752 100644
 --- a/drivers/net/wireless/ath/ath12k/coredump.c
 +++ b/drivers/net/wireless/ath/ath12k/coredump.c
-@@ -300,3 +300,21 @@ out:
+@@ -311,3 +311,21 @@ out:
  	kfree(dump);
  }
  
@@ -75,11 +69,9 @@ index 4fc722b..ec5b752 100644
 +
 +	return ret;
 +}
-diff --git a/drivers/net/wireless/ath/ath12k/qmi.c b/drivers/net/wireless/ath/ath12k/qmi.c
-index 355c51d..518f7d7 100644
 --- a/drivers/net/wireless/ath/ath12k/qmi.c
 +++ b/drivers/net/wireless/ath/ath12k/qmi.c
-@@ -2683,70 +2683,90 @@ static int ath12k_qmi_assign_target_mem_chunk(struct ath12k_base *ab)
+@@ -2683,70 +2683,90 @@ static int ath12k_qmi_assign_target_mem_
  	struct device *dev = ab->dev;
  	struct device_node *hremote_node = NULL;
  	struct resource res;
@@ -119,7 +111,8 @@ index 355c51d..518f7d7 100644
 -				return -EINVAL;
 -			}
 +	host_ddr_sz = (res.end - res.start) + 1;
-+
+ 
+-			ab->qmi.target_mem[idx].paddr = res.start;
 +	for (i = 0, idx = 0; i < ab->qmi.mem_seg_count; i++) {
 +		ab->qmi.target_mem[idx].paddr = res.start + sz;
 +
@@ -128,8 +121,7 @@ index 355c51d..518f7d7 100644
 +				    ab->qmi.target_mem[i].type);
 +			return -EINVAL;
 +		}
- 
--			ab->qmi.target_mem[idx].paddr = res.start;
++
 +		switch (ab->qmi.target_mem[i].type) {
 +		case HOST_DDR_REGION_TYPE:
  			ab->qmi.target_mem[idx].v.ioaddr =
@@ -210,7 +202,15 @@ index 355c51d..518f7d7 100644
  	ab->qmi.mem_seg_count = idx;
  
  	return 0;
-@@ -3508,7 +3528,14 @@ int ath12k_qmi_pci_alloc_qdss_mem(struct ath12k_qmi *qmi)
+@@ -3397,6 +3417,7 @@ static void ath12k_qmi_event_qdss_trace_
+ 
+ 	ath12k_coredump_qdss_dump(ab, event_data);
+ 
++	ab->host_ddr_fixed_mem_off -= ab->qmi.qdss_mem[0].size;
+ 	ath12k_qmi_qdss_mem_free(qmi);
+ 	ab->qmi.qdss_mem_seg_len = 0;
+ 	ab->is_qdss_tracing = false;
+@@ -3541,7 +3562,14 @@ int ath12k_qmi_pci_alloc_qdss_mem(struct
  			return ret;
  		}
  
@@ -226,7 +226,7 @@ index 355c51d..518f7d7 100644
  		ab->qmi.qdss_mem[0].v.ioaddr =
  			ioremap(ab->qmi.qdss_mem[0].paddr,
  				ab->qmi.qdss_mem[0].size);
-@@ -3516,6 +3543,7 @@ int ath12k_qmi_pci_alloc_qdss_mem(struct ath12k_qmi *qmi)
+@@ -3549,6 +3577,7 @@ int ath12k_qmi_pci_alloc_qdss_mem(struct
  			ath12k_warn(ab, "WARNING etr-addr remap failed\n");
  			return -ENOMEM;
  		}
@@ -234,6 +234,3 @@ index 355c51d..518f7d7 100644
  		break;
  	default:
  		ath12k_warn(ab, "qmi ignore invalid qdss mem req type %d\n",
--- 
-2.17.1
-

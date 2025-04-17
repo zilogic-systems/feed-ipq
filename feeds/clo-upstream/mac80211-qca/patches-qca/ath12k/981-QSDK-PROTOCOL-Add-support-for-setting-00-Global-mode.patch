@@ -78,12 +78,12 @@ Signed-off-by: Amith A <quic_amitajit@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -9837,10 +9837,20 @@ static void ath12k_wmi_htc_tx_complete(s
+@@ -9839,10 +9839,20 @@ static void ath12k_wmi_htc_tx_complete(s
  	}
  }
  
 +static inline bool
-+ath12k_is_regd_alpha2_global_mode(struct ieee80211_regdomain *regd)
++ath12k_is_regd_alpha2_global_mode(const struct ieee80211_regdomain *regd)
 +{
 +	if (!regd)
 +		return false;
@@ -95,11 +95,11 @@ Signed-off-by: Amith A <quic_amitajit@quicinc.com>
                                        struct ath12k_reg_info *reg_info,
                                        enum ieee80211_ap_reg_power power_type)
  {
-+	struct ieee80211_regdomain *wiphy_regd = NULL;
++	const struct ieee80211_regdomain *wiphy_regd = NULL;
  	struct ieee80211_regdomain *regd;
  	int pdev_idx;
  	struct ath12k *ar;
-@@ -9868,13 +9878,24 @@ static int ath12k_reg_handle_chan_list(s
+@@ -9870,13 +9880,24 @@ static int ath12k_reg_handle_chan_list(s
  			goto fallback;
  	}
  
@@ -127,7 +127,7 @@ Signed-off-by: Amith A <quic_amitajit@quicinc.com>
  
      ath12k_dbg(ab, ATH12K_DBG_WMI,
                     "wmi handle chan list power type %d\n", power_type);
-@@ -9894,7 +9915,6 @@ static int ath12k_reg_handle_chan_list(s
+@@ -9896,7 +9917,6 @@ static int ath12k_reg_handle_chan_list(s
  		 * generated regd to ar. NULL pointer handling will be
  		 * taken care by kfree itself.
  		 */

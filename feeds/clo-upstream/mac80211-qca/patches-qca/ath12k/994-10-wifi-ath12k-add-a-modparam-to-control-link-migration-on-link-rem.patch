@@ -1,0 +1,72 @@
+From e82208b5a9b4b0566d952fa2c91fe241838fa847 Mon Sep 17 00:00:00 2001
+From: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
+Date: Wed, 20 Nov 2024 17:40:09 +0530
+Subject: [PATCH 10/10] WAR: wifi: ath12k: add a modparam to control link
+ migration on link removal
+
+Add a new modparam ath12k migrate_on_link_removal to enable controled link
+migration on during ML reconfig link removal.
+
+If set to true, then only migration will trigger automatically during ML
+reconfig link removal. By default value is false i.e migration will not
+trigger during ML reconfig link removal.
+
+This modparam has no effect on the user requested migration.
+
+Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/core.c | 5 +++++
+ drivers/net/wireless/ath/ath12k/core.h | 1 +
+ drivers/net/wireless/ath/ath12k/mac.c  | 6 ++++--
+ 3 files changed, 10 insertions(+), 2 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -134,6 +134,11 @@ module_param_named(io_coherency, ath12k_
+ MODULE_PARM_DESC(io_coherency, "Enable io_coherency (0 - disable, 1 - enable)");
+ #endif
+ 
++bool ath12k_migrate_on_link_removal = false;
++module_param_named(migrate_on_link_removal, ath12k_migrate_on_link_removal, bool, 0644);
++MODULE_PARM_DESC(migrate_on_link_removal,
++		"Enable primary link migration on link removal (0 - disable, 1 - enable)");
++
+ static DEFINE_MUTEX(ath12k_hw_lock);
+ static struct list_head ath12k_hw_groups = LIST_HEAD_INIT(ath12k_hw_groups);
+ 
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -67,6 +67,7 @@ extern bool ath12k_fse_3_tuple_enabled;
+ #ifndef CPTCFG_ATH12K_MEM_PROFILE_512M
+ extern unsigned int ath12k_max_clients;
+ #endif
++extern bool ath12k_migrate_on_link_removal;
+ 
+ #define ATH12K_MAX_CORE_MASK	(0xFFFF & ((1 << NR_CPUS) - 1))
+ extern unsigned int ath12k_rfs_core_mask[4];
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -19512,7 +19512,8 @@ static int ath12k_mac_op_link_reconfig_r
+ 	 * matter here since after link removal if peer is not migrated, it
+ 	 * will be anyways disconnected
+ 	 */
+-	ath12k_mac_process_link_migrate_req(ahvif, &migrate_params);
++	if (ath12k_migrate_on_link_removal)
++		ath12k_mac_process_link_migrate_req(ahvif, &migrate_params);
+ 
+ 	ret = ath12k_wmi_mlo_reconfig_link_removal(ar, arvif->vdev_id,
+ 						   params->reconfigure_elem,
+@@ -19553,8 +19554,12 @@ static bool ath12k_mac_op_removed_link_i
+ 		return false;
+ 	}
+ 
+-	/* if it happens to be primary link, trigger UMAC Migration. */
++	if (!ath12k_migrate_on_link_removal) {
++		mutex_unlock(&ah->conf_mutex);
++		return true;
++	}
+ 
++	/* if it happens to be primary link, trigger UMAC Migration. */
+ 	arvif = ath12k_get_arvif_from_link_id(ahvif, ahsta->primary_link_id);
+ 	if (WARN_ON(!arvif || !arvif->is_up || !arvif->ar)) {
+ 		mutex_unlock(&ah->conf_mutex);

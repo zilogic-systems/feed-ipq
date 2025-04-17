@@ -25,11 +25,9 @@ Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
  drivers/net/wireless/ath/ath12k/wmi.h     |  51 ++++-
  6 files changed, 469 insertions(+), 3 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
-index 6777c7e..1b814a5 100644
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -645,6 +645,10 @@ struct ath12k {
+@@ -667,6 +667,10 @@ struct ath12k {
  	int monitor_vdev_id;
  	u8 twt_enabled;
  	s8 max_allowed_tx_power;
@@ -40,11 +38,9 @@ index 6777c7e..1b814a5 100644
  };
  
  struct ath12k_band_cap {
-diff --git a/drivers/net/wireless/ath/ath12k/debugfs.c b/drivers/net/wireless/ath/ath12k/debugfs.c
-index 1543b43..8c89784 100644
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -1275,6 +1275,41 @@ static const struct file_operations fops_simulate_radar = {
+@@ -1287,6 +1287,41 @@ static const struct file_operations fops
  	.open = simple_open
  };
  
@@ -86,7 +82,7 @@ index 1543b43..8c89784 100644
  int ath12k_debugfs_register(struct ath12k *ar)
  {
  	struct ath12k_base *ab = ar->ab;
-@@ -1314,6 +1349,12 @@ int ath12k_debugfs_register(struct ath12k *ar)
+@@ -1326,6 +1361,12 @@ int ath12k_debugfs_register(struct ath12
  				    &ar->dfs_block_radar_events);
  	}
  
@@ -99,11 +95,9 @@ index 1543b43..8c89784 100644
  	return 0;
  }
  
-diff --git a/drivers/net/wireless/ath/ath12k/mac.c b/drivers/net/wireless/ath/ath12k/mac.c
-index 7ec7e61..737be06 100644
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -1221,7 +1221,7 @@ static int ath12k_mac_monitor_vdev_delete(struct ath12k *ar)
+@@ -1212,7 +1212,7 @@ static int ath12k_mac_monitor_vdev_delet
  	return ret;
  }
  
@@ -112,7 +106,7 @@ index 7ec7e61..737be06 100644
  ath12k_mac_get_any_chandef_iter(struct ieee80211_hw *hw,
  				struct ieee80211_chanctx_conf *conf,
  				void *data)
-@@ -6483,6 +6483,10 @@ static int ath12k_mac_op_start(struct ieee80211_hw *hw)
+@@ -6447,6 +6447,10 @@ static int ath12k_mac_op_start(struct ie
  	ar->num_peers = 0;
  	ar->allocated_vdev_map = 0;
  
@@ -123,7 +117,7 @@ index 7ec7e61..737be06 100644
  	/* Configure monitor status ring with default rx_filter to get rx status
  	 * such as rssi, rx_duration.
  	 */
-@@ -6557,6 +6561,10 @@ static void ath12k_mac_op_stop(struct ieee80211_hw *hw)
+@@ -6521,6 +6525,10 @@ static void ath12k_mac_op_stop(struct ie
  	synchronize_rcu();
  
  	atomic_set(&ar->num_pending_mgmt_tx, 0);
@@ -134,7 +128,7 @@ index 7ec7e61..737be06 100644
  }
  
  static u8
-@@ -7394,6 +7402,75 @@ ath12k_mac_change_chanctx_fill_iter(void *data, u8 *mac,
+@@ -7361,6 +7369,75 @@ ath12k_mac_change_chanctx_fill_iter(void
  	arg->next_vif++;
  }
  
@@ -210,7 +204,7 @@ index 7ec7e61..737be06 100644
  static void
  ath12k_mac_update_vif_chan(struct ath12k *ar,
  			   struct ieee80211_vif_chanctx_switch *vifs,
-@@ -7401,6 +7478,7 @@ ath12k_mac_update_vif_chan(struct ath12k *ar,
+@@ -7368,6 +7445,7 @@ ath12k_mac_update_vif_chan(struct ath12k
  {
  	struct ath12k_base *ab = ar->ab;
  	struct ath12k_vif *arvif, *tx_arvif;
@@ -218,7 +212,7 @@ index 7ec7e61..737be06 100644
  	int ret;
  	int i;
  	bool monitor_vif = false;
-@@ -7408,7 +7486,9 @@ ath12k_mac_update_vif_chan(struct ath12k *ar,
+@@ -7375,7 +7453,9 @@ ath12k_mac_update_vif_chan(struct ath12k
  
  	lockdep_assert_held(&ar->conf_mutex);
  
@@ -229,7 +223,7 @@ index 7ec7e61..737be06 100644
  
  	for (i = 0; i < n_vifs; i++) {
  		struct vdev_up_params params = { 0 };
-@@ -7474,6 +7554,37 @@ ath12k_mac_update_vif_chan(struct ath12k *ar,
+@@ -7441,6 +7521,37 @@ ath12k_mac_update_vif_chan(struct ath12k
  		if (!ath12k_mac_monitor_stop(ar))
  			ath12k_mac_monitor_start(ar);
  	}
@@ -267,11 +261,9 @@ index 7ec7e61..737be06 100644
  }
  
  static void
-diff --git a/drivers/net/wireless/ath/ath12k/mac.h b/drivers/net/wireless/ath/ath12k/mac.h
-index 5158c87..e2b583c 100644
 --- a/drivers/net/wireless/ath/ath12k/mac.h
 +++ b/drivers/net/wireless/ath/ath12k/mac.h
-@@ -89,4 +89,7 @@ enum nl80211_he_ru_alloc ath12k_mac_phy_he_ru_to_nl80211_he_ru_alloc(u16 ru_phy)
+@@ -91,4 +91,7 @@ enum nl80211_he_ru_alloc ath12k_mac_phy_
  enum nl80211_he_ru_alloc ath12k_mac_he_ru_tones_to_nl80211_he_ru_alloc(u16 ru_tones);
  enum ath12k_supported_bw ath12k_mac_mac80211_bw_to_ath12k_bw(enum rate_info_bw bw);
  enum hal_encrypt_type ath12k_dp_tx_get_encrypt_type(u32 cipher);
@@ -279,12 +271,10 @@ index 5158c87..e2b583c 100644
 +                                     struct ieee80211_chanctx_conf *conf,
 +                                     void *data);
  #endif
-diff --git a/drivers/net/wireless/ath/ath12k/wmi.c b/drivers/net/wireless/ath/ath12k/wmi.c
-index 6202e31..51c4191 100644
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -7116,6 +7116,224 @@ ath12k_wmi_pdev_dfs_radar_detected_event(struct ath12k_base *ab, struct sk_buff
- exit:
+@@ -7847,6 +7847,230 @@ static void ath12k_pdev_ctl_failsafe_che
+ 
  	kfree(tb);
  }
 +static int ath12k_wmi_awgn_intf_subtlv_parser(struct ath12k_base *ab,
@@ -373,7 +363,8 @@ index 6202e31..51c4191 100644
 +                }
 +                break;
 +        case WMI_HOST_CHAN_WIDTH_40:
-+                if (awgn_info->chan_bw_interference_bitmap > WMI_DCS_SEG_SEC20) {
++                if (awgn_info->chan_bw_interference_bitmap > (WMI_DCS_SEG_PRI20 |
++							      WMI_DCS_SEG_SEC20)) {
 +                        ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +                                   "dcs interference event received with wrong chan width bmap %d for 40MHz",
 +                                   awgn_info->chan_bw_interference_bitmap);
@@ -381,7 +372,9 @@ index 6202e31..51c4191 100644
 +                }
 +                break;
 +        case WMI_HOST_CHAN_WIDTH_80:
-+                if (awgn_info->chan_bw_interference_bitmap > WMI_DCS_SEG_SEC40) {
++                if (awgn_info->chan_bw_interference_bitmap > (WMI_DCS_SEG_PRI20 |
++							      WMI_DCS_SEG_SEC20 |
++							      WMI_DCS_SEG_SEC40)) {
 +                        ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +                                   "dcs interference event received with wrong chan width bmap %d for 80MHz",
 +                                   awgn_info->chan_bw_interference_bitmap);
@@ -390,7 +383,10 @@ index 6202e31..51c4191 100644
 +                break;
 +        case WMI_HOST_CHAN_WIDTH_160:
 +        case WMI_HOST_CHAN_WIDTH_80P80:
-+                if (awgn_info->chan_bw_interference_bitmap > WMI_DCS_SEG_SEC80) {
++                if (awgn_info->chan_bw_interference_bitmap > (WMI_DCS_SEG_PRI20 |
++							      WMI_DCS_SEG_SEC20 |
++							      WMI_DCS_SEG_SEC40 |
++							      WMI_DCS_SEG_SEC80)) {
 +                        ath12k_dbg(ar->ab, ATH12K_DBG_WMI,
 +                                   "dcs interference event received with wrong chan width bmap %d for 80P80/160MHz",
 +                                   awgn_info->chan_bw_interference_bitmap);
@@ -507,8 +503,8 @@ index 6202e31..51c4191 100644
 +}
  
  static void
- ath12k_wmi_pdev_temperature_event(struct ath12k_base *ab,
-@@ -7488,6 +7706,9 @@ static void ath12k_wmi_op_rx(struct ath12k_base *ab, struct sk_buff *skb)
+ ath12k_wmi_process_csa_switch_count_event(struct ath12k_base *ab,
+@@ -8341,6 +8565,9 @@ static void ath12k_wmi_op_rx(struct ath1
  	case WMI_DIAG_EVENTID:
  		ath12k_wmi_diag_event(ab, skb);
  		break;
@@ -518,7 +514,7 @@ index 6202e31..51c4191 100644
  	case WMI_MUEDCA_PARAMS_CONFIG_EVENTID:
  		ath12k_wmi_pdev_update_muedca_params_status_event(ab, skb);
  		break;
-@@ -7626,6 +7847,43 @@ int ath12k_wmi_simulate_radar(struct ath12k *ar)
+@@ -8479,6 +8706,43 @@ int ath12k_wmi_simulate_radar(struct ath
  	return ath12k_wmi_send_unit_test_cmd(ar, wmi_ut, dfs_args);
  }
  
@@ -562,8 +558,6 @@ index 6202e31..51c4191 100644
  int ath12k_wmi_connect(struct ath12k_base *ab)
  {
  	u32 i;
-diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
-index 7df05b9..2d537e5 100644
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
 @@ -2035,6 +2035,7 @@ enum wmi_tlv_tag {
@@ -583,7 +577,7 @@ index 7df05b9..2d537e5 100644
  	WMI_TLV_SERVICE_BE = 289,
  	WMI_MAX_EXT2_SERVICE,
  };
-@@ -4115,6 +4116,17 @@ struct wmi_dfs_unit_test_arg {
+@@ -4221,6 +4222,17 @@ struct wmi_dfs_unit_test_arg {
  	u32 radar_param;
  };
  
@@ -601,7 +595,7 @@ index 7df05b9..2d537e5 100644
  struct wmi_unit_test_cmd {
  	__le32 tlv_header;
  	__le32 vdev_id;
-@@ -4411,6 +4423,42 @@ struct ath12k_wmi_pdev_radar_event {
+@@ -4694,6 +4706,42 @@ struct ath12k_wmi_pdev_radar_event {
  	a_sle32 sidx;
  } __packed;
  
@@ -644,14 +638,11 @@ index 7df05b9..2d537e5 100644
  struct wmi_pdev_temperature_event {
  	/* temperature value in Celsius degree */
  	a_sle32 temp;
-@@ -5314,6 +5362,7 @@ ath12k_wmi_rx_reord_queue_remove(struct ath12k *ar,
- int ath12k_wmi_send_pdev_set_regdomain(struct ath12k *ar,
- 				       struct ath12k_wmi_pdev_set_regdomain_arg *arg);
+@@ -5609,6 +5657,7 @@ void ath12k_wmi_fw_stats_fill(struct ath
+ 			      struct ath12k_fw_stats *fw_stats, u32 stats_id,
+ 			      char *buf);
  int ath12k_wmi_simulate_radar(struct ath12k *ar);
 +int ath12k_wmi_simulate_awgn(struct ath12k *ar, u32 chan_bw_interference_bitmap);
  int ath12k_wmi_send_twt_enable_cmd(struct ath12k *ar, u32 pdev_id);
  int ath12k_wmi_send_twt_disable_cmd(struct ath12k *ar, u32 pdev_id);
  int ath12k_wmi_send_twt_add_dialog_cmd(struct ath12k *ar,
--- 
-2.17.1
-

@@ -49,19 +49,14 @@ Signed-off-by: Saravanakumar Duraisamy <quic_saradura@quicinc.com>
  drivers/net/wireless/ath/ath12k/core.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
-index 909e195..9a79a68 100644
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -3848,7 +3848,7 @@ static void ath12k_core_reset(struct work_struct *work)
+@@ -3556,7 +3556,7 @@ static void ath12k_core_reset(struct wor
  
  	/* TODO: DS: How to stop ppeds queues during SSR??
  	 * PPE hardware might still be enqueuing packets on PPE2TCL */
 -	if (!ag->hw_queues_stopped)
 +	if (!ag->hw_queues_stopped && ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE1)
- 		ath12k_core_mlo_hw_queues_stop(ag, ab);
+ 		ath12k_core_mlo_hw_queues_stop(ag);
  
  	for (i = 0; i < ag->num_chip; i++) {
--- 
-2.34.1
-

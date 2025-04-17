@@ -1,0 +1,76 @@
+From f226fc824cfd38194e69f3ff5a84b91cfb908e7d Mon Sep 17 00:00:00 2001
+From: P Praneesh <quic_ppranees@quicinc.com>
+Date: Sat, 8 Feb 2025 16:00:47 +0530
+Subject: [PATCH] QSDK:DP:wifi:ath12k: Substitute dma_synchronize with an
+ ARM-specific function
+
+dma_sync_single_for_cpu consumes more CPU in tx completion path, replace
+it ath12k_core_dma_inv_range_no_dsb makes it lighter weight which helps
+gain 2% gain in multiclient scenario.
+
+Patch-dependency : 985-01-QSDK-DP-wifi-Avoid-CMO-operation-for-IPQ5424.patch
+
+Signed-off-by: P Praneesh <quic_ppranees@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/hal.c | 29 ++++++++++-----------------
+ 1 file changed, 11 insertions(+), 18 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/hal.c b/drivers/net/wireless/ath/ath12k/hal.c
+index 73032317..0700f976 100644
+--- a/drivers/net/wireless/ath/ath12k/hal.c
++++ b/drivers/net/wireless/ath/ath12k/hal.c
+@@ -1841,9 +1841,7 @@ void ath12k_hal_srng_prefetch_desc(struct ath12k_base *ab,
+ 	desc = ath12k_hal_srng_dst_peek(ab, srng);
+ 	if (likely(desc)) {
+ #ifndef CONFIG_IO_COHERENCY
+-		dma_sync_single_for_cpu(ab->dev, virt_to_phys(desc),
+-				        (srng->entry_size * sizeof(u32)),
+-					DMA_FROM_DEVICE);
++		ath12k_core_dma_inv_range_no_dsb(desc, (desc + srng->entry_size));
+ #endif
+ 		prefetch(desc);
+ 	}
+@@ -1957,9 +1955,7 @@ void ath12k_hal_srng_ppeds_dst_inv_entry(struct ath12k_base *ab,
+ void ath12k_hal_srng_dst_invalidate_entry(struct ath12k_base *ab,
+ 					  struct hal_srng *srng, int entries)
+ {
+-	u32 *desc;
+-	u32 tp, hp;
+-
++	u32 *desc, *last_desc, tp, hp;
+ 
+ 	if (!(srng->flags & HAL_SRNG_FLAGS_CACHED) || !entries)
+ 	        return;
+@@ -1969,20 +1965,17 @@ void ath12k_hal_srng_dst_invalidate_entry(struct ath12k_base *ab,
+ 
+ 	desc = srng->ring_base_vaddr + tp;
+ 	if (hp > tp) {
+-		dma_sync_single_for_cpu(ab->dev, virt_to_phys(desc),
+-					entries * srng->entry_size * sizeof(u32),
+-					DMA_FROM_DEVICE);
++		last_desc = desc + entries * srng->entry_size;
++		ath12k_core_dma_inv_range_no_dsb(desc, last_desc);
+ 	} else {
+-		entries = srng->ring_size - tp;
+-		dma_sync_single_for_cpu(ab->dev, virt_to_phys(desc),
+-					entries * sizeof(u32),
+-					DMA_FROM_DEVICE);
+-
+-		entries = hp;
+-		dma_sync_single_for_cpu(ab->dev, virt_to_phys(srng->ring_base_vaddr),
+-					entries * sizeof(u32),
+-					DMA_FROM_DEVICE);
++		last_desc = desc + (srng->ring_size - tp);
++		ath12k_core_dma_inv_range_no_dsb(desc, last_desc);
++
++		last_desc = srng->ring_base_vaddr + hp;
++		ath12k_core_dma_inv_range_no_dsb(srng->ring_base_vaddr, last_desc);
+ 	}
++
++	ath12k_core_dsb();
+ }
+ 
+ int ath12k_hal_srng_dst_num_free(struct ath12k_base *ab, struct hal_srng *srng,
+-- 
+2.34.1
+

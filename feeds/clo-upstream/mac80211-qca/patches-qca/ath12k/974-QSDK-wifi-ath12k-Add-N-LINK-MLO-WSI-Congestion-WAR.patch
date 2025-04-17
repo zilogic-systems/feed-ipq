@@ -81,7 +81,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -141,6 +141,11 @@ void ath12k_core_put_hw_group(struct ath
+@@ -145,6 +145,11 @@ void ath12k_core_put_hw_group(struct ath
  		ag->fst = NULL;
  	}
  
@@ -93,7 +93,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  	mutex_lock(&ag->mutex_lock);
  
  	if (chip_id >= ag->num_chip) {
-@@ -228,6 +233,7 @@ ath12k_core_hw_group_alloc(u8 id, u8 max
+@@ -232,6 +237,7 @@ ath12k_core_hw_group_alloc(u8 id, u8 max
  	ag->recovery_mode = ATH12K_MLO_RECOVERY_MODE0;
  	INIT_WORK(&ag->reset_work, ath12k_core_hw_group_reset);
  	ag->fst = NULL;
@@ -101,7 +101,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
  	ath12k_global_ps_ctx.ag = ag;
  #endif
-@@ -382,6 +388,10 @@ again:
+@@ -386,6 +392,10 @@ again:
  		ag->fst = ath12k_dp_rx_fst_attach(ab);
  
  	ab->ag = ag;
@@ -112,7 +112,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  	return ag;
  }
  
-@@ -1545,6 +1555,8 @@ static int ath12k_core_start(struct ath1
+@@ -1549,6 +1559,8 @@ static int ath12k_core_start(struct ath1
  	/* Indicate the core start in the appropriate group */
  	ab->ag->num_started++;
  
@@ -121,7 +121,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  	return 0;
  
  err_reo_cleanup:
-@@ -4429,6 +4441,69 @@ struct ath12k_base *ath12k_core_get_ab_b
+@@ -4436,6 +4448,69 @@ struct ath12k_base *ath12k_core_get_ab_b
  	return NULL;
  }
  
@@ -238,7 +238,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  #endif /* _CORE_H_ */
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -8277,6 +8277,209 @@ static int ath12k_mac_free_unassign_link
+@@ -8295,6 +8295,209 @@ static int ath12k_mac_free_unassign_link
  	return 0;
  }
  
@@ -448,7 +448,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  int ath12k_mac_create_bridge_peer(struct ath12k_hw *ah, struct ath12k_sta *ahsta,
  				  struct ath12k_vif *ahvif, u8 link_id)
  {
-@@ -8421,6 +8624,8 @@ static void ath12k_mac_ml_station_remove
+@@ -8439,6 +8642,8 @@ static void ath12k_mac_ml_station_remove
  
  	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
  
@@ -457,7 +457,7 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  	ath12k_ml_link_peers_delete(ahvif, ahsta);
  
  	/* validate link station removal and clear arsta links */
-@@ -8960,6 +9165,8 @@ int ath12k_mac_update_sta_state(struct i
+@@ -8983,6 +9188,8 @@ int ath12k_mac_update_sta_state(struct i
  	}
  
  	if (old_state == IEEE80211_STA_AUTH &&  new_state == IEEE80211_STA_ASSOC) {
@@ -466,17 +466,18 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  		/* TODO sync wait for ML peer map success, else clear ml peer info on
  		 * all partners? TBD on testing
  		 */
-@@ -9164,12 +9371,14 @@ static int ath12k_mac_op_change_sta_link
+@@ -9193,6 +9400,7 @@ static int ath12k_mac_op_change_sta_link
  				ieee80211_report_low_ack(sta, ATH12K_REPORT_LOW_ACK_NUM_PKT);
  				return -EINVAL;
  			}
 +			ath12k_wsi_load_info_stats_update(ahvif, ahsta, false);
  
  			if (ath12k_station_unauthorize(ar, arvif, arsta) ||
- 			    ath12k_station_disassoc(ar, arvif, arsta) ||
- 			    ath12k_mac_station_remove(ar, arvif, arsta))
- 				ath12k_warn(ar->ab, "Failed to remove station: %pM for VDEV: %d\n",
- 					    arsta->addr, arvif->vdev_id);
+ 			    ath12k_station_disassoc(ar, arvif, arsta)) {
+@@ -9210,6 +9418,7 @@ static int ath12k_mac_op_change_sta_link
+ 					    sta->addr, arvif->vdev_id);
+ 			}
+ 
 +			ath12k_wsi_load_info_stats_update(ahvif, ahsta, true);
  		} else if (vif->type == NL80211_IFTYPE_STATION) {
  			if (ath12k_mac_free_unassign_link_sta(ahsta->ahvif->ah, arsta->ahsta,

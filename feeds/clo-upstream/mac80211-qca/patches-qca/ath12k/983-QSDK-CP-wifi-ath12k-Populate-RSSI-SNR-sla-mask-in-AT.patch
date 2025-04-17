@@ -1,0 +1,414 @@
+From 6c59ddc04a1484a8a25587f40f32746abb733372 Mon Sep 17 00:00:00 2001
+From: Ganesh Kariganuru Mahabalesh <quic_gkarigan@quicinc.com>
+Date: Wed, 20 Nov 2024 04:47:36 -0800
+Subject: [PATCH] QSDK CP: wifi: ath12k: Populate RSSI, SNR, sla mask in ATH
+ for use in telemetry agent
+
+Patch-dependency: None
+
+Signed-off-by: Ganesh Kariganuru Mahabalesh <quic_gkarigan@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/dp_mon.c             |   53 +++++++++++++--
+ drivers/net/wireless/ath/ath12k/dp_mon.h             |   12 +++
+ drivers/net/wireless/ath/ath12k/mac.c                |   27 +++++++
+ drivers/net/wireless/ath/ath12k/mac.h                |   17 ++++
+ drivers/net/wireless/ath/ath12k/peer.h               |    3 
+ drivers/net/wireless/ath/ath12k/sawf.c               |   67 +++++++++++++++++++
+ drivers/net/wireless/ath/ath12k/sawf.h               |   15 ++++
+ drivers/net/wireless/ath/ath12k/telemetry_agent_if.c |   33 ++++++++-
+ 8 files changed, 220 insertions(+), 7 deletions(-)
+
+--- a/drivers/net/wireless/ath/ath12k/dp_mon.c
++++ b/drivers/net/wireless/ath/ath12k/dp_mon.c
+@@ -3838,6 +3838,38 @@ ath12k_dp_mon_ppdu_per_user_rx_time_upda
+ 		   stats->mon_stats.rx_airtime_consumption[ac].consumption);
+ }
+ 
++static void
++ath12k_dp_mon_per_user_ppdu_rssi_update(struct ath12k *ar,
++					struct hal_rx_mon_ppdu_info *ppdu_info,
++				       u32 uid)
++{
++	struct hal_rx_user_status *user_stats = &ppdu_info->userstats[uid];
++	struct ath12k_dp_mon_peer_stats *stats = NULL;
++	struct ath12k_peer *peer;
++	u8 rssi_comb;
++
++	if (!ar)
++		return;
++
++	rcu_read_lock();
++	peer = ath12k_peer_find_by_peer_list_index(ar, user_stats->sw_peer_id);
++	if (!peer || !peer->sta) {
++		ath12k_dbg(ar->ab, ATH12K_DBG_PEER,
++			   "peer stats not found on ppdu peer id %d\n",
++			   user_stats->sw_peer_id);
++		rcu_read_unlock();
++		return;
++	}
++	rssi_comb = ppdu_info->rssi_comb;
++	stats = &peer->stats;
++	stats->snr = rssi_comb;
++	if (unlikely(stats->avg_snr == SNR_INVALID))
++		stats->avg_snr = SNR_IN(stats->snr);
++	else
++		SNR_UPDATE_AVG(stats->avg_snr, stats->snr);
++	rcu_read_unlock();
++}
++
+ static void ath12k_dp_mon_ppdu_rx_time_update(struct ath12k *ar,
+ 					      struct hal_rx_mon_ppdu_info *ppdu_info,
+ 					      bool is_stat)
+@@ -3852,6 +3884,18 @@ static void ath12k_dp_mon_ppdu_rx_time_u
+ 		ath12k_dp_mon_ppdu_per_user_rx_time_update(ar, ppdu_info, uid);
+ }
+ 
++static void ath12k_dp_mon_ppdu_rssi_update(struct ath12k *ar,
++					   struct hal_rx_mon_ppdu_info *ppdu_info)
++{
++	u32 num_users, uid;
++
++	num_users = ppdu_info->num_users;
++	if (num_users > HAL_MAX_UL_MU_USERS)
++		num_users = HAL_MAX_UL_MU_USERS;
++
++	for (uid = 0; uid < num_users; uid++)
++		ath12k_dp_mon_per_user_ppdu_rssi_update(ar, ppdu_info, uid);
++}
+ static inline void
+ ath12k_dp_mon_rx_memset_ppdu_info(struct hal_rx_mon_ppdu_info *ppdu_info)
+ {
+@@ -4035,6 +4079,7 @@ move_next:
+ 							      ppdu_info);
+ 			ath12k_dp_mon_ppdu_rx_time_update(ar,
+ 							  ppdu_info, 0);
++			ath12k_dp_mon_ppdu_rssi_update(ar, ppdu_info);
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ 			ath12k_dp_mon_rx_update_peer_stats_ds(ar, arsta, ppdu_info,
+ 								  &ar->dp.rx_status);
+@@ -4051,6 +4096,7 @@ move_next:
+ #endif /* CPTCFG_ATH12K_PPE_DS_SUPPORT */
+ 			ath12k_dp_mon_ppdu_rx_time_update(ar,
+ 							  ppdu_info, 0);
++			ath12k_dp_mon_ppdu_rssi_update(ar, ppdu_info);
+ 			spin_unlock_bh(&ab->base_lock);
+ 		}
+ 
+@@ -4238,6 +4284,7 @@ move_next:
+ 							      ppdu_info);
+ 			ath12k_dp_mon_ppdu_rx_time_update(ar,
+ 							  ppdu_info, 1);
++			ath12k_dp_mon_ppdu_rssi_update(ar, ppdu_info);
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ 			ath12k_dp_mon_rx_update_peer_stats_ds(ar, arsta, ppdu_info,
+ 								  NULL);
+@@ -4250,6 +4297,7 @@ move_next:
+ 			ath12k_dp_mon_rx_update_peer_mu_stats(ar, ppdu_info);
+ 			ath12k_dp_mon_ppdu_rx_time_update(ar,
+ 							  ppdu_info, 1);
++			ath12k_dp_mon_ppdu_rssi_update(ar, ppdu_info);
+ #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+ 			ath12k_dp_mon_rx_update_peer_stats_ds(ar, NULL, ppdu_info,
+ 								  NULL);
+@@ -4451,7 +4499,7 @@ static void ath12k_dp_mon_peer_telemetry
+ 		stats->rx_airtime_consumption[ac] =
+ 			dp_stats->mon_stats.rx_airtime_consumption[ac].avg_consumption_per_sec;
+ 	}
+-	stats->snr = 0;
++	stats->snr = dp_stats->avg_snr;
+ }
+ 
+ int ath12k_dp_get_peer_telemetry_stats(struct ath12k_base *ab,
+--- a/drivers/net/wireless/ath/ath12k/dp_mon.h
++++ b/drivers/net/wireless/ath/ath12k/dp_mon.h
+@@ -83,6 +83,18 @@ struct dp_mon_tx_ppdu_info {
+ 	struct dp_mon_mpdu *tx_mon_mpdu;
+ };
+ 
++#define SNR_INVALID 255
++
++#define SNR_MULTIPLIER BIT(8)
++#define SNR_MUL(x, mul) ((x) * (mul))
++#define SNR_RND(x, mul) ((((x) % (mul)) >= ((mul) / 2)) ? \
++	((x) + ((mul) - 1)) / (mul) : (x) / (mul))
++
++#define SNR_OUT(x) (SNR_RND((x), SNR_MULTIPLIER))
++#define SNR_IN(x)  (SNR_MUL((x), SNR_MULTIPLIER))
++#define SNR_AVG(x, y) ((((x) << 2) + (y) - (x)) >> 2)
++#define SNR_UPDATE_AVG(x, y) ((x) = SNR_AVG((x), SNR_IN(y)))
++
+ enum hal_rx_mon_status
+ ath12k_dp_mon_rx_parse_mon_status(struct ath12k *ar,
+ 				  struct hal_rx_mon_ppdu_info *ppdu_info,
+--- a/drivers/net/wireless/ath/ath12k/peer.h
++++ b/drivers/net/wireless/ath/ath12k/peer.h
+@@ -46,6 +46,9 @@ struct ath12k_peer_telemetry_stats {
+ 
+ struct ath12k_dp_mon_peer_stats {
+ 	struct ath12k_mon_peer_airtime_stats mon_stats;
++	u32 avg_snr;
++	u8 rssi;
++	u8 snr;
+ };
+ 
+ struct ath12k_peer {
+--- a/drivers/net/wireless/ath/ath12k/sawf.c
++++ b/drivers/net/wireless/ath/ath12k/sawf.c
+@@ -107,6 +107,71 @@ struct ath12k_sawf_ctx *ath12k_get_sawf_
+ 	return sawf_ctx;
+ }
+ 
++static u32 ath12k_get_enabled_param_mask(u8 svc_id)
++{
++	struct ath12k_sawf_ctx *sawf_ctx;
++	u32 enabled_param_mask;
++
++	sawf_ctx = ath12k_get_sawf_context();
++	if (!sawf_ctx)
++		return 0;
++
++	if (!ath12k_svc_id_configured(svc_id)) {
++		ath12k_warn(NULL, "Service id: %u not available\n", svc_id);
++		return 0;
++	}
++
++	enabled_param_mask = sawf_ctx->svc_classes[SVC_INDEX(svc_id)].enabled_param_mask;
++
++	return enabled_param_mask;
++}
++
++static u32
++ath12k_get_enabled_sawf_params_mask(struct ath12k_sawf_svc_params *sawf_params)
++{
++	u32 enabled_sawf_params = 0;
++
++	if (sawf_params->min_throughput_rate != SAWF_SVC_PARAM_DEFAULT_MIN_THRUPUT)
++		enabled_sawf_params |= (1 << SAWF_PARAM_MIN_THROUGHPUT);
++	if (sawf_params->max_throughput_rate != SAWF_SVC_PARAM_DEFAULT_MAX_THRUPUT)
++		enabled_sawf_params |= (1 << SAWF_PARAM_MAX_THROUGHPUT);
++	if (sawf_params->burst_size != SAWF_SVC_PARAM_DEFAULT_BURST_SIZE)
++		enabled_sawf_params |= (1 << SAWF_PARAM_BURST_SIZE);
++	if (sawf_params->service_interval != SAWF_SVC_PARAM_DEFAULT_SVC_INTERVAL)
++		enabled_sawf_params |= (1 << SAWF_PARAM_SERVICE_INTERVAL);
++	if (sawf_params->delay_bound != SAWF_SVC_PARAM_DEFAULT_DELAY_BOUND)
++		enabled_sawf_params |= (1 << SAWF_PARAM_DELAY_BOUND);
++	if (sawf_params->msdu_ttl != SAWF_SVC_PARAM_DEFAULT_TIME_TO_LIVE)
++		enabled_sawf_params |= (1 << SAWF_PARAM_MSDU_TTL);
++	if (sawf_params->msdu_rate_loss != SAWF_SVC_PARAM_DEFAULT_MSDU_LOSS_RATE)
++		enabled_sawf_params |= (1 << SAWF_PARAM_MSDU_LOSS);
++
++	return enabled_sawf_params;
++}
++
++void ath12k_get_peer_sla_config(struct ath12k_peer *peer, u16 *sla_mask)
++{
++	struct ath12k_sawf_peer_ctx *peer_ctx = NULL;
++	struct ath12k_sawf_ctx *sawf_ctx;
++	int tid, q_id;
++	u8 svc_id;
++
++	sawf_ctx = ath12k_get_sawf_context();
++	if (!sawf_ctx)
++		return;
++
++	peer_ctx = &peer->sawf_ctx_peer;
++
++	for (tid = 0; tid < ATH12K_SAWF_MAX_TID_SUPPORT; tid++) {
++		for (q_id = 0; q_id < MAX_Q_PER_TID; q_id++) {
++			svc_id = peer_ctx->msduq_table[tid][q_id].svc_id;
++			if (peer_ctx->msduq_table[tid][q_id].is_reserved)
++				*sla_mask |=
++					ath12k_get_enabled_param_mask(svc_id);
++		}
++	}
++}
++
+ void ath12k_update_svc_class(struct ath12k_sawf_svc_params *sawf_params)
+ {
+ 	struct ath12k_sawf_svc_params *new_param;
+@@ -134,6 +199,8 @@ void ath12k_update_svc_class(struct ath1
+ 	new_param->ul_max_latency = sawf_params->ul_max_latency;
+ 	new_param->ul_ofdma_disable = sawf_params->ul_ofdma_disable;
+ 	new_param->ul_mu_mimo_disable = sawf_params->ul_mu_mimo_disable;
++	new_param->enabled_param_mask =
++		ath12k_get_enabled_sawf_params_mask(sawf_params);
+ 
+ 	ath12k_telemetry_set_svclass_cfg(true, new_param->svc_id,
+ 					 new_param->min_throughput_rate,
+--- a/drivers/net/wireless/ath/ath12k/sawf.h
++++ b/drivers/net/wireless/ath/ath12k/sawf.h
+@@ -131,6 +131,17 @@ enum SAWF_SVC_PARAM_DEFAULTS {
+ 	SAWF_SVC_PARAM_DEFAULT_UL_MU_MIMO_DISABLE = 0,
+ };
+ 
++enum telemetry_sawf_param {
++	SAWF_PARAM_INVALID,
++	SAWF_PARAM_MIN_THROUGHPUT,
++	SAWF_PARAM_MAX_THROUGHPUT,
++	SAWF_PARAM_BURST_SIZE,
++	SAWF_PARAM_SERVICE_INTERVAL,
++	SAWF_PARAM_DELAY_BOUND,
++	SAWF_PARAM_MSDU_TTL,
++	SAWF_PARAM_MSDU_LOSS,
++	SAWF_PARAM_MAX,
++};
+ #define DELAY_BOUND_ULTRA_LOW 10
+ #define DELAY_BOUND_LOW 100
+ #define DELAY_BOUND_MID 200
+@@ -178,6 +189,7 @@ struct ath12k_sawf_svc_params {
+ 	u32 ul_burst_size;
+ 	u32 ul_min_tput;
+ 	u32 ul_max_latency;
++	u32 enabled_param_mask;
+ 	bool ul_ofdma_disable;
+ 	bool ul_mu_mimo_disable;
+ 	bool configured;
+@@ -873,6 +885,9 @@ void ath12k_htt_sawf_def_q_map_report_ha
+ void ath12k_sawf_stats_update(struct ath12k *ar, struct sk_buff *skb,
+ 			      struct hal_tx_status *ts,
+ 			      struct ath12k_peer *peer, ktime_t timestamp);
++
++void ath12k_get_peer_sla_config(struct ath12k_peer *peer, u16 *sla_mask);
++
+ void ath12k_sawf_tx_enqueue_peer_stats(struct ath12k_base *ab,
+ 				       struct ath12k_peer *peer,
+ 				       u32 msduq_id, u32 len);
+--- a/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
++++ b/drivers/net/wireless/ath/ath12k/telemetry_agent_if.c
+@@ -210,6 +210,28 @@ int ath12k_get_pdev_info(void *obj, stru
+ 	return 0;
+ }
+ 
++static int ath12k_calculate_link_rssi(struct ath12k_peer *peer)
++{
++	struct ieee80211_sta *sta;
++	struct ieee80211_link_sta *link_sta;
++	u32 bw, avg_snr;
++	u8 bw_offset;
++
++	WARN_ON(!rcu_read_lock_held());
++	sta = peer->sta;
++	link_sta = rcu_dereference(sta->link[peer->link_id]);
++	bw = link_sta->bandwidth;
++
++	bw_offset = ath12k_mac_get_bw_offset(bw);
++
++	/* To do : calculate SNR for non-active link peers based on
++	 * path loss approximation. Not needed for energy service
++	 */
++
++	avg_snr = SNR_OUT(peer->stats.avg_snr) + bw_offset;
++
++	return avg_snr;
++}
+ int ath12k_get_peer_stats(void *obj, struct agent_peer_iface_stats_obj *stats)
+ {
+ 	struct agent_peer_db *peer_db = (struct agent_peer_db *)obj;
+@@ -242,6 +264,10 @@ int ath12k_get_peer_stats(void *obj, str
+ 		return -EINVAL;
+ 	}
+ 
++	if (!peer->sta) {
++		rcu_read_unlock();
++		return -EINVAL;
++	}
+ 	if (!peer->assoc_success) {
+ 		rcu_read_unlock();
+ 		return -EINVAL;
+@@ -257,6 +283,9 @@ int ath12k_get_peer_stats(void *obj, str
+ 			   peer->addr);
+ 	}
+ 
++	stats->rssi = ath12k_calculate_link_rssi(peer);
++	if (peer->primary_link)
++		ath12k_get_peer_sla_config(peer, &stats->sla_mask);
+ 	rcu_read_unlock();
+ 	for (ac = 0; ac < ATH12K_DP_WLAN_MAX_AC; ac++) {
+ 		stats->airtime_consumption[ac] =
+@@ -273,9 +302,6 @@ int ath12k_get_peer_stats(void *obj, str
+ 			   dp_stats.tx_airtime_consumption[ac],
+ 			   dp_stats.rx_airtime_consumption[ac]);
+ 	}
+-	/* To-Do: Implement a way to get rssi */
+-	stats->rssi = 0;
+-
+ 	return 0;
+ }
+ 
+@@ -684,6 +710,7 @@ static int ath12k_telemetry_create_destr
+ 	memset(&peer_obj, 0, sizeof(peer_obj));
+ 	memset(&peer->stats, 0,
+ 	       sizeof(struct ath12k_dp_mon_peer_stats));
++	peer->stats.avg_snr = SNR_INVALID;
+ 	peer_obj.peer_back_pointer = peer;
+ 	peer_obj.psoc_back_pointer = ab;
+ 	peer_obj.pdev_back_pointer = pdev;
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -557,6 +557,33 @@ enum ath12k_supported_bw ath12k_mac_mac8
+ 	}
+ }
+ 
++u8 ath12k_mac_get_bw_offset(enum ieee80211_sta_rx_bandwidth bandwidth)
++{
++	u8 bw_offset;
++
++	switch (bandwidth) {
++	case IEEE80211_STA_RX_BW_20:
++		bw_offset = ATH12K_BW_GAIN_20MHZ;
++		break;
++	case IEEE80211_STA_RX_BW_40:
++		bw_offset = ATH12K_BW_GAIN_40MHZ;
++		break;
++	case IEEE80211_STA_RX_BW_80:
++		bw_offset = ATH12K_BW_GAIN_80MHZ;
++		break;
++	case IEEE80211_STA_RX_BW_160:
++		bw_offset = ATH12K_BW_GAIN_160MHZ;
++		break;
++	case IEEE80211_STA_RX_BW_320:
++		bw_offset = ATH12K_BW_GAIN_320MHZ;
++		break;
++	default:
++		bw_offset = ATH12K_BW_GAIN_20MHZ;
++	}
++
++	return bw_offset;
++}
++
+ int ath12k_mac_hw_ratecode_to_legacy_rate(u8 hw_rc, u8 preamble, u8 *rateidx,
+ 					  u16 *rate)
+ {
+--- a/drivers/net/wireless/ath/ath12k/mac.h
++++ b/drivers/net/wireless/ath/ath12k/mac.h
+@@ -115,6 +115,22 @@ enum ath12k_supported_bw {
+ 	ATH12K_BW_320	= 4,
+ };
+ 
++/* Below BW_GAIN should be added to the SNR value of every ppdu based on the
++ * bandwidth. This table is obtained from HALPHY.
++ * BW         BW_Gain
++ * 20          0
++ * 40          3dBm
++ * 80          6dBm
++ * 160/80P80   9dBm
++ * 320         12dBm
++ */
++
++#define ATH12K_BW_GAIN_20MHZ 0
++#define ATH12K_BW_GAIN_40MHZ 3
++#define ATH12K_BW_GAIN_80MHZ 6
++#define ATH12K_BW_GAIN_160MHZ 9
++#define ATH12K_BW_GAIN_320MHZ 12
++
+ #define ATH12K_CHWIDTH_20		20  /* Channel width 20 */
+ #define ATH12K_CHWIDTH_40		40  /* Channel width 40 */
+ #define ATH12K_CHWIDTH_80		80  /* Channel width 80 */
+@@ -210,6 +226,7 @@ enum nl80211_he_ru_alloc ath12k_mac_phy_
+ enum nl80211_he_ru_alloc ath12k_mac_he_ru_tones_to_nl80211_he_ru_alloc(u16 ru_tones);
+ enum nl80211_eht_ru_alloc ath12k_mac_eht_ru_tones_to_nl80211_eht_ru_alloc(u16 ru_tones);
+ enum ath12k_supported_bw ath12k_mac_mac80211_bw_to_ath12k_bw(enum rate_info_bw bw);
++u8 ath12k_mac_get_bw_offset(enum ieee80211_sta_rx_bandwidth bandwidth);
+ enum hal_encrypt_type ath12k_dp_tx_get_encrypt_type(u32 cipher);
+ void ath12k_mac_handle_beacon(struct ath12k *ar, struct sk_buff *skb);
+ void ath12k_mac_handle_beacon_miss(struct ath12k *ar, u32 vdev_id);

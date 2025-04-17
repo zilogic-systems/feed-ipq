@@ -32,7 +32,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/dp.c
 +++ b/drivers/net/wireless/ath/ath12k/dp.c
-@@ -2024,43 +2024,37 @@ void ath12k_dp_ppeds_tx_cmem_init(struct
+@@ -2026,43 +2026,37 @@ void ath12k_dp_ppeds_tx_cmem_init(struct
  
  static void ath12k_dp_ppeds_tx_desc_cleanup(struct ath12k_base *ab)
  {
@@ -99,7 +99,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	}
  
  	dp->ppeds_tx_desc_reuse_list_len = 0;
-@@ -2070,10 +2064,10 @@ static void ath12k_dp_ppeds_tx_desc_clea
+@@ -2072,12 +2066,12 @@ static void ath12k_dp_ppeds_tx_desc_clea
  
  int ath12k_dp_cc_ppeds_desc_cleanup(struct ath12k_base *ab)
  {
@@ -110,9 +110,12 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 -	int i;
 +	int i, j;
  
- 	if (!dp->spt_info) {
+-	if (!dp->spt_info) {
++	if (!dp->spt_info || !dp->spt_info->ppedstxbaddr) {
  		ath12k_err(ab,"ath12k_dp_cc_ppeds_desc_cleanup failed");
-@@ -2083,32 +2077,26 @@ int ath12k_dp_cc_ppeds_desc_cleanup(stru
+ 		return -EINVAL;
+ 	}
+@@ -2085,32 +2079,26 @@ int ath12k_dp_cc_ppeds_desc_cleanup(stru
  	/* PPEDS TX Descriptor cleanup */
  	spin_lock_bh(&dp->ppeds_tx_desc_lock);
  
@@ -140,17 +143,17 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 -			continue;
 +		for (j = 0; j < ATH12K_MAX_SPT_ENTRIES; j++) {
 +			skb = ppeds_tx_descs[j].skb;
- 
--		dma_unmap_single(ab->dev, ppeds_tx_desc_info->paddr,
--				 skb->len, DMA_TO_DEVICE);
--		dev_kfree_skb_any(skb);
++
 +			if (!skb)
 +				continue;
 +
 +			ppeds_tx_descs[j].skb = NULL;
 +			ppeds_tx_descs[j].in_use = false;
 +			ppeds_tx_descs[j].paddr = NULL;
-+
+ 
+-		dma_unmap_single(ab->dev, ppeds_tx_desc_info->paddr,
+-				 skb->len, DMA_TO_DEVICE);
+-		dev_kfree_skb_any(skb);
 +			dev_kfree_skb_any(skb);
 +		}
  	}
@@ -160,7 +163,17 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	for (i = 0; i < ATH12K_NUM_PPEDS_TX_SPT_PAGES; i++) {
  		if (!dp->spt_info->ppedstxbaddr[i])
  			continue;
-@@ -2133,7 +2121,6 @@ int ath12k_dp_cc_ppeds_desc_init(struct
+@@ -2118,6 +2106,9 @@ int ath12k_dp_cc_ppeds_desc_cleanup(stru
+ 		kfree(dp->spt_info->ppedstxbaddr[i]);
+ 	}
+ 
++	kfree(dp->spt_info->ppedstxbaddr);
++	dp->spt_info->ppedstxbaddr = NULL;
++
+ 	spin_unlock_bh(&dp->ppeds_tx_desc_lock);
+ 
+ 	ath12k_dbg(ab, ATH12K_DBG_PPE, "ath12k_dp_cc_ppeds_desc_cleanup success\n");
+@@ -2135,10 +2126,15 @@ int ath12k_dp_cc_ppeds_desc_init(struct
  
  	INIT_LIST_HEAD(&dp->ppeds_tx_desc_free_list);
  	INIT_LIST_HEAD(&dp->ppeds_tx_desc_reuse_list);
@@ -168,7 +181,16 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	spin_lock_init(&dp->ppeds_tx_desc_lock);
  	dp->ppeds_tx_desc_reuse_list_len = 0;
  
-@@ -2156,6 +2143,7 @@ int ath12k_dp_cc_ppeds_desc_init(struct
++	dp->spt_info->ppedstxbaddr = kmalloc_array(ATH12K_NUM_PPEDS_TX_SPT_PAGES,
++				     sizeof(struct ath12k_ppeds_tx_desc_info *),
++				     GFP_KERNEL);
++	if (!dp->spt_info->ppedstxbaddr)
++		return -ENOMEM;
++
+ 	/* pointer to start of TX pages */
+ 	ppeds_tx_spt_pages = &dp->spt_info[ATH12K_PPEDS_TX_SPT_PAGE_OFFSET];
+ 
+@@ -2158,6 +2154,7 @@ int ath12k_dp_cc_ppeds_desc_init(struct
  		for (j = 0; j < ATH12K_MAX_SPT_ENTRIES; j++) {
  			ppt_idx = ATH12K_PPEDS_TX_SPT_PAGE_OFFSET + i;
  			ppeds_tx_descs[j].desc_id = ath12k_dp_cc_cookie_gen(ppt_idx, j);
@@ -178,7 +200,16 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/dp.h
 +++ b/drivers/net/wireless/ath/ath12k/dp.h
-@@ -22,6 +22,7 @@ struct ath12k_ext_irq_grp;
+@@ -12,6 +12,8 @@
+ 
+ #define MAX_RXDMA_PER_PDEV     2
+ 
++extern struct ath12k_ppeds_desc_params ath12k_ppeds_desc_params;
++
+ struct ath12k_base;
+ struct ath12k_peer;
+ struct ath12k_dp;
+@@ -22,6 +24,7 @@ struct ath12k_ext_irq_grp;
  
  #define DP_MON_PURGE_TIMEOUT_MS     100
  #define DP_MON_SERVICE_BUDGET       128
@@ -186,7 +217,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  struct dp_srng {
  	u32 *vaddr_unaligned;
-@@ -47,6 +48,7 @@ struct dp_ppeds_tx_comp_ring {
+@@ -47,6 +50,7 @@ struct dp_ppeds_tx_comp_ring {
  	struct hal_wbm_completion_ring_tx *tx_status;
  	int tx_status_head;
  	int tx_status_tail;
@@ -194,16 +225,30 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  };
  #endif
  
-@@ -227,7 +229,7 @@ struct ath12k_pdev_dp {
+@@ -229,12 +233,6 @@ struct ath12k_pdev_dp {
+ #define ATH12K_SHADOW_DP_TIMER_INTERVAL 20
  #define ATH12K_SHADOW_CTRL_TIMER_INTERVAL 10
  
- #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
+-#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
 -#define ATH12K_NUM_POOL_PPEDS_TX_DESC 0x10000
-+#define ATH12K_NUM_POOL_PPEDS_TX_DESC 0x8000
- #else
- #define ATH12K_NUM_POOL_PPEDS_TX_DESC 0
- #endif
-@@ -350,6 +352,7 @@ struct ath12k_ppeds_tx_desc_info {
+-#else
+-#define ATH12K_NUM_POOL_PPEDS_TX_DESC 0
+-#endif
+-
+ #define ATH12K_PAGE_SIZE	PAGE_SIZE
+ 
+ /* Total 1024 entries in PPT, i.e 4K/4 considering 4K aligned
+@@ -255,8 +253,7 @@ struct ath12k_pdev_dp {
+ #define ATH12K_TX_SPT_PAGE_OFFSET ATH12K_NUM_PPEDS_TX_SPT_PAGES
+ #define ATH12K_RX_SPT_PAGE_OFFSET ATH12K_NUM_PPEDS_TX_SPT_PAGES + ATH12K_NUM_TX_SPT_PAGES
+ 
+-
+-#define ATH12K_NUM_PPEDS_TX_SPT_PAGES (ATH12K_NUM_POOL_PPEDS_TX_DESC / \
++#define ATH12K_NUM_PPEDS_TX_SPT_PAGES (ath12k_ppeds_desc_params.num_ppeds_desc / \
+ 					    ATH12K_MAX_SPT_ENTRIES)
+ 
+ #define ATH12K_NUM_SPT_PAGES	(ATH12K_NUM_TX_SPT_PAGES + ATH12K_NUM_RX_SPT_PAGES + \
+@@ -358,6 +355,7 @@ struct ath12k_ppeds_tx_desc_info {
  	struct sk_buff *skb;
  	dma_addr_t paddr;
  	u32 desc_id; /* Cookie */
@@ -211,7 +256,16 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	u8 mac_id;
  	u8 pool_id;
  	u8 flags;
-@@ -472,7 +475,6 @@ struct ath12k_dp {
+@@ -369,7 +367,7 @@ struct ath12k_spt_info {
+ 	u64 *vaddr;
+ 	struct ath12k_rx_desc_info *rxbaddr[ATH12K_NUM_RX_SPT_PAGES];
+ 	struct ath12k_tx_desc_info *txbaddr[ATH12K_NUM_TX_SPT_PAGES];
+-	struct ath12k_ppeds_tx_desc_info *ppedstxbaddr[ATH12K_NUM_PPEDS_TX_SPT_PAGES];
++	struct ath12k_ppeds_tx_desc_info **ppedstxbaddr;
+ };
+ 
+ struct ath12k_reo_queue_ref {
+@@ -480,7 +478,6 @@ struct ath12k_dp {
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
  	struct list_head ppeds_tx_desc_free_list;
  	struct list_head ppeds_tx_desc_reuse_list;
@@ -221,7 +275,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	spinlock_t ppeds_tx_desc_lock;
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.c
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.c
-@@ -101,68 +101,84 @@ enum hal_encrypt_type ath12k_dp_tx_get_e
+@@ -101,68 +101,85 @@ enum hal_encrypt_type ath12k_dp_tx_get_e
  }
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -253,7 +307,8 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 -		list_move_tail(&tx_desc->list, &dp->ppeds_tx_desc_free_list);
 +	spin_lock_bh(&dp->ppeds_tx_desc_lock);
 +
-+	hotlist_remaining_len = ATH12K_PPEDS_HOTLIST_LEN_MAX - dp->ppeds_tx_desc_reuse_list_len;
++	hotlist_remaining_len = ath12k_ppeds_desc_params.ppeds_hotlist_len -
++						dp->ppeds_tx_desc_reuse_list_len;
 +
 +	if (likely(hotlist_remaining_len >= local_list_len)) {
 +		list_splice_tail(local_list, &dp->ppeds_tx_desc_reuse_list);
@@ -355,7 +410,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #endif
  
  static void ath12k_dp_tx_release_txbuf(struct ath12k_dp *dp,
-@@ -1305,36 +1321,31 @@ static inline bool ath12k_dp_tx_completi
+@@ -1304,36 +1321,31 @@ static inline bool ath12k_dp_tx_completi
  }
  
  #ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
@@ -402,7 +457,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
  	if (ts.status != HAL_WBM_TQM_REL_REASON_FRAME_ACKED) {
  		switch (ts.status) {
-@@ -1387,8 +1398,8 @@ static void ath12k_ppeds_tx_update_stats
+@@ -1386,8 +1398,8 @@ static void ath12k_ppeds_tx_update_stats
  	}
  
  #ifdef CPTCFG_MAC80211_DS_SUPPORT
@@ -413,7 +468,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  #endif
  	rcu_read_unlock();
  }
-@@ -1422,23 +1433,23 @@ int ath12k_ppeds_tx_completion_handler(s
+@@ -1421,23 +1433,23 @@ int ath12k_ppeds_tx_completion_handler(s
  	int hal_ring_id = tx_ring->ppe_wbm2sw_ring.ring_id;
  	struct hal_srng *status_ring = &ab->hal.srng_list[hal_ring_id];
  	struct ath12k_ppeds_tx_desc_info *tx_desc = NULL;
@@ -443,7 +498,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	spin_lock_bh(&status_ring->lock);
  
  	ath12k_hal_srng_access_dst_ring_begin_nolock(ab, status_ring);
-@@ -1447,92 +1458,66 @@ int ath12k_ppeds_tx_completion_handler(s
+@@ -1446,92 +1458,66 @@ int ath12k_ppeds_tx_completion_handler(s
  	if (!valid_entries) {
  		ath12k_hal_srng_access_dst_ring_end_nolock(status_ring);
  		spin_unlock_bh(&status_ring->lock);
@@ -513,7 +568,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
 +			if (htt_status != HAL_WBM_REL_HTT_TX_COMP_STATUS_OK) {
  				ab->ppe.ppeds_stats.fw2wbm_pkt_drops++;
 +				ath12k_dbg(ab, ATH12K_DBG_PPE,
-+					   "Frame received from unexpected source %d status %d!\n",
++					   "ath12k: Frame received from unexpected source %d status %d!\n",
 +					   buf_rel_source, htt_status);
  			}
 -			dev_kfree_skb_any(msdu);
@@ -568,28 +623,44 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -65,6 +65,10 @@ unsigned int ath12k_ppe_ds_enabled = tru
- module_param_named(ppe_ds_enable, ath12k_ppe_ds_enabled, uint, 0644);
- MODULE_PARM_DESC(ppe_ds_enable, "ppe_ds_enable: 0-disable, 1-enable");
+@@ -91,6 +91,24 @@ module_param_array_named(rfs_core_mask,
+ MODULE_PARM_DESC(rfs_core_mask, "Default RFS core mask, mask for 2G, mask for 5G,\n"
+ 		 "mask for 6G. One bit for one CPU core\n");
  
-+unsigned int ath12k_ppe_ds_hotlist_len = 1024;
-+module_param_named(ppe_ds_hotlist_len, ath12k_ppe_ds_hotlist_len, uint, 0644);
-+MODULE_PARM_DESC(ppe_ds_hotlist_len, "ppe_ds_hotlist_len: default: 1024");
++#ifdef CPTCFG_ATH12K_PPE_DS_SUPPORT
 +
- unsigned int ath12k_ssr_failsafe_mode = true;
- module_param_named(ssr_failsafe_mode, ath12k_ssr_failsafe_mode, uint, 0644);
- MODULE_PARM_DESC(ssr_failsafe_mode, "ssr failsafe mode: 0-disable, 1-enable");
++#define ATH12K_NUM_POOL_PPEDS_TX_DESC_DEFAULT 0x8000
++#define ATH12K_PPEDS_HOTLIST_LEN_MAX_DEFAULT 1024
++
++struct ath12k_ppeds_desc_params ath12k_ppeds_desc_params = {
++	.num_ppeds_desc = ATH12K_NUM_POOL_PPEDS_TX_DESC_DEFAULT,
++	.ppeds_hotlist_len = ATH12K_PPEDS_HOTLIST_LEN_MAX_DEFAULT,
++};
++
++module_param_named(num_ppeds_tx_desc, ath12k_ppeds_desc_params.num_ppeds_desc, uint, 0644);
++MODULE_PARM_DESC(num_ppeds_tx_desc, "Number of PPEDS descriptors");
++
++module_param_named(ppeds_hotlist_len, ath12k_ppeds_desc_params.ppeds_hotlist_len, uint, 0644);
++MODULE_PARM_DESC(ppeds_hotlist_len, "PPEDS hotlist length");
++
++#endif
++
+ bool ath12k_rx_nwifi_err_dump = false;
+ module_param_named(rx_nwifi_err_dump, ath12k_rx_nwifi_err_dump, bool, 0644);
+ MODULE_PARM_DESC(rx_nwifi_err_dump,
 --- a/drivers/net/wireless/ath/ath12k/dp_tx.h
 +++ b/drivers/net/wireless/ath/ath12k/dp_tx.h
-@@ -10,6 +10,8 @@
+@@ -9,6 +9,10 @@
+ 
  #include "core.h"
  #include "hal_tx.h"
++struct ath12k_ppeds_desc_params {
++	unsigned int num_ppeds_desc;
++	unsigned int ppeds_hotlist_len;
++};
  
-+#define ATH12K_PPEDS_HOTLIST_LEN_MAX ath12k_ppe_ds_hotlist_len
-+extern unsigned int ath12k_ppe_ds_hotlist_len;
  /* htt_tx_msdu_desc_ext
   *
-  * valid_pwr
 --- a/drivers/net/wireless/ath/ath12k/ppe.c
 +++ b/drivers/net/wireless/ath/ath12k/ppe.c
 @@ -317,64 +317,101 @@ static u32 ath12k_ppeds_get_batched_tx_d
@@ -721,7 +792,7 @@ Signed-off-by: Pradeep Kumar Chitrapu <quic_pradeepc@quicinc.com>
  	return allocated;
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -3182,6 +3182,8 @@ static ssize_t ath12k_debugfs_dump_ppeds
+@@ -3292,6 +3292,8 @@ static ssize_t ath12k_debugfs_dump_ppeds
  			 ppeds_stats->release_rx_desc_cnt);
  	len += scnprintf(buf + len, size - len, "tx_desc_allocated %u\n",
  			 ppeds_stats->tx_desc_allocated);

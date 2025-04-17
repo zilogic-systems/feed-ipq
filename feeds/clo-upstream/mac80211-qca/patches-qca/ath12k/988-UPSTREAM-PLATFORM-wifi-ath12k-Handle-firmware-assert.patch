@@ -1,0 +1,221 @@
+From 20dda6b3e3601549debc3820333348417e78afe6 Mon Sep 17 00:00:00 2001
+From: Aishwarya R <quic_aisr@quicinc.com>
+Date: Mon, 11 Nov 2024 15:15:37 +0530
+Subject: [PATCH] UPSTREAM:PLATFORM:wifi: ath12k: Handle firmware assert during
+ rmmod and reboot
+
+Skip coredump collection during PCI shutdown to avoid crashes, as the reboot notifier
+runs in another thread and clearing resources can cause issues in dump collection.
+
+Introduce ATH12K_FLAG_SHUTDOWN flag to skip coredump collection and ensure a silent
+reboot without errors for both AHB and PCI.
+
+Trigger WARN_ON during firmware assert in rmmod to prevent crashes caused by
+proceeding with coredump collection.
+
+Rename ag->reset_work to ag->reset_group_work for better clarity.
+
+Use cancel_work_sync for AHB reset_work and reset_group_work to ensure proper
+completion of workqueues during rmmod and reboot.
+
+Patch-dependency: 962-wifi-ath12k-Fix-race-condition-between-firmware-asse.patch
+Signed-off-by: Aishwarya R <quic_aisr@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c  | 21 ++++++++++++++++-----
+ drivers/net/wireless/ath/ath12k/core.c |  7 ++++---
+ drivers/net/wireless/ath/ath12k/core.h |  3 ++-
+ drivers/net/wireless/ath/ath12k/mhi.c  | 16 ++++++++++++++--
+ drivers/net/wireless/ath/ath12k/pci.c  |  1 +
+ 5 files changed, 37 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/ahb.c b/drivers/net/wireless/ath/ath12k/ahb.c
+index a935e12..1cc4ce4 100644
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -1123,7 +1123,8 @@ static void ath12k_ahb_handle_userpd_crash(struct ath12k_base *ab)
+ {
+ 	struct ath12k_ahb *ab_ahb = ath12k_ahb_priv(ab);
+ 
+-	if (!test_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags))
++	if (test_bit(ATH12K_FLAG_SHUTDOWN, &ab->ag->dev_flags) ||
++	    !test_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags))
+ 		return;
+ 
+ 	ath12k_info(ab, "UserPD - %d CRASHED\n", ab_ahb->userpd_id);
+@@ -1137,6 +1138,9 @@ static void ath12k_ahb_handle_userpd_crash(struct ath12k_base *ab)
+ 		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
+ 		ab_ahb->crash_type = ATH12K_RPROC_USERPD_CRASH;
+ 		queue_work(ab->workqueue_aux, &ab->reset_work);
++	} else {
++		/* In case of userpd crash during rmmod case */
++		WARN_ON(1);
+ 	}
+ }
+ 
+@@ -1225,7 +1229,8 @@ int ath12k_ahb_root_pd_fatal_notifier(struct notifier_block *nb,
+ 		return NOTIFY_DONE;
+ 
+ 	ath12k_info(ab, "RootPD CRASHED\n");
+-	if (!test_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags))
++	if (!test_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags) ||
++	    test_bit(ATH12K_FLAG_SHUTDOWN, &ab->ag->dev_flags))
+ 		return NOTIFY_DONE;
+ 
+ 	/* Disable rootPD recovery as FW recovery is disabled
+@@ -1239,8 +1244,11 @@ int ath12k_ahb_root_pd_fatal_notifier(struct notifier_block *nb,
+ 		set_bit(ATH12K_FLAG_RECOVERY, &ag->dev_flags);
+ 		set_bit(ATH12K_FLAG_CRASH_FLUSH, &ag->dev_flags);
+ 		ab_ahb->crash_type = ATH12K_RPROC_ROOTPD_CRASH;
+-		queue_work(ab->workqueue_aux, &ag->reset_work);
+-	}
++		queue_work(ab->workqueue_aux, &ag->reset_group_work);
++	} else {
++                /* In case of rootpd crash during rmmod case */
++                WARN_ON(1);
++        }
+ 
+ 	return NOTIFY_OK;
+ }
+@@ -1257,7 +1265,8 @@ static void ath12k_ahb_queue_all_userpd_reset(struct ath12k_base *ab)
+ 		if (partner_ab->hif.bus == ATH12K_BUS_PCI)
+ 			continue;
+ 
+-		queue_work(partner_ab->workqueue_aux, &partner_ab->reset_work);
++		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags)))
++			queue_work(partner_ab->workqueue_aux, &partner_ab->reset_work);
+ 	}
+ }
+ 
+@@ -1880,6 +1889,7 @@ static void ath12k_ahb_remove_prepare(struct ath12k_base *ab)
+ {
+ 	set_bit(ATH12K_FLAG_UNREGISTERING, &ab->dev_flags);
+ 	set_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags);
++	cancel_work_sync(&ab->reset_work);
+ 	cancel_work_sync(&ab->restart_work);
+ 	cancel_work_sync(&ab->qmi.event_work);
+ 	ath12k_ahb_unregister_rproc_notifier(ab);
+@@ -1946,6 +1956,7 @@ static void ath12k_ahb_shutdown(struct platform_device *pdev)
+ 		ath12k_warn(ab, "SSR recovery in progress, interrupting ssr recovery due to shutdown request\n");
+ 		return;
+ 	}
++	set_bit(ATH12K_FLAG_SHUTDOWN, &ab->ag->dev_flags);
+ 	ath12k_ahb_remove_prepare(ab);
+ 
+ 	if (!(test_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags)))
+diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
+index 8025afb..5a9ff34 100644
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -306,7 +306,7 @@ static void ath12k_core_trigger_bug_on(struct ath12k_base *ab)
+ 
+ static void ath12k_core_update_userpd_state(struct work_struct *work)
+ {
+-	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_work);
++	struct ath12k_hw_group *ag = container_of(work, struct ath12k_hw_group, reset_group_work);
+ 	struct ath12k_base *ab;
+ 	struct ath12k_ahb *ab_ahb = NULL;
+ 	int i;
+@@ -372,7 +372,7 @@ ath12k_core_hw_group_alloc(u8 id, u8 max_chip)
+ 	mutex_init(&ag->mlomem_arena.mutex_lock);
+ 	ag->hw_queues_stopped = false;
+ 	ag->recovery_mode = ATH12K_MLO_RECOVERY_MODE0;
+-	INIT_WORK(&ag->reset_work, ath12k_core_update_userpd_state);
++	INIT_WORK(&ag->reset_group_work, ath12k_core_update_userpd_state);
+ 	ag->fst = NULL;
+ 	ag->wsi_load_info = NULL;
+ #ifdef CPTCFG_ATH12K_POWER_OPTIMIZATION
+@@ -3628,7 +3628,7 @@ static void ath12k_core_reset(struct work_struct *work)
+ 		 * So skip to send it for AHB or Hybrid SOC's
+ 		 * in case of a rootpd crash as queueing this
+ 		 * reset_work will be taken care of AHB/Hybrid
+-		 * inside ath12k_core_hw_group_reset().
++		 * inside ath12k_ahb_queue_all_userpd_reset().
+ 		 */
+ 		 if (partner_ab->hif.bus != ATH12K_BUS_PCI && ab_ahb
+ 		     && ab_ahb->crash_type == ATH12K_RPROC_ROOTPD_CRASH)
+@@ -3857,6 +3857,7 @@ static void ath12k_core_hw_group_stop(struct ath12k_hw_group *ag)
+ 		return;
+ 
+ 	clear_bit(ATH12K_FLAG_REGISTERED, &ag->dev_flags);
++	cancel_work_sync(&ag->reset_group_work);
+ 
+ 	for (i = ag->num_chip - 1; i >= 0; i--) {
+ 		ab = ag->ab[i];
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index f6365d1..6f0cf69 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -312,6 +312,7 @@ enum ath12k_dev_flags {
+ 	ATH12K_FLAG_UMAC_PRERESET_START,
+ 	ATH12K_FLAG_UMAC_RESET_COMPLETE,
+ 	ATH12K_FLAG_UMAC_RECOVERY_START,
++	ATH12K_FLAG_SHUTDOWN,
+ };
+ 
+ enum ath12k_monitor_flags {
+@@ -1551,7 +1552,7 @@ struct ath12k_hw_group {
+ 	struct ath12k_host_mlo_mem_arena mlomem_arena;
+ 	atomic_t num_dp_tx_pending;
+ 	u64 mlo_tstamp_offset;
+-	struct work_struct reset_work;
++	struct work_struct reset_group_work;
+ 	struct work_struct recovery_work;
+ 	struct ath12k_mlo_dp_umac_reset mlo_umac_reset;
+ 	struct completion umac_reset_complete;
+diff --git a/drivers/net/wireless/ath/ath12k/mhi.c b/drivers/net/wireless/ath/ath12k/mhi.c
+index ae2f7aa..0718fef 100644
+--- a/drivers/net/wireless/ath/ath12k/mhi.c
++++ b/drivers/net/wireless/ath/ath12k/mhi.c
+@@ -374,7 +374,13 @@ static void ath12k_mhi_op_status_cb(struct mhi_controller *mhi_cntrl,
+ 			return;
+ 		}
+ 
+-		/* In-case of rddm for mhi soc reset */
++		/* In-case of power down, SOC_GLOBAL_RESET would be ignored if there is any pending
++		 * PCIe transaction. To handle all pending PCIe transactions cleanly mhi host reset
++		 * request needs to be done before calling SOC_GLOBAL_RESET. mhi_soc_reset triggers
++		 * a WDOG reset on the target which will cleanly handle any pending PCIe transactions
++		 * and put the device in RDDM mode. After device enters in RDDM mode SOC_GLOBAL_RESET
++		 * can be called safely.
++		 */
+ 		if(test_bit(ATH12K_MHI_SOC_RESET, &ab_pci->mhi_state)) {
+ 			ath12k_dbg(ab, ATH12K_DBG_BOOT, "Triggering RDDM from mhi soc reset\n");
+ 			clear_bit(ATH12K_MHI_SOC_RESET, &ab_pci->mhi_state);
+@@ -382,6 +388,10 @@ static void ath12k_mhi_op_status_cb(struct mhi_controller *mhi_cntrl,
+ 			return;
+ 		}
+ 
++		/* Skip SSR recovery during reboot */
++		if (test_bit(ATH12K_FLAG_SHUTDOWN, &ab->ag->dev_flags))
++			return;
++
+ 		/* In-case of rddm for fatal error and ab is registered. */
+ 		if (!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags))) {
+ 			set_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags);
+@@ -391,8 +401,10 @@ static void ath12k_mhi_op_status_cb(struct mhi_controller *mhi_cntrl,
+ 			ath12k_dbg(ab, ATH12K_DBG_BOOT, "Schedule SSR Recovery reset work queue\n");
+ 			ath12k_hal_dump_srng_stats(ab);
+ 		} else {
+-			BUG_ON(1);
++			/* In case of rddm for fatal error during rmmod case */
++			WARN_ON(1);
+ 		}
++
+ 		break;
+ 	default:
+ 		break;
+diff --git a/drivers/net/wireless/ath/ath12k/pci.c b/drivers/net/wireless/ath/ath12k/pci.c
+index 2dfa491..cd88bb8 100644
+--- a/drivers/net/wireless/ath/ath12k/pci.c
++++ b/drivers/net/wireless/ath/ath12k/pci.c
+@@ -1100,6 +1100,7 @@ static void ath12k_pci_shutdown(struct pci_dev *pdev)
+ 	struct ath12k_base *ab = pci_get_drvdata(pdev);
+ 
+ 	set_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags);
++	set_bit(ATH12K_FLAG_SHUTDOWN, &ab->ag->dev_flags);
+ 	if (test_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags)) {
+ 		ath12k_warn(ab, "SSR recovery in progress, interrupting ssr recovery due to shutdown request\n");
+ 		return;
+-- 
+2.34.1
+

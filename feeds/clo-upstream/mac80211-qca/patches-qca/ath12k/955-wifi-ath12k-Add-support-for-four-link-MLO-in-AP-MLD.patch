@@ -35,11 +35,9 @@ Signed-off-by: Mahendran P <quic_mahep@quicinc.com>
  drivers/net/wireless/ath/ath12k/wmi.h  |  11 +-
  9 files changed, 210 insertions(+), 27 deletions(-)
 
-diff --git a/drivers/net/wireless/ath/ath12k/core.c b/drivers/net/wireless/ath/ath12k/core.c
-index 22c5bde..93eb64f 100644
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
-@@ -212,7 +212,10 @@ static struct ath12k_hw_group *ath12k_core_get_hw_group(struct ath12k_base *ab)
+@@ -230,7 +230,10 @@ static struct ath12k_hw_group *ath12k_co
  	struct device_node *mlo;
  	struct device *dev = ab->dev;
  	u32 group_id, num_chips;
@@ -50,7 +48,7 @@ index 22c5bde..93eb64f 100644
  
  	lockdep_assert_held(&ath12k_hw_lock);
  
-@@ -251,7 +254,7 @@ again:
+@@ -269,7 +272,7 @@ again:
  		}
  
  		if (num_chips > ATH12K_MAX_SOCS) {
@@ -59,7 +57,7 @@ index 22c5bde..93eb64f 100644
  				    num_chips, ATH12K_MAX_SOCS);
  			group_id = ATH12K_INVALID_GRP_ID;
  			goto again;
-@@ -285,6 +288,48 @@ again:
+@@ -303,6 +306,48 @@ again:
  		}
  	}
  
@@ -108,11 +106,9 @@ index 22c5bde..93eb64f 100644
  	if (ag->num_probed >= ag->num_chip) {
  		ath12k_warn(ab, "unable to add new chip to group, max limit reached\n");
  		group_id = ATH12K_INVALID_GRP_ID;
-diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
-index 8d01437..c4d5256 100644
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -230,13 +230,15 @@ struct ath12k_he {
+@@ -229,13 +229,15 @@ struct ath12k_he {
  	u32 heop_param;
  };
  
@@ -130,7 +126,7 @@ index 8d01437..c4d5256 100644
  enum {
  	WMI_HOST_TP_SCALE_MAX   = 0,
  	WMI_HOST_TP_SCALE_50    = 1,
-@@ -1403,6 +1405,12 @@ struct ath12k_hw_group {
+@@ -1415,6 +1417,12 @@ struct ath12k_hw_group {
  	struct dp_rx_fst *fst;
  };
  
@@ -143,7 +139,7 @@ index 8d01437..c4d5256 100644
  /* Master structure to hold the hw data which may be used in core module */
  struct ath12k_base {
  	enum ath12k_hw_rev hw_rev;
-@@ -1598,6 +1606,8 @@ struct ath12k_base {
+@@ -1627,6 +1635,8 @@ struct ath12k_base {
  
  	bool ce_pipe_init_done;
  	bool rxgainlut_support;
@@ -152,11 +148,9 @@ index 8d01437..c4d5256 100644
  	/* must be last */
  	u8 drv_priv[] __aligned(sizeof(void *));
  };
-diff --git a/drivers/net/wireless/ath/ath12k/dp.c b/drivers/net/wireless/ath/ath12k/dp.c
-index 4f12c74..8593582 100644
 --- a/drivers/net/wireless/ath/ath12k/dp.c
 +++ b/drivers/net/wireless/ath/ath12k/dp.c
-@@ -2390,7 +2390,12 @@ int ath12k_dp_alloc(struct ath12k_base *ab)
+@@ -2385,7 +2385,12 @@ int ath12k_dp_alloc(struct ath12k_base *
  
  	dp->reo_cmd_cache_flush_count = 0;
  	chip_id = (ab->ag->mlo_capable) ? ab->chip_id : 0;
@@ -170,8 +164,6 @@ index 4f12c74..8593582 100644
  
  	ret = ath12k_wbm_idle_ring_setup(ab, &n_link_desc);
  	if (ret) {
-diff --git a/drivers/net/wireless/ath/ath12k/hal.h b/drivers/net/wireless/ath/ath12k/hal.h
-index 50665be..b7fea6a 100644
 --- a/drivers/net/wireless/ath/ath12k/hal.h
 +++ b/drivers/net/wireless/ath/ath12k/hal.h
 @@ -912,6 +912,7 @@ enum hal_rx_buf_return_buf_manager {
@@ -182,21 +174,17 @@ index 50665be..b7fea6a 100644
  };
  
  #define HAL_SRNG_DESC_LOOP_CNT		0xf0000000
-diff --git a/drivers/net/wireless/ath/ath12k/hw.h b/drivers/net/wireless/ath/ath12k/hw.h
-index 49db2a7..6f80204 100644
 --- a/drivers/net/wireless/ath/ath12k/hw.h
 +++ b/drivers/net/wireless/ath/ath12k/hw.h
-@@ -105,6 +105,8 @@ struct ath12k_cfr_peer_tx_param;
- #define ATH12K_DEFAULT_ID		255
- #define ATH12K_FW_CFG_FILE		"firmware.dat"
+@@ -108,6 +108,8 @@ struct ath12k_cfr_peer_tx_param;
+ #define ATH12K_UMAC_RESET_IPC_IPQ5332	451
+ #define ATH12K_UMAC_RESET_IPC_QCN6432	7
  
 +#define ATH12K_MAX_SOCS 4
 +
  enum ath12k_hw_rate_cck {
  	ATH12K_HW_RATE_CCK_LP_11M = 0,
  	ATH12K_HW_RATE_CCK_LP_5_5M,
-diff --git a/drivers/net/wireless/ath/ath12k/ppe.h b/drivers/net/wireless/ath/ath12k/ppe.h
-index 4d12a99..e261ae3 100644
 --- a/drivers/net/wireless/ath/ath12k/ppe.h
 +++ b/drivers/net/wireless/ath/ath12k/ppe.h
 @@ -10,12 +10,11 @@
@@ -213,11 +201,9 @@ index 4d12a99..e261ae3 100644
  #define ATH12K_PPE_DEFAULT_CORE_MASK		ath12k_rfs_core_mask[0]
  #define ATH12K_PPE_RFS_2GHZ_CORE_MASK		ath12k_rfs_core_mask[1]
  #define ATH12K_PPE_RFS_5GHZ_CORE_MASK		ath12k_rfs_core_mask[2]
-diff --git a/drivers/net/wireless/ath/ath12k/qmi.c b/drivers/net/wireless/ath/ath12k/qmi.c
-index f631978..e47d4fd 100644
 --- a/drivers/net/wireless/ath/ath12k/qmi.c
 +++ b/drivers/net/wireless/ath/ath12k/qmi.c
-@@ -148,7 +148,7 @@ static struct qmi_elem_info wlfw_host_mlo_chip_info_s_v01_ei[] = {
+@@ -148,7 +148,7 @@ static struct qmi_elem_info wlfw_host_ml
  		.elem_len       = 1,
  		.elem_size      = sizeof(u8),
  		.array_type	= NO_ARRAY,
@@ -226,7 +212,7 @@ index f631978..e47d4fd 100644
  		.offset         = offsetof(struct wlfw_host_mlo_chip_info_s_v01,
  					   chip_id),
  	},
-@@ -157,7 +157,7 @@ static struct qmi_elem_info wlfw_host_mlo_chip_info_s_v01_ei[] = {
+@@ -157,7 +157,7 @@ static struct qmi_elem_info wlfw_host_ml
  		.elem_len       = 1,
  		.elem_size      = sizeof(u8),
  		.array_type	= NO_ARRAY,
@@ -235,7 +221,7 @@ index f631978..e47d4fd 100644
  		.offset         = offsetof(struct wlfw_host_mlo_chip_info_s_v01,
  					   num_local_links),
  	},
-@@ -166,7 +166,7 @@ static struct qmi_elem_info wlfw_host_mlo_chip_info_s_v01_ei[] = {
+@@ -166,7 +166,7 @@ static struct qmi_elem_info wlfw_host_ml
  		.elem_len       = QMI_WLFW_MAX_NUM_MLO_LINKS_PER_CHIP_V01,
  		.elem_size      = sizeof(u8),
  		.array_type     = STATIC_ARRAY,
@@ -244,7 +230,7 @@ index f631978..e47d4fd 100644
  		.offset         = offsetof(struct wlfw_host_mlo_chip_info_s_v01,
  					   hw_link_id),
  	},
-@@ -175,7 +175,7 @@ static struct qmi_elem_info wlfw_host_mlo_chip_info_s_v01_ei[] = {
+@@ -175,7 +175,7 @@ static struct qmi_elem_info wlfw_host_ml
  		.elem_len       = QMI_WLFW_MAX_NUM_MLO_LINKS_PER_CHIP_V01,
  		.elem_size      = sizeof(u8),
  		.array_type     = STATIC_ARRAY,
@@ -253,7 +239,7 @@ index f631978..e47d4fd 100644
  		.offset         = offsetof(struct wlfw_host_mlo_chip_info_s_v01,
  					   valid_mlo_link_id),
  	},
-@@ -186,6 +186,43 @@ static struct qmi_elem_info wlfw_host_mlo_chip_info_s_v01_ei[] = {
+@@ -186,6 +186,43 @@ static struct qmi_elem_info wlfw_host_ml
  	},
  };
  
@@ -297,11 +283,10 @@ index f631978..e47d4fd 100644
  static struct qmi_elem_info qmi_wlanfw_qdss_trace_mode_req_msg_v01_ei[] = {
  	{
  		.data_type      = QMI_OPT_FLAG,
-@@ -714,6 +751,25 @@ static struct qmi_elem_info qmi_wlanfw_host_cap_req_msg_v01_ei[] = {
- 		.offset         = offsetof(struct qmi_wlanfw_host_cap_req_msg_v01,
+@@ -715,6 +752,25 @@ static struct qmi_elem_info qmi_wlanfw_h
  					   fw_cfg_support),
  	},
-+	{
+ 	{
 +		.data_type      = QMI_OPT_FLAG,
 +		.elem_len       = 1,
 +		.elem_size      = sizeof(u8),
@@ -320,9 +305,10 @@ index f631978..e47d4fd 100644
 +							mlo_chip_info_v2),
 +		.ei_array      = wlfw_host_mlo_chip_info_s_v02_ei,
 +	},
- 	{
++	{
  		.data_type	= QMI_EOTI,
  		.array_type	= NO_ARRAY,
+ 		.tlv_type	= QMI_COMMON_TLV_TYPE,
 @@ -3016,10 +3072,57 @@ out:
  	return ret;
  }
@@ -382,7 +368,7 @@ index f631978..e47d4fd 100644
  	struct ath12k_hw_group *ag = ab->ag;
  	struct ath12k_base *partner_ab;
  	int ret, i, j, link_id;
-@@ -3075,7 +3178,7 @@ static int ath12k_qmi_fill_mlo_host_caps(struct ath12k_base *ab,
+@@ -3075,7 +3178,7 @@ static int ath12k_qmi_fill_mlo_host_caps
  
  	link_id = 0;
  	for (i = 0; i < ag->num_chip; i++) {
@@ -391,7 +377,7 @@ index f631978..e47d4fd 100644
  		partner_ab = ag->ab[i];
  
  		if (partner_ab->chip_id == ATH12K_INVALID_CHIP_ID) {
-@@ -3083,28 +3186,34 @@ static int ath12k_qmi_fill_mlo_host_caps(struct ath12k_base *ab,
+@@ -3083,28 +3186,34 @@ static int ath12k_qmi_fill_mlo_host_caps
  			goto chip_cleanup;
  		}
  
@@ -435,7 +421,7 @@ index f631978..e47d4fd 100644
  
  	ath12k_dbg(ab, ATH12K_DBG_QMI, "MLO host cap chosen\n");
  
-@@ -3113,7 +3222,7 @@ static int ath12k_qmi_fill_mlo_host_caps(struct ath12k_base *ab,
+@@ -3113,7 +3222,7 @@ static int ath12k_qmi_fill_mlo_host_caps
  
  chip_cleanup:
  	for (i = i - 1; i >= 0; i--) {
@@ -444,8 +430,6 @@ index f631978..e47d4fd 100644
  
  		memset(info, 0, sizeof(*info));
  	}
-diff --git a/drivers/net/wireless/ath/ath12k/qmi.h b/drivers/net/wireless/ath/ath12k/qmi.h
-index f74731e..229893e 100644
 --- a/drivers/net/wireless/ath/ath12k/qmi.h
 +++ b/drivers/net/wireless/ath/ath12k/qmi.h
 @@ -287,8 +287,9 @@ enum qmi_wlanfw_host_build_type {
@@ -481,11 +465,9 @@ index f74731e..229893e 100644
  	u8 feature_list_valid;
  	u64 feature_list;
  	u8 fw_cfg_support_valid;
-diff --git a/drivers/net/wireless/ath/ath12k/wmi.h b/drivers/net/wireless/ath/ath12k/wmi.h
-index 4ff07e2..319aa63 100644
 --- a/drivers/net/wireless/ath/ath12k/wmi.h
 +++ b/drivers/net/wireless/ath/ath12k/wmi.h
-@@ -2449,6 +2449,8 @@ enum wmi_tlv_service {
+@@ -2458,6 +2458,8 @@ enum wmi_tlv_service {
  	WMI_TLV_SERVICE_SAWF_LEVEL0 = 311,
  	WMI_TLV_SERVICE_PKTLOG_DECODE_INFO_SUPPORT = 320,
  	WMI_TLV_SERVICE_PEER_METADATA_V1A_V1B_SUPPORT = 365,
@@ -494,16 +476,26 @@ index 4ff07e2..319aa63 100644
  	WMI_TLV_SERVICE_RADAR_FLAGS_SUPPORT = 390,
  	WMI_TLV_SERVICE_SW_PROG_DFS_SUPPORT = 395,
  	WMI_TLV_SERVICE_THERM_THROT_POUT_REDUCTION = 410,
-@@ -3548,7 +3550,7 @@ static inline const char *ath12k_wmi_phymode_str(enum wmi_phy_mode mode)
+@@ -3592,7 +3594,8 @@ static inline const char *ath12k_wmi_phy
  	return "<unknown>";
  }
  
 -#define ATH12K_WMI_MLO_MAX_LINKS 3
 +#define ATH12K_WMI_MLO_MAX_LINKS 4
++#define ATH12K_WMI_MLO_PEER_MAX_LINKS 3
  
  struct wmi_ml_partner_info {
  	u32 vdev_id;
-@@ -5683,9 +5685,10 @@ struct ath12k_mlo_glb_shmem {
+@@ -4595,7 +4598,7 @@ struct peer_assoc_mlo_params {
+ 	u32 ml_peer_id;
+ 	u32 ieee_link_id;
+ 	u8 num_partner_links;
+-	struct wmi_ml_partner_info partner_info[ATH12K_WMI_MLO_MAX_LINKS];
++	struct wmi_ml_partner_info partner_info[ATH12K_WMI_MLO_PEER_MAX_LINKS];
+ 	u32 eml_caps;
+ };
+ 
+@@ -5742,9 +5745,10 @@ struct ath12k_mlo_glb_shmem {
  	FIELD_GET(MLO_SHMEM_GLB_RX_REO_SNAPSHOT_PARAM_FW_CONSUMED_SNAPSHOT_VER_MASK, snapshot_ver_info)
  
  #define MLO_SHMEM_CHIP_CRASH_INFO_PARAM_NO_OF_CHIPS_GET(chip_info) \
@@ -516,7 +508,7 @@ index 4ff07e2..319aa63 100644
  
  /** Definition of the GLB_H_SHMEM arena tlv structures */
  enum {
-@@ -8154,7 +8157,7 @@ struct wmi_dbglog_config_cmd_fixed_param {
+@@ -8306,7 +8310,7 @@ struct wmi_dbglog_config_cmd_fixed_param
  
  #define WMI_MAX_MEM_REQS 32
  
@@ -525,6 +517,14 @@ index 4ff07e2..319aa63 100644
  
  #define WMI_MLO_CMD_TIMEOUT_HZ		(5 * HZ)
  #define WMI_SERVICE_READY_TIMEOUT_HZ (5 * HZ)
--- 
-2.34.1
-
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -3372,7 +3372,7 @@ static void ath12k_peer_assoc_h_mlo(stru
+ 	links = sta->valid_links;
+ 
+ 	for_each_set_bit(link_id, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
+-	       if (i >= ATH12K_WMI_MLO_MAX_LINKS)
++	       if (i >= ATH12K_WMI_MLO_PEER_MAX_LINKS)
+ 		       break;
+ 	       arsta_p = ahsta->link[link_id];
+ 	       arvif = arsta_p->arvif;

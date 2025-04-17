@@ -26,7 +26,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
 
 --- a/include/net/mac80211.h
 +++ b/include/net/mac80211.h
-@@ -823,6 +823,7 @@
+@@ -814,6 +814,7 @@ struct ieee80211_bss_conf {
  
  	/* Critical Update flag*/
  	u32 critical_update_flag;
@@ -34,7 +34,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
  };
  
  /**
-@@ -4470,7 +4471,8 @@
+@@ -4466,7 +4467,8 @@ struct ieee80211_ops {
  			    struct ieee80211_key_conf *key,
  			    struct ieee80211_key_seq *seq);
  	int (*set_frag_threshold)(struct ieee80211_hw *hw, u32 value);
@@ -46,7 +46,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
  	int (*sta_remove)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 --- a/net/mac80211/cfg.c
 +++ b/net/mac80211/cfg.c
-@@ -3134,10 +3134,14 @@
+@@ -3080,10 +3080,14 @@ static int ieee80211_set_mcast_rate(stru
  	return 0;
  }
  
@@ -63,7 +63,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
  
  	if (changed & WIPHY_PARAM_FRAG_THRESHOLD) {
  		ieee80211_check_fast_xmit_all(local);
-@@ -3162,11 +3166,42 @@
+@@ -3108,11 +3112,42 @@ static int ieee80211_set_wiphy_params(st
  			return err;
  	}
  
@@ -97,7 +97,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
 +				return err;
 +			}
 +		}
-+
++		rcu_read_unlock();
 +	} else {
 +		if (changed & WIPHY_PARAM_RTS_THRESHOLD && !wiphy->num_hw) {
 +			err = drv_set_rts_threshold(local, wiphy->rts_threshold, NULL, link_id);
@@ -112,7 +112,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
  	if (changed & WIPHY_PARAM_RETRY_SHORT) {
 --- a/net/mac80211/driver-ops.h
 +++ b/net/mac80211/driver-ops.h
-@@ -401,15 +401,18 @@
+@@ -401,15 +401,18 @@ static inline int drv_set_frag_threshold
  }
  
  static inline int drv_set_rts_threshold(struct ieee80211_local *local,
@@ -127,7 +127,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
 -	trace_drv_set_rts_threshold(local, value);
 -	if (local->ops->set_rts_threshold)
 -		ret = local->ops->set_rts_threshold(&local->hw, value);
-+	trace_drv_set_rts_threshold(local, value, &sdata->vif, link_id);
++	trace_drv_set_rts_threshold(local, value, sdata, link_id);
 +	if (sdata && local->ops->set_rts_threshold)
 +		ret = local->ops->set_rts_threshold(&local->hw, value, &sdata->vif, link_id);
 +	else if (local->ops->set_rts_threshold)
@@ -137,20 +137,45 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
  }
 --- a/net/mac80211/trace.h
 +++ b/net/mac80211/trace.h
-@@ -824,8 +824,8 @@
+@@ -823,9 +823,32 @@ DEFINE_EVENT(local_u32_evt, drv_set_frag
+ 	TP_ARGS(local, value)
  );
  
- DEFINE_EVENT(local_u32_evt, drv_set_rts_threshold,
+-DEFINE_EVENT(local_u32_evt, drv_set_rts_threshold,
 -	TP_PROTO(struct ieee80211_local *local, u32 value),
 -	TP_ARGS(local, value)
-+	TP_PROTO(struct ieee80211_local *local, u32 value, struct ieee80211_vif *vif, int link_id),
-+	TP_ARGS(local, value, vif, link_id)
++TRACE_EVENT(drv_set_rts_threshold,
++        TP_PROTO(struct ieee80211_local *local,
++                 u32 value,
++                 struct ieee80211_sub_if_data *sdata,
++                 int link_id),
++
++        TP_ARGS(local, value, sdata, link_id),
++
++        TP_STRUCT__entry(
++                LOCAL_ENTRY
++                VIF_ENTRY
++                __field(u32, value)
++                __field(int, link_id)
++        ),
++
++        TP_fast_assign(
++                LOCAL_ASSIGN;
++                VIF_ASSIGN;
++                __entry->value = value;
++                __entry->link_id = link_id;
++        ),
++
++        TP_printk(
++                LOCAL_PR_FMT  VIF_PR_FMT  " value:%d link_id:%d",
++                LOCAL_PR_ARG, VIF_PR_ARG, __entry->value, __entry->link_id
++        )
  );
  
  TRACE_EVENT(drv_set_coverage_class,
 --- a/net/mac80211/util.c
 +++ b/net/mac80211/util.c
-@@ -2671,7 +2671,7 @@
+@@ -2673,7 +2673,7 @@ int ieee80211_reconfig(struct ieee80211_
  	drv_set_frag_threshold(local, hw->wiphy->frag_threshold);
  
  	/* setup RTS threshold */
@@ -161,7 +186,7 @@ Signed-off-by: Aaradhana Sahu <quic_aarasahu@quicinc.com>
  	drv_set_coverage_class(local, hw->wiphy->coverage_class);
 --- a/net/mac80211/link.c
 +++ b/net/mac80211/link.c
-@@ -37,6 +37,7 @@
+@@ -37,6 +37,7 @@ void ieee80211_link_init(struct ieee8021
  	link->conf = link_conf;
  	link_conf->link_id = link_id;
  	link_conf->vif = &sdata->vif;

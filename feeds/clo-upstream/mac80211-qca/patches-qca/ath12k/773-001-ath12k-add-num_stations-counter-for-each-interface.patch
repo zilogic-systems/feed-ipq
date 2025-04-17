@@ -18,7 +18,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -406,6 +406,7 @@ struct ath12k_link_vif {
+@@ -367,6 +367,7 @@ struct ath12k_link_vif {
  
  	bool mvr_processing;
  	bool pending_csa_up;
@@ -28,7 +28,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  struct ath12k_vif {
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -4877,6 +4877,7 @@ ath12k_mac_assign_link_vif( struct ath12
+@@ -4931,6 +4931,7 @@ ath12k_mac_assign_link_vif( struct ath12
  				  ath12k_update_obss_color_notify_work);
  			INIT_WORK(&arvif->update_bcn_template_work,
  				  ath12k_update_bcn_template_work);
@@ -36,7 +36,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  		}
  	}
  
-@@ -6163,6 +6164,13 @@ static int ath12k_station_assoc(struct a
+@@ -6239,6 +6240,13 @@ static int ath12k_station_assoc(struct a
  	arsta->bw = bandwidth;
  	arsta->bw_prev = bandwidth;
  
@@ -50,7 +50,7 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	spin_unlock_bh(&ar->data_lock);
  
  	return 0;
-@@ -6183,6 +6191,21 @@ static int ath12k_station_disassoc(struc
+@@ -6259,6 +6267,21 @@ static int ath12k_station_disassoc(struc
  
  	sta = container_of((void *)ahsta, struct ieee80211_sta, drv_priv);
  
@@ -72,11 +72,11 @@ Signed-off-by: Aditya Kumar Singh <quic_adisi@quicinc.com>
  	if (!sta->wme) {
  		arvif->num_legacy_stations--;
  		ret = ath12k_recalc_rtscts_prot(arvif);
-@@ -10050,6 +10073,7 @@ static int ath12k_mac_op_add_interface(s
- 		  ath12k_update_obss_color_notify_work);
+@@ -10168,6 +10191,7 @@ static int ath12k_mac_op_add_interface(s
+ 			ath12k_update_obss_color_notify_work);
  	INIT_WORK(&ahvif->deflink.update_bcn_template_work,
- 		  ath12k_update_bcn_template_work);
+ 			ath12k_update_bcn_template_work);
 +	ahvif->deflink.num_stations = 0;
  
- 	ahvif->key_cipher = INVALID_CIPHER;
- 
+ 	/* Allocate Default Queue now and reassign during actual vdev create */
+ 	vif->cab_queue = ATH12K_HW_DEFAULT_QUEUE;

@@ -21,7 +21,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/core.h
 +++ b/drivers/net/wireless/ath/ath12k/core.h
-@@ -403,6 +403,7 @@ struct ath12k_prb_resp_tmpl_ml_info {
+@@ -406,6 +406,7 @@ struct ath12k_prb_resp_tmpl_ml_info {
  };
  
  struct ath12k_link_vif {
@@ -29,7 +29,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  	struct ath12k_base *ab;
  	struct ath12k_dp *dp;
  	struct ath12k_vif_tcl_desc_template desc;
-@@ -513,7 +514,7 @@ struct ath12k_vif {
+@@ -517,7 +518,7 @@ struct ath12k_vif {
  	} u;
  
  	struct ath12k_link_vif deflink;
@@ -38,7 +38,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  	/* indicates bitmap of link vdev created in FW */
  	unsigned long links_map;
  	u32 aid;
-@@ -1953,6 +1954,26 @@ static inline const char *ath12k_bus_str
+@@ -1962,6 +1963,26 @@ static inline const char *ath12k_bus_str
  	return "unknown";
  }
  
@@ -132,7 +132,7 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  struct ath12k_link_vif *ath12k_mac_get_arvif(struct ath12k *ar, u32 vdev_id)
  {
  	struct ath12k_vif_iter arvif_iter = {};
-@@ -5652,6 +5684,56 @@ void ath12k_mac_unassign_link_vif(struct
+@@ -5710,6 +5742,56 @@ void ath12k_mac_unassign_link_vif(struct
  		memset(arvif->addr, 0, ETH_ALEN);
  }
  
@@ -191,18 +191,18 @@ Signed-off-by: Sidhanta Sahu <quic_sidhanta@quicinc.com>
  			   u8 link_id, bool is_bridge_vdev)
 --- a/drivers/net/wireless/ath/ath12k/mac.h
 +++ b/drivers/net/wireless/ath/ath12k/mac.h
-@@ -125,6 +125,33 @@ enum ath12k_background_dfs_events {
+@@ -127,6 +127,33 @@ enum ath12k_background_dfs_events {
  #define ATH12K_WLAN_PRIO_MAX    0x63
  #define ATH12K_WLAN_PRIO_WEIGHT 0xff
  
 +#define for_each_ahvif_link(ahvif, arvif, link_id)                        \
-+        for (link_id = 0; link_id < ARRAY_SIZE((ahvif)->link); link_id++) \
++        for (link_id = 0; link_id < ATH12K_NUM_MAX_LINKS; link_id++)      \
 +                if ((!(ahvif)->links_map ||                               \
 +                    (ahvif)->links_map & BIT(link_id)) &&                 \
 +                    (arvif = rcu_dereference((ahvif)->link[link_id])))
 +
 +#define for_each_ahvif_link_protected(ahvif, ah, arvif, link_id)                        	\
-+        for (link_id = 0; link_id < ARRAY_SIZE((ahvif)->link); link_id++) 			\
++        for (link_id = 0; link_id < ATH12K_NUM_MAX_LINKS; link_id++) 				\
 +                if ((!(ahvif)->links_map ||                               			\
 +                    (ahvif)->links_map & BIT(link_id)) &&                 			\
 +                    (arvif = rcu_dereference_protected((ahvif)->link[link_id],			\

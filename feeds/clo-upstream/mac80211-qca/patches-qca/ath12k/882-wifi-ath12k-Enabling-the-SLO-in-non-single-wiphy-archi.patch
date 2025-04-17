@@ -19,12 +19,12 @@ Signed-off-by: Gautham Kumar Senthilkumaran <quic_gauthamk@quicinc.com>
 --- a/drivers/net/wireless/ath/ath12k/core.c
 +++ b/drivers/net/wireless/ath/ath12k/core.c
 @@ -1476,7 +1476,7 @@ static int ath12k_core_mlo_teardown(stru
- 	int ret;
+ 	int ret = 0;
  	int i;
  
 -	if (!ag->mlo_capable)
 +	if (!(ag->mlo_capable && ag->num_chip > 1))
- 		return 0;
+ 		return ret;
  
  	for (i = ag->num_hw - 1; i >= 0; i--) {
 @@ -1499,7 +1499,7 @@ static int ath12k_core_mlo_setup(struct

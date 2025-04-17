@@ -1,0 +1,112 @@
+From 343d3bd5bda57731f350fefd63de5519a14658b4 Mon Sep 17 00:00:00 2001
+From: Tamizh Chelvam Raja <quic_tamizhr@quicinc.com>
+Date: Tue, 4 Feb 2025 15:01:04 +0530
+Subject: [PATCH] QSDK:wifi:CP:PLATFORM: Fix DS traffic stall after MODE0
+ recovery
+
+Traffic stall issue is happening in DS mode after MODE0 recovery
+is completed. This is due to not mapping the correct VP profile
+with VP table entry for the VP number assigned to the VIF. In DS,
+for every link creation, DS attach for the link with the VP number,
+and when the link goes down, detach the link for the VP number happens.
+
+But in MODE0 recovery, the link up sequence is called without the
+link down sequence. Due to that, the DS detach link will not be done.
+And during the link up sequence, the DS attach link happens again for
+the same link and VP number, choosing the wrong VP profile with
+VP table entry. This creates an invalid AST entry issue in TQM that
+triggers packet drops in FW and leads to a traffic stall issue.
+
+To avoid this problem, call the DS detach link function in
+ath12k_core_halt() during MODE0 recovery to avoid the stale VP table entry
+in the VP profile. This will ensure the proper profile is chosen when
+the attach happens after MODE0 recovery is done.
+
+On IPQ5424 platform, during MODE0 recovery, ath12k_ahb_ppeds_free_interrupts()
+and ath12k_ahb_ppeds_register_interrupts() are called for freeing and
+registering back the DS interrupts. In this sequence, devm_free_irq()
+should be called in ath12k_ahb_ppeds_free_interrupts() since the irq
+was requested using devm_request_irq(). By not calling the devm_free_irq()
+in case of MODE0 recovery, might keep the stale interrupt entry.
+When trying to register the IRQ in ath12k_ahb_ppeds_register_interrupts(),
+it will fail and leads to a traffic stall in DS mode.
+
+Signed-off-by: Tamizh Chelvam Raja <quic_tamizhr@quicinc.com>
+---
+ drivers/net/wireless/ath/ath12k/ahb.c  | 11 +++++++++++
+ drivers/net/wireless/ath/ath12k/core.c |  8 +++++++-
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/ath/ath12k/ahb.c
++++ b/drivers/net/wireless/ath/ath12k/ahb.c
+@@ -1051,9 +1051,22 @@ void ath12k_ahb_ppeds_irq_enable(struct
+ 
+ void ath12k_ahb_ppeds_free_interrupts(struct ath12k_base *ab)
+ {
++	struct platform_device *pdev = ab->pdev;
++
+ 	disable_irq_nosync(ab->dp.ppeds_irq[PPEDS_IRQ_PPE2TCL]);
++	/*
++	 * devm_free_irq() needs to be called for the irq
++	 * requested using devm_request_irq() callback
++	 */
++
++	devm_free_irq(&pdev->dev, ab->dp.ppeds_irq[PPEDS_IRQ_PPE2TCL], ath12k_dp_get_ppe_ds_ctxt(ab));
++
+ 	disable_irq_nosync(ab->dp.ppeds_irq[PPEDS_IRQ_REO2PPE]);
++	devm_free_irq(&pdev->dev, ab->dp.ppeds_irq[PPEDS_IRQ_REO2PPE], ath12k_dp_get_ppe_ds_ctxt(ab));
++
+ 	disable_irq_nosync(ab->dp.ppeds_irq[PPEDS_IRQ_PPE_WBM2SW_REL]);
++	devm_free_irq(&pdev->dev, ab->dp.ppeds_irq[PPEDS_IRQ_PPE_WBM2SW_REL], ab);
++
+ }
+ #endif
+ 
+--- a/drivers/net/wireless/ath/ath12k/core.c
++++ b/drivers/net/wireless/ath/ath12k/core.c
+@@ -2437,6 +2437,7 @@ void ath12k_core_halt(struct ath12k *ar)
+ {
+ 	struct ath12k_base *ab = ar->ab;
+ 	struct ath12k_hw_group *ag = ab->ag;
++	struct ath12k_link_vif *arvif;
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+ 
+@@ -2468,8 +2469,13 @@ void ath12k_core_halt(struct ath12k *ar)
+ 	if(!(test_bit(ATH12K_FLAG_UNREGISTERING, &ab->ag->dev_flags)))
+ 		synchronize_rcu();
+ 
+-	if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0)
++	if (ag->recovery_mode == ATH12K_MLO_RECOVERY_MODE0) {
++		list_for_each_entry(arvif, &ar->arvifs, list) {
++			ath12k_ppeds_detach_link_vif(arvif, arvif->ppe_vp_profile_idx);
++		}
++
+ 		INIT_LIST_HEAD(&ar->arvifs);
++	}
+ 
+ 	idr_init(&ar->txmgmt_idr);
+ 
+--- a/drivers/net/wireless/ath/ath12k/ppe.c
++++ b/drivers/net/wireless/ath/ath12k/ppe.c
+@@ -1212,12 +1212,18 @@ void ath12k_ppeds_detach_link_apvlan_vif
+ 
+ void ath12k_ppeds_detach_link_vif(struct ath12k_link_vif *arvif, int ppe_vp_profile_idx)
+ {
+-	struct ath12k *ar = arvif->ar;
+ 	struct ath12k_vif *ahvif = arvif->ahvif;
+-	struct ath12k_base *ab = ar->ab;
++	struct ath12k *ar;
++	struct ath12k_base *ab;
+ 	struct ath12k_dp_ppe_vp_profile *vp_profile;
+ 	enum nl80211_iftype vif_type;
+ 
++	if (!arvif->ar)
++		return;
++
++	ar = arvif->ar;
++	ab = ar->ab;
++
+ 	if (!test_bit(ATH12K_FLAG_PPE_DS_ENABLED, &ab->dev_flags))
+ 		return;
+ 

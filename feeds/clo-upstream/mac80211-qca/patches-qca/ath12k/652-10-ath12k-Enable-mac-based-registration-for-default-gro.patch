@@ -79,7 +79,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  #define ATH12K_INVALID_GRP_ID  0xFF
  #define ATH12K_INVALID_CHIP_ID 0xFF
  enum {
-@@ -581,7 +582,7 @@ enum ath12k_fw_recovery_option {
+@@ -580,7 +581,7 @@ enum ath12k_fw_recovery_option {
  
  struct ath12k {
  	struct ath12k_base *ab;
@@ -88,7 +88,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ath12k_pdev *pdev;
  	struct ath12k_wmi_pdev *wmi;
  	struct ath12k_pdev_dp dp;
-@@ -850,13 +851,15 @@ struct ath12k_reg_freq {
+@@ -849,13 +850,15 @@ struct ath12k_reg_freq {
  
  /* Holds info on the group of SOCs that are registered as a single wiphy */
  struct ath12k_hw_group {
@@ -106,7 +106,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ath12k_base *ab[ATH12K_MAX_SOCS];
  	struct mutex mutex_lock;
  };
-@@ -866,7 +869,6 @@ struct ath12k_base {
+@@ -865,7 +868,6 @@ struct ath12k_base {
  	enum ath12k_hw_rev hw_rev;
  	struct platform_device *pdev;
  	struct device *dev;
@@ -116,7 +116,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ath12k_wmi_base wmi_ab;
 --- a/drivers/net/wireless/ath/ath12k/debugfs.c
 +++ b/drivers/net/wireless/ath/ath12k/debugfs.c
-@@ -1431,6 +1431,7 @@ static const struct file_operations fops
+@@ -1442,6 +1442,7 @@ static const struct file_operations fops
  int ath12k_debugfs_register(struct ath12k *ar)
  {
  	struct ath12k_base *ab = ar->ab;
@@ -124,7 +124,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	char pdev_name[5];
  	char buf[100] = {0};
  
-@@ -1442,7 +1443,7 @@ int ath12k_debugfs_register(struct ath12
+@@ -1453,7 +1454,7 @@ int ath12k_debugfs_register(struct ath12
  
  	/* Create a symlink under ieee80211/phy* */
  	snprintf(buf, 100, "../../ath12k/%pd2", ar->debug.debugfs_pdev);
@@ -133,7 +133,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	ath12k_debugfs_htt_stats_init(ar);
  
-@@ -1458,7 +1459,7 @@ int ath12k_debugfs_register(struct ath12
+@@ -1469,7 +1470,7 @@ int ath12k_debugfs_register(struct ath12
  			    ar->debug.debugfs_pdev, ar,
  			    &fops_pktlog_filter);
  
@@ -142,7 +142,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  		debugfs_create_file("dfs_simulate_radar", 0200,
  				    ar->debug.debugfs_pdev, ar,
  				    &fops_simulate_radar);
-@@ -1467,7 +1468,7 @@ int ath12k_debugfs_register(struct ath12
+@@ -1478,7 +1479,7 @@ int ath12k_debugfs_register(struct ath12
  				    &ar->dfs_block_radar_events);
  	}
  
@@ -302,7 +302,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	ratemask = sta->deflink.supp_rates[band];
  	ratemask &= arvif->bitrate_mask.control[band].legacy;
  	rates = sband->bitrates;
-@@ -3420,7 +3422,7 @@ static void ath12k_recalculate_mgmt_rate
+@@ -3405,7 +3407,7 @@ static void ath12k_recalculate_mgmt_rate
  
  	lockdep_assert_held(&ar->conf_mutex);
  
@@ -311,7 +311,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	basic_rate_idx = ffs(vif->bss_conf.basic_rates) - 1;
  	bitrate = sband->bitrates[basic_rate_idx].bitrate;
  
-@@ -3448,6 +3450,7 @@ static int ath12k_mac_fils_discovery(str
+@@ -3433,6 +3435,7 @@ static int ath12k_mac_fils_discovery(str
  {
  	struct ath12k *ar = arvif->ar;
  	struct sk_buff *tmpl;
@@ -319,7 +319,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	int ret;
  	u32 interval;
  	bool unsol_bcast_probe_resp_enabled = false;
-@@ -3455,7 +3458,7 @@ static int ath12k_mac_fils_discovery(str
+@@ -3440,7 +3443,7 @@ static int ath12k_mac_fils_discovery(str
  	if (info->fils_discovery.max_interval) {
  		interval = info->fils_discovery.max_interval;
  
@@ -328,7 +328,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  		if (tmpl)
  			ret = ath12k_wmi_fils_discovery_tmpl(ar, arvif->vdev_id,
  							     tmpl);
-@@ -3463,7 +3466,7 @@ static int ath12k_mac_fils_discovery(str
+@@ -3448,7 +3451,7 @@ static int ath12k_mac_fils_discovery(str
  		unsol_bcast_probe_resp_enabled = 1;
  		interval = info->unsol_bcast_probe_resp_interval;
  
@@ -337,7 +337,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  								 arvif->vif);
  		if (tmpl)
  			ret = ath12k_wmi_probe_resp_tmpl(ar, arvif->vdev_id,
-@@ -4127,6 +4130,8 @@ ath12k_mac_select_scan_device(struct iee
+@@ -4096,6 +4099,8 @@ ath12k_mac_select_scan_device(struct iee
  
  void __ath12k_mac_scan_finish(struct ath12k *ar)
  {
@@ -346,7 +346,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	lockdep_assert_held(&ar->data_lock);
  
  	switch (ar->scan.state) {
-@@ -4140,9 +4145,9 @@ void __ath12k_mac_scan_finish(struct ath
+@@ -4109,9 +4114,9 @@ void __ath12k_mac_scan_finish(struct ath
  					    ATH12K_SCAN_ABORTING),
  			};
  
@@ -358,7 +358,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  		}
  		fallthrough;
  	case ATH12K_SCAN_STARTING:
-@@ -4414,7 +4419,7 @@ static int ath12k_mac_op_hw_scan(struct
+@@ -4383,7 +4388,7 @@ static int ath12k_mac_op_hw_scan(struct
  	}
  
  	/* Add a margin to account for event/command processing */
@@ -367,7 +367,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  				     msecs_to_jiffies(arg.max_scan_time +
  						      ATH12K_MAC_SCAN_TIMEOUT_MSECS));
  
-@@ -4582,7 +4587,7 @@ static int ath12k_mac_set_key(struct ath
+@@ -4551,7 +4556,7 @@ static int ath12k_mac_set_key(struct ath
  	int ret = 0;
  	u32 flags = 0;
  
@@ -376,7 +376,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	ab = ar->ab;
  
-@@ -6603,7 +6608,7 @@ static void ath12k_mgmt_over_wmi_tx_drop
+@@ -6573,7 +6578,7 @@ static void ath12k_mgmt_over_wmi_tx_drop
  {
  	int num_mgmt;
  
@@ -385,7 +385,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	num_mgmt = atomic_dec_if_positive(&ar->num_pending_mgmt_tx);
  
-@@ -6798,6 +6803,7 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -6768,6 +6773,7 @@ static void ath12k_mac_op_tx(struct ieee
  	struct ieee80211_vif *vif = info->control.vif;
  	struct ath12k_vif *arvif = ath12k_vif_to_arvif(vif);
  	struct ath12k *ar = arvif->ar;
@@ -393,7 +393,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
  	struct ieee80211_key_conf *key = info->control.hw_key;
  	struct ath12k_sta *arsta = NULL;
-@@ -6821,7 +6827,7 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -6791,7 +6797,7 @@ static void ath12k_mac_op_tx(struct ieee
  		if (ret) {
  			ath12k_warn(ar->ab, "failed to queue management frame %d\n",
  				    ret);
@@ -402,7 +402,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  		}
  		return;
  	}
-@@ -6836,7 +6842,7 @@ static void ath12k_mac_op_tx(struct ieee
+@@ -6806,7 +6812,7 @@ static void ath12k_mac_op_tx(struct ieee
  		else
  			ath12k_warn(ar->ab, "failed to transmit frame %d\n",
  				    ret);
@@ -411,7 +411,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	}
  }
  
-@@ -7135,7 +7141,7 @@ static int ath12k_mac_setup_vdev_args_mb
+@@ -7105,7 +7111,7 @@ static int ath12k_mac_setup_vdev_args_mb
  	tx_arvif = (void *)tx_vif->drv_priv;
  
  	if (arvif->vif->bss_conf.nontransmitted) {
@@ -420,7 +420,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  			return -EINVAL;
  
  		*flags = WMI_HOST_VDEV_FLAGS_NON_TRANSMIT_AP;
-@@ -7272,7 +7278,7 @@ static int ath12k_mac_vdev_create(struct
+@@ -7242,7 +7248,7 @@ static int ath12k_mac_vdev_create(struct
  {
  	struct ath12k_base *ab = ar->ab;
  	struct ath12k_vif *arvif = ath12k_vif_to_arvif(vif);
@@ -429,7 +429,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ath12k_wmi_vdev_create_arg vdev_arg = {0};
  	struct ath12k_wmi_peer_create_arg peer_param;
  	u32 param_id, param_value;
-@@ -7501,7 +7507,7 @@ err:
+@@ -7471,7 +7477,7 @@ err:
  
  static void ath12k_mac_vif_cache_flush(struct ath12k *ar,  struct ieee80211_vif *vif)
  {
@@ -438,7 +438,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ath12k_vif *arvif = (void *)vif->drv_priv;
  	int ret;
  
-@@ -8155,7 +8161,7 @@ static int ath12k_mac_num_chanctxs(struc
+@@ -8125,7 +8131,7 @@ static int ath12k_mac_num_chanctxs(struc
  {
          int num = 0;
  
@@ -447,7 +447,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
                                              ath12k_mac_num_chanctxs_iter,
                                              &num);
  
-@@ -8190,7 +8196,7 @@ static void ath12k_mac_update_rx_channel
+@@ -8160,7 +8166,7 @@ static void ath12k_mac_update_rx_channel
           */
          rcu_read_lock();
          if (!ctx && ath12k_mac_num_chanctxs(ar) == 1) {
@@ -456,7 +456,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
                                                      ath12k_mac_get_any_chandef_iter,
                                                      &def);
                  if (vifs)
-@@ -8333,10 +8339,11 @@ ath12k_mac_update_active_vif_chan(struct
+@@ -8303,10 +8309,11 @@ ath12k_mac_update_active_vif_chan(struct
  				  struct ieee80211_chanctx_conf *ctx)
  {
  	struct ath12k_mac_change_chanctx_arg arg = { .ctx = ctx, .ar = ar };
@@ -469,7 +469,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  						   IEEE80211_IFACE_ITER_NORMAL,
  						   ath12k_mac_change_chanctx_cnt_iter,
  						   &arg);
-@@ -8347,7 +8354,7 @@ ath12k_mac_update_active_vif_chan(struct
+@@ -8317,7 +8324,7 @@ ath12k_mac_update_active_vif_chan(struct
  	if (!arg.vifs)
  		return;
  
@@ -478,25 +478,25 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  						   IEEE80211_IFACE_ITER_NORMAL,
  						   ath12k_mac_change_chanctx_fill_iter,
  						   &arg);
-@@ -8589,7 +8596,7 @@ static void ath12k_mac_get_psd_channel(s
+@@ -8559,7 +8566,7 @@ static void ath12k_mac_get_psd_channel(s
          */
         *center_freq = *start_freq + i * step_freq;
-        /* -1 to reg_6g_power_mode to make it 0 based indexing */
--       *temp_chan = ieee80211_get_6g_channel_khz(ar->hw->wiphy, MHZ_TO_KHZ(*center_freq),
-+       *temp_chan = ieee80211_get_6g_channel_khz(ar->ah->hw->wiphy, MHZ_TO_KHZ(*center_freq),
-                                                  reg_6g_power_mode - 1);
-        *tx_power = (*temp_chan)->max_reg_power;
- }
-@@ -8622,7 +8629,7 @@ static void ath12k_mac_get_eirp_power(st
-                *center_freq += 10;
+ 	/* -1 to reg_6g_power_mode to make it 0 based indexing */
+-	*temp_chan = ieee80211_get_6g_channel_khz(ar->hw->wiphy, MHZ_TO_KHZ(*center_freq),
++	*temp_chan = ieee80211_get_6g_channel_khz(ar->ah->hw->wiphy, MHZ_TO_KHZ(*center_freq),
+ 						  reg_6g_power_mode - 1);
+ 	if (*temp_chan) {
+ 		*tx_power = (*temp_chan)->max_reg_power;
+@@ -8597,7 +8604,7 @@ static void ath12k_mac_get_eirp_power(st
+ 		*center_freq += 10;
  
-        /* -1 to reg_6g_power_mode to make it 0 based indexing */
--       *temp_chan = ieee80211_get_6g_channel_khz(ar->hw->wiphy, MHZ_TO_KHZ(*center_freq),
-+       *temp_chan = ieee80211_get_6g_channel_khz(ar->ah->hw->wiphy, MHZ_TO_KHZ(*center_freq),
-                                                   reg_6g_power_mode - 1);
-        *tx_power = (*temp_chan)->max_reg_power;
- }
-@@ -9275,7 +9282,7 @@ static void ath12k_mac_flush(struct ath1
+ 	/* -1 to reg_6g_power_mode to make it 0 based indexing */
+-	*temp_chan = ieee80211_get_6g_channel_khz(ar->hw->wiphy, MHZ_TO_KHZ(*center_freq),
++	*temp_chan = ieee80211_get_6g_channel_khz(ar->ah->hw->wiphy, MHZ_TO_KHZ(*center_freq),
+ 						  reg_6g_power_mode - 1);
+ 	if (*temp_chan) {
+ 		*tx_power = (*temp_chan)->max_reg_power;
+@@ -9266,7 +9273,7 @@ static void ath12k_mac_flush(struct ath1
  	struct ath12k_base *ab = ar->ab;
  	long time_left;
  
@@ -505,7 +505,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	time_left = wait_event_timeout(ar->dp.tx_empty_waitq,
  				       (atomic_read(&ar->dp.num_tx_pending) == 0),
-@@ -9808,7 +9815,7 @@ static void ath12k_mac_set_bitrate_mask_
+@@ -9799,7 +9806,7 @@ static void ath12k_mac_set_bitrate_mask_
  	arsta->changed |= IEEE80211_RC_SUPP_RATES_CHANGED;
  	spin_unlock_bh(&ar->data_lock);
  
@@ -514,7 +514,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  }
  
  static void ath12k_mac_disable_peer_fixed_rate(void *data,
-@@ -9965,7 +9972,7 @@ ath12k_mac_op_set_bitrate_mask(struct ie
+@@ -9956,7 +9963,7 @@ ath12k_mac_op_set_bitrate_mask(struct ie
  				    arvif->vdev_id, ret);
  			goto out;
  		}
@@ -523,7 +523,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  						  ath12k_mac_disable_peer_fixed_rate,
  						  arvif);
  	} else if (ath12k_mac_bitrate_mask_get_single_nss(ar, band, mask,
-@@ -9974,7 +9981,7 @@ ath12k_mac_op_set_bitrate_mask(struct ie
+@@ -9965,7 +9972,7 @@ ath12k_mac_op_set_bitrate_mask(struct ie
  		nss = single_nss;
  		mutex_lock(&ar->conf_mutex);
  		arvif->bitrate_mask = *mask;
@@ -532,7 +532,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  						  ath12k_mac_set_bitrate_mask_iter,
  						  arvif);
  		mutex_unlock(&ar->conf_mutex);
-@@ -10051,12 +10058,12 @@ ath12k_mac_op_set_bitrate_mask(struct ie
+@@ -10042,12 +10049,12 @@ ath12k_mac_op_set_bitrate_mask(struct ie
  		}
  
  		mutex_lock(&ar->conf_mutex);
@@ -547,7 +547,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  						  ath12k_mac_set_bitrate_mask_iter,
  						  arvif);
  
-@@ -10416,7 +10423,7 @@ static int ath12k_mac_setup_channels_rat
+@@ -10407,7 +10414,7 @@ static int ath12k_mac_setup_channels_rat
  					   u32 supported_bands)
  {
  	struct ath12k_base *ab = ar->ab;
@@ -556,7 +556,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ieee80211_supported_band *band;
  	struct ath12k_wmi_hal_reg_capabilities_ext_arg *reg_cap, *temp_reg_cap;
  	void *channels;
-@@ -10445,7 +10452,7 @@ static int ath12k_mac_setup_channels_rat
+@@ -10436,7 +10443,7 @@ static int ath12k_mac_setup_channels_rat
  		band->channels = channels;
  		band->n_bitrates = ath12k_g_rates_size;
  		band->bitrates = ath12k_g_rates;
@@ -565,7 +565,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  		if (ab->hw_params->single_pdev_only) {
  			phy_id = ath12k_get_phy_id(ar, WMI_HOST_WLAN_2G_CAP);
-@@ -10482,7 +10489,7 @@ static int ath12k_mac_setup_channels_rat
+@@ -10473,7 +10480,7 @@ static int ath12k_mac_setup_channels_rat
                          band->channels = channels;
                          band->n_bitrates = ath12k_a_rates_size;
                          band->bitrates = ath12k_a_rates;
@@ -574,7 +574,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
                          if (ar->ab->hw_params->single_pdev_only) {
                                  phy_id = ath12k_get_phy_id(ar, WMI_HOST_WLAN_5G_CAP);
-@@ -10528,7 +10535,7 @@ static int ath12k_mac_setup_channels_rat
+@@ -10519,7 +10526,7 @@ static int ath12k_mac_setup_channels_rat
                          ar->supports_6ghz = true;
                          band->n_bitrates = ath12k_a_rates_size;
                          band->bitrates = ath12k_a_rates;
@@ -583,7 +583,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
                          ath12k_mac_update_ch_list(ar, band,
  						  temp_reg_cap->low_5ghz_chan,
-@@ -10550,18 +10557,23 @@ static int ath12k_mac_setup_channels_rat
+@@ -10541,18 +10548,23 @@ static int ath12k_mac_setup_channels_rat
  	return 0;
  }
  
@@ -611,7 +611,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	combinations = kzalloc(sizeof(*combinations), GFP_KERNEL);
  	if (!combinations)
-@@ -10674,15 +10686,11 @@ static void __ath12k_mac_unregister(stru
+@@ -10665,15 +10677,11 @@ static void __ath12k_mac_unregister(stru
  	__ath12k_mac_post_unregister(ar);
  }
  
@@ -628,7 +628,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	ar = ah->radio;
  
  	for (i = 0; i < ah->num_radio; i++) {
-@@ -10705,6 +10713,20 @@ void ath12k_mac_unregister(struct ath12k
+@@ -10696,6 +10704,20 @@ void ath12k_mac_unregister(struct ath12k
  
  }
  
@@ -649,7 +649,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  static int __ath12k_mac_register(struct ath12k *ar)
  {
  	struct ieee80211_hw *hw;
-@@ -10713,7 +10735,7 @@ static int __ath12k_mac_register(struct
+@@ -10704,7 +10726,7 @@ static int __ath12k_mac_register(struct
  	int ret;
  	u32 ht_cap = 0;
  
@@ -658,7 +658,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	init_waitqueue_head(&ar->txmgmt_empty_waitq);
  	idr_init(&ar->txmgmt_idr);
  	spin_lock_init(&ar->txmgmt_idr_lock);
-@@ -10755,11 +10777,10 @@ static int __ath12k_mac_register(struct
+@@ -10746,11 +10768,10 @@ static int __ath12k_mac_register(struct
  	return 0;
  }
  
@@ -671,7 +671,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	struct ath12k_base *ab, *ab_dflt;
  	struct ath12k *ar;
  	struct ath12k_pdev *pdev;
-@@ -10779,12 +10800,6 @@ int ath12k_mac_register(struct ath12k_hw
+@@ -10770,12 +10791,6 @@ int ath12k_mac_register(struct ath12k_hw
  		WLAN_CIPHER_SUITE_CCMP_256,
  	};
  
@@ -684,7 +684,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	hw = ah->hw;
  
  	hw->wiphy->max_ap_assoc_sta = 0;
-@@ -10794,6 +10809,11 @@ int ath12k_mac_register(struct ath12k_hw
+@@ -10785,6 +10800,11 @@ int ath12k_mac_register(struct ath12k_hw
  	ar = ah->radio;
  	ab = ar->ab;
  
@@ -696,7 +696,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	for (i = 0; i < ah->num_radio; i++) {
  		ab = ar->ab;
  		pdev = ar->pdev;
-@@ -10824,9 +10844,9 @@ int ath12k_mac_register(struct ath12k_hw
+@@ -10815,9 +10835,9 @@ int ath12k_mac_register(struct ath12k_hw
  	hw->wiphy->available_antennas_tx = antennas_tx;
  
  	/* TODO: Add link/ar specific iface combinations
@@ -708,7 +708,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	if (ret) {
  		ath12k_err(NULL, "failed to setup interface combinations: %d\n",
  			   ret);
-@@ -10866,7 +10886,7 @@ int ath12k_mac_register(struct ath12k_hw
+@@ -10857,7 +10877,7 @@ int ath12k_mac_register(struct ath12k_hw
  		ieee80211_hw_set(hw, SUPPORTS_RX_DECAP_OFFLOAD);
  	}
  
@@ -717,7 +717,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  		ieee80211_hw_set(hw, SUPPORTS_AP_PS);
  
  	hw->wiphy->features |= NL80211_FEATURE_STATIC_SMPS;
-@@ -10907,7 +10927,7 @@ int ath12k_mac_register(struct ath12k_hw
+@@ -10898,7 +10918,7 @@ int ath12k_mac_register(struct ath12k_hw
  	hw->wiphy->iftype_ext_capab = ath12k_iftypes_ext_capa;
  	hw->wiphy->num_iftype_ext_capab = ARRAY_SIZE(ath12k_iftypes_ext_capa);
  
@@ -726,7 +726,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	hw->wiphy->ema_max_profile_periodicity = TARGET_EMA_MAX_PROFILE_PERIOD;
  
  	ah->hw->wiphy->regulatory_flags = REGULATORY_WIPHY_SELF_MANAGED;
-@@ -10979,6 +10999,35 @@ err_cleanup:
+@@ -10970,6 +10990,35 @@ err_cleanup:
  	return ret;
  }
  
@@ -762,7 +762,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  static inline struct ath12k *ath12k_mac_get_ar(struct ath12k_hw *ah,
  					       u8 link_idx)
  {
-@@ -10995,107 +11044,151 @@ static int ath12k_mac_chip_setup(struct
+@@ -10986,107 +11035,151 @@ static int ath12k_mac_chip_setup(struct
  {
  	struct ath12k *ar;
  	struct ath12k_pdev *pdev;
@@ -995,7 +995,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	}
  
  	return 0;
-@@ -11111,6 +11204,7 @@ void ath12k_mac_destroy(struct ath12k_hw
+@@ -11102,6 +11195,7 @@ void ath12k_mac_destroy(struct ath12k_hw
  	struct ath12k_hw *ah = ag->ah;
  	struct ath12k *ar;
  	struct ath12k_pdev *pdev;
@@ -1003,7 +1003,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  	int i, j;
  
  	if (!ah)
-@@ -11131,6 +11225,14 @@ void ath12k_mac_destroy(struct ath12k_hw
+@@ -11122,6 +11216,14 @@ void ath12k_mac_destroy(struct ath12k_hw
  		}
  	}
  
@@ -1157,7 +1157,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  }
 --- a/drivers/net/wireless/ath/ath12k/wmi.c
 +++ b/drivers/net/wireless/ath/ath12k/wmi.c
-@@ -5874,7 +5874,7 @@ static int wmi_process_mgmt_tx_comp(stru
+@@ -5846,7 +5846,7 @@ static int wmi_process_mgmt_tx_comp(stru
  	if ((!(info->flags & IEEE80211_TX_CTL_NO_ACK)) && !status)
  		info->flags |= IEEE80211_TX_STAT_ACK;
  
@@ -1166,7 +1166,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	num_mgmt = atomic_dec_if_positive(&ar->num_pending_mgmt_tx);
  
-@@ -6013,7 +6013,7 @@ static void ath12k_wmi_event_scan_foreig
+@@ -5985,7 +5985,7 @@ static void ath12k_wmi_event_scan_foreig
  		break;
  	case ATH12K_SCAN_RUNNING:
  	case ATH12K_SCAN_ABORTING:
@@ -1175,7 +1175,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  							 freq);
  		break;
  	}
-@@ -7352,7 +7352,7 @@ static void ath12k_mgmt_rx_event(struct
+@@ -7333,7 +7333,7 @@ static void ath12k_mgmt_rx_event(struct
  		   status->freq, status->band, status->signal,
  		   status->rate_idx);
  
@@ -1184,7 +1184,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  exit:
  	rcu_read_unlock();
-@@ -7519,7 +7519,7 @@ static void ath12k_peer_sta_kickout_even
+@@ -7500,7 +7500,7 @@ static void ath12k_peer_sta_kickout_even
  		goto exit;
  	}
  
@@ -1193,7 +1193,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  					   arg.mac_addr, NULL);
  	if (!sta) {
  		ath12k_warn(ab, "Spurious quick kickout for STA %pM\n",
-@@ -8032,6 +8032,7 @@ ath12k_wmi_dcs_awgn_interference_event(s
+@@ -8019,6 +8019,7 @@ ath12k_wmi_dcs_awgn_interference_event(s
          struct cfg80211_chan_def *chandef = NULL;
          struct ath12k *ar;
          const struct wmi_tlv *tlv;
@@ -1201,7 +1201,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
          u16 tlv_tag;
          u8 *ptr;
          int ret;
-@@ -8101,10 +8102,12 @@ ath12k_wmi_dcs_awgn_interference_event(s
+@@ -8088,10 +8089,12 @@ ath12k_wmi_dcs_awgn_interference_event(s
                  goto exit;
          }
  
@@ -1215,7 +1215,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
                                              &chandef);
          if (!chandef) {
                  ath12k_warn(ab, "chandef is not available\n");
-@@ -8112,7 +8115,7 @@ ath12k_wmi_dcs_awgn_interference_event(s
+@@ -8099,7 +8102,7 @@ ath12k_wmi_dcs_awgn_interference_event(s
          }
          ar->awgn_chandef = *chandef;
  
@@ -1224,7 +1224,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
          spin_lock_bh(&ar->data_lock);
          ar->awgn_intf_handling_in_prog = true;
-@@ -8232,7 +8235,7 @@ ath12k_wmi_pdev_dfs_radar_detected_event
+@@ -8219,7 +8222,7 @@ ath12k_wmi_pdev_dfs_radar_detected_event
  	if (ar->dfs_block_radar_events)
  		ath12k_info(ab, "DFS Radar detected, but ignored as requested\n");
  	else
@@ -1233,7 +1233,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  exit:
  	rcu_read_unlock();
-@@ -8430,7 +8433,7 @@ ath12k_wmi_pdev_update_muedca_params_sta
+@@ -8418,7 +8421,7 @@ ath12k_wmi_pdev_update_muedca_params_sta
  						 ev->ecwmin[WMI_AC_VO]);
  	params->ac_vo.mu_edca_timer = ev->muedca_expiration_time[WMI_AC_VO];
  
@@ -1242,7 +1242,7 @@ Signed-off-by: Karthikeyan Periyasamy <quic_periyasa@quicinc.com>
  
  	kfree(params);
  
-@@ -8965,14 +8968,14 @@ static void ath12k_wmi_pdev_detach(struc
+@@ -8942,14 +8945,14 @@ static void ath12k_wmi_pdev_detach(struc
  }
  
  int ath12k_wmi_pdev_attach(struct ath12k_base *ab,

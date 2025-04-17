@@ -15,11 +15,9 @@ Patch-dependency: 766-ath12k-fix-firmware-assert-during-channel-switch-for.patch
 
 Signed-off-by: Ganesh Kariganuru Mahabalesh <quic_gkarigan@quicinc.com>
 
-Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
-===================================================================
---- backports-6.5-rc3.orig/drivers/net/wireless/ath/ath12k/mac.c
-+++ backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
-@@ -7465,11 +7465,11 @@ exit:
+--- a/drivers/net/wireless/ath/ath12k/mac.c
++++ b/drivers/net/wireless/ath/ath12k/mac.c
+@@ -7499,11 +7499,11 @@ exit:
  }
  
  static u32 ath12k_mac_ieee80211_sta_bw_to_wmi(struct ath12k *ar,
@@ -33,7 +31,7 @@ Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
  	case IEEE80211_STA_RX_BW_20:
  		bw = WMI_PEER_CHWIDTH_20MHZ;
  		break;
-@@ -7487,7 +7487,7 @@ static u32 ath12k_mac_ieee80211_sta_bw_t
+@@ -7521,7 +7521,7 @@ static u32 ath12k_mac_ieee80211_sta_bw_t
  		break;
  	default:
  		ath12k_warn(ar->ab, "Invalid bandwidth %d in rc update for %pM\n",
@@ -42,12 +40,12 @@ Index: backports-6.5-rc3/drivers/net/wireless/ath/ath12k/mac.c
  		bw = WMI_PEER_CHWIDTH_20MHZ;
  		break;
  	}
-@@ -8209,7 +8209,7 @@ static void ath12k_mac_op_sta_rc_update(
+@@ -8244,7 +8244,7 @@ static void ath12k_mac_op_sta_rc_update(
  	spin_lock_bh(&ar->data_lock);
  
  	if (changed & IEEE80211_RC_BW_CHANGED) {
 -		bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, sta);
 +		bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, link_sta);
- 		arsta->bw_prev = arsta->bw;
  		arsta->bw = bw;
  	}
+ 

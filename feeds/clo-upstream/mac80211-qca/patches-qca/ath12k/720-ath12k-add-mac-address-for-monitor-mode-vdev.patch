@@ -34,30 +34,52 @@ Signed-off-by: Karthikeyan Kathirvel <quic_kathirve@quicinc.com>
 
 --- a/drivers/net/wireless/ath/ath12k/mac.c
 +++ b/drivers/net/wireless/ath/ath12k/mac.c
-@@ -1181,7 +1181,6 @@ static int ath12k_mac_monitor_vdev_creat
-	struct ath12k_pdev *pdev = ar->pdev;
-	struct ath12k_wmi_vdev_create_arg arg = {};
-	int bit, ret;
+@@ -1314,8 +1314,9 @@ static int ath12k_mac_monitor_vdev_creat
+ 	struct ath12k_pdev *pdev = ar->pdev;
+ 	struct ath12k_wmi_vdev_create_arg arg = {};
+ 	int bit, ret;
 -	u8 tmp_addr[6];
-	u16 nss;
-
-	lockdep_assert_held(&ar->conf_mutex);
-@@ -1216,7 +1215,7 @@ static int ath12k_mac_monitor_vdev_creat
- 		param.chains[NL80211_BAND_5GHZ].rx = ar->num_rx_chains;
+ 	u16 nss;
++	u8 mac_addr[ETH_ALEN];
++	u8 mask[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00};
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+ 
+@@ -1347,7 +1348,9 @@ static int ath12k_mac_monitor_vdev_creat
+ 		arg.chains[NL80211_BAND_5GHZ].rx = ar->num_rx_chains;
  	}
  
 -	ret = ath12k_wmi_vdev_create(ar, tmp_addr, &arg);
-+	ret = ath12k_wmi_vdev_create(ar, ar->mac_addr, &arg);
++	get_random_mask_addr(mac_addr, ar->mac_addr, mask);
++
++	ret = ath12k_wmi_vdev_create(ar, mac_addr, &arg);
  	if (ret) {
  		ath12k_warn(ar->ab, "failed to request monitor vdev %i creation: %d\n",
  			    ar->monitor_vdev_id, ret);
-@@ -9389,7 +9388,9 @@ static int ath12k_mac_vdev_create(struct
+@@ -9479,6 +9482,8 @@ static int ath12k_mac_vdev_create(struct
+ 	u8 link_addr[ETH_ALEN];
+ 	int txpower;
+ 	u8 link_id;
++	u8 mac_addr[ETH_ALEN];
++	u8 mask[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00};
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+ 
+@@ -9545,6 +9550,7 @@ static int ath12k_mac_vdev_create(struct
+ 	case NL80211_IFTYPE_MONITOR:
+ 		ahvif->vdev_type = WMI_VDEV_TYPE_MONITOR;
+ 		ar->monitor_vdev_id = vdev_id;
++		get_random_mask_addr(mac_addr, ar->mac_addr, mask);
+ 		break;
+ 	default:
+ 		WARN_ON(1);
+@@ -9567,7 +9573,9 @@ static int ath12k_mac_vdev_create(struct
  		goto err;
  	}
  
 -	ret = ath12k_wmi_vdev_create(ar, link_addr, &vdev_param);
 +	ret = ath12k_wmi_vdev_create(ar, vdev_arg.type == WMI_VDEV_TYPE_MONITOR ?
-+				     ar->mac_addr : link_addr,
++				     mac_addr : link_addr,
 +				     &vdev_arg);
  	if (ret) {
  		ath12k_warn(ab, "failed to create WMI vdev %d: %d\n",

@@ -46,6 +46,7 @@
 #define TZBSP_NONCE_LEN 12
 #define TZBSP_TAG_LEN 16
 #define TZBSP_ENCRYPTION_HEADERS_SIZE 0x400
+#define TZBSP_ENTIRE_LOG_SEG_REQUESTED_ID 0x1
 
 static unsigned int paniconaccessviolation = 0;
 module_param(paniconaccessviolation, uint, 0644);
@@ -107,11 +108,13 @@ struct tz_hvc_log_struct {
 	uint32_t hvc_ring_off;
 	uint32_t hvc_log_pos_info_off;
 	int buf_len;
+	int copy_buf_len;
 	struct mutex lock;
 	bool tz_kpss;
 	bool is_diag_id;
 	bool is_encrypted;
 	bool version;
+	int seg_id;
 };
 
 struct tzbsp_encr_log_t {
@@ -225,13 +228,15 @@ int parse_encrypted_log(char *ker_buf, uint32_t buf_len, char *copy_buf,
 
 }
 
-static int get_encrypted_tz_log(char *ker_buf, uint32_t buf_len, char *copy_buf)
+static int get_encrypted_tz_log(char *ker_buf, uint32_t buf_len,
+				char *copy_buf, int seg_id,
+				uint32_t copy_buf_len)
 {
 	int ret;
 
 	/* SCM call to TZ to get encrypted tz log */
 	ret = qti_scm_get_encrypted_tz_log(ker_buf, buf_len,
-					QTI_TZ_DIAG_LOG_ENCR_ID);
+					QTI_TZ_DIAG_LOG_ENCR_ID, seg_id);
 	if (ret == QTI_TZ_LOG_NO_UPDATE) {
 		pr_err("No TZ log updation from last read\n");
 		return QTI_TZ_LOG_NO_UPDATE;
@@ -239,7 +244,7 @@ static int get_encrypted_tz_log(char *ker_buf, uint32_t buf_len, char *copy_buf)
 		pr_err("Error in getting encrypted tz log %d\n", ret);
 		return -1;
 	}
-	return parse_encrypted_log(ker_buf, buf_len, copy_buf, QTI_TZ_DIAG_LOG_ENCR_ID);
+	return parse_encrypted_log(ker_buf, copy_buf_len, copy_buf, QTI_TZ_DIAG_LOG_ENCR_ID);
 }
 
 static int tz_hvc_log_open(struct inode *inode, struct file *file)
@@ -281,7 +286,9 @@ static int tz_hvc_log_open(struct inode *inode, struct file *file)
 		} else {
 			if (tz_hvc_log->is_encrypted) {
 				ret = get_encrypted_tz_log(ker_buf, buf_len,
-							    copy_buf);
+							   copy_buf,
+							   tz_hvc_log->seg_id,
+							   tz_hvc_log->copy_buf_len);
 				if (ret == -1)
 					goto out_err;
 				else if (ret == QTI_TZ_LOG_NO_UPDATE)
@@ -430,6 +437,7 @@ static int qti_tzlog_probe(struct platform_device *pdev)
 
 	if(of_device_is_compatible(np, "qti,tzlog-ipq54xx")) {
 		tz_hvc_log->version = TZ_LOG_VER_2;
+		tz_hvc_log->seg_id = TZBSP_ENTIRE_LOG_SEG_REQUESTED_ID;
 	}
 	tz_hvc_log->is_diag_id = !(of_device_is_compatible(np, "qti,tzlog-ipq5332") ||
 				   of_device_is_compatible(np, "qti,tzlog-ipq54xx") ||
@@ -502,8 +510,13 @@ static int qti_tzlog_probe(struct platform_device *pdev)
 
 	tz_hvc_log->ker_buf = page_address(page_buf);
 
+	if (tz_hvc_log->is_encrypted)
+		tz_hvc_log->copy_buf_len = tz_hvc_log->buf_len * 2;
+	else
+		tz_hvc_log->copy_buf_len = tz_hvc_log->buf_len;
+
 	page_buf = alloc_pages(GFP_KERNEL,
-					get_order(tz_hvc_log->buf_len));
+			       get_order(tz_hvc_log->copy_buf_len));
 	if (page_buf == NULL) {
 		dev_err(&pdev->dev, "unable to get copy buffer memory\n");
 		ret = -ENOMEM;
@@ -590,7 +603,7 @@ remove_debugfs:
 free_mem:
 	if (tz_hvc_log->copy_buf)
 		__free_pages(virt_to_page(tz_hvc_log->copy_buf),
-				get_order(tz_hvc_log->buf_len));
+				get_order(tz_hvc_log->copy_buf_len));
 
 	if (tz_hvc_log->ker_buf)
 		__free_pages(virt_to_page(tz_hvc_log->ker_buf),
@@ -610,7 +623,7 @@ static int qti_tzlog_remove(struct platform_device *pdev)
 
 	if (tz_hvc_log->copy_buf)
 		__free_pages(virt_to_page(tz_hvc_log->copy_buf),
-				get_order(tz_hvc_log->buf_len));
+				get_order(tz_hvc_log->copy_buf_len));
 
 	if (tz_hvc_log->ker_buf)
 		__free_pages(virt_to_page(tz_hvc_log->ker_buf),

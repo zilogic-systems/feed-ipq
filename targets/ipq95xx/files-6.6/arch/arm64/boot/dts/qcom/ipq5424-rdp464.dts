@@ -185,7 +185,7 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 				};
 			};
@@ -373,9 +373,9 @@
 			id = <0>;
 			num_chip = <4>;
 			chip_info = <0 2 1 3>,
-				    <1 2 2 0>,
+				    <1 2 0 2>,
 				    <2 2 3 1>,
-				    <3 2 0 2>;
+				    <3 2 2 0>;
 			status = "okay";
 		};
 	};
@@ -776,6 +776,7 @@
 	status = "okay";
 };
 
+/* 2G radio */
 &wifi0 {
 	qcom,rproc = <&q6v5_wcss>;
 	qcom,tgt-mem-mode = <0>;
@@ -785,26 +786,33 @@
 	qcom,board_id = <0x10>;
 	hw_link_id = <0 0>;
 	led-gpio = <&tlmm 41 GPIO_ACTIVE_HIGH>;
+	probe-order = <1>;
 	status = "okay";
 };
 
+/* 5GL radio */
 &wifi2 {
 	hremote_node = <&qcn9224_pcie1>;
 	board_id = <0x21>;
 	hw_link_id = <2 0>;
+	probe-order = <3>;
 	status = "okay";
 };
 
+/* 6G radio */
 &wifi3 {
 	hremote_node = <&qcn9224_pcie2>;
 	board_id = <0x26>;
 	hw_link_id = <3 0>;
+	probe-order = <4>;
 	status = "okay";
 };
 
+/* 5GH radio */
 &wifi4 {
 	hremote_node = <&qcn9224_pcie3>;
 	board_id = <0x22>;
 	hw_link_id = <1 0>;
+	probe-order = <2>;
 	status = "okay";
 };

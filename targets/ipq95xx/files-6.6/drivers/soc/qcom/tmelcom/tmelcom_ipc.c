@@ -835,7 +835,7 @@ int tmelcomm_qwes_enforce_hw_features(void *buf, u32 size)
 	if (!dev)
 		return -EINVAL;
 
-	dma_addr = dma_map_single(dev, buf, size, DMA_TO_DEVICE);
+	dma_addr = dma_map_single(dev, buf, size, DMA_BIDIRECTIONAL);
 	ret = dma_mapping_error(dev, dma_addr);
 	if (ret) {
 		pr_err("DMA Mapping Error : %d\n", ret);
@@ -850,7 +850,8 @@ int tmelcomm_qwes_enforce_hw_features(void *buf, u32 size)
 	ret = tmelcom_process_request(TMEL_MSG_UID_QWES_LICENSING_ENFORCEHWFEATURES,
 				      &msg, sizeof(msg));
 
-	dma_unmap_single(dev, dma_addr, size, DMA_TO_DEVICE);
+	dma_sync_single_for_cpu(dev, dma_addr, size, DMA_BIDIRECTIONAL);
+	dma_unmap_single(dev, dma_addr, size, DMA_BIDIRECTIONAL);
 
 	if (ret || msg.status)
 		dev_err(dev, "%s : IPC Failed. ret: %d, msg.status = %x\n",

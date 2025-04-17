@@ -1,4 +1,4 @@
-From c5f222c553172139e4a0c5ab571263ca2578b5ff Mon Sep 17 00:00:00 2001
+From 425771b44359d6e6800103f922469a91c9a56ec7 Mon Sep 17 00:00:00 2001
 From: Pooventhiran G <quic_pooventh@quicinc.com>
 Date: Fri, 6 Dec 2024 15:27:36 +0530
 Subject: [PATCH] wifi: Do not clear connection owner port for MLO Reconfig

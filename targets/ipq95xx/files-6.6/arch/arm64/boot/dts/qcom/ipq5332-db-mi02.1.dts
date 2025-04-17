@@ -287,7 +287,7 @@
 		};
 
 		q6v5_wcss: remoteproc@d100000 {
-			boot-args = <0x1 0x5 0x3 0x1 0x2f 0x2 0x1>;
+			boot-args = <0x1 0x5 0x3 0x1 0x2f 0x2 0x0>;
 			memory-region = <&q6_mem_regions>,
 					<&mlo_global_mem0>;
 			upd-firmware-names = "IPQ5332/q6_fw1.mdt",
@@ -533,6 +533,10 @@
 	qcom,wsi = <&wsi>;
 	qcom,wsi_index  = <1>;
 	qcom,pci_slot_id = <1>;
-	interrupts = <0 410 1>;
+	interrupts = <0 0 0>,
+		<0 0 0>,
+		<0 0 0>,
+		<0 0 0>,
+		<0 410 1>;
 	status = "ok";
 };

@@ -132,20 +132,19 @@ static int q6v5_wcss_sec_start(struct rproc *rproc)
 		ret = qcom_scm_pas_auth_and_reset(desc->pasid);
 
 	if (ret) {
-		dev_err(wcss->dev, "wcss_reset failed\n");
-		if (desc->tmelcom_support)
-			tmelcom_secboot_teardown(desc->pasid, 0);
-
-		return ret;
+		dev_err(wcss->dev, "wcss_reset failed: %d\n", ret);
+		goto out;
 	}
 
 wait_for_start:
 	ret = qcom_q6v5_wait_for_start(&wcss->q6, msecs_to_jiffies(10000));
 	if (ret == -ETIMEDOUT) {
-		if (debug_wcss)
+		if (debug_wcss) {
 			goto wait_for_start;
-		else
+		} else {
 			dev_err(wcss->dev, "start timed out\n");
+			goto out;
+		}
 	}
 
 	if (lic_param.buf) {
@@ -157,13 +156,17 @@ wait_for_start:
 		ret = qcom_scm_pas_auth_and_reset(wcss->textpd_pasid);
 		if (ret) {
 			dev_err(wcss->dev, "Failed to start textpd fw : %d\n", ret);
-			return ret;
+			goto out;
 		}
 	}
 
 	ret = q6v5_start_user_pd(rproc);
 	if (ret)
 		dev_err(wcss->dev, "Failed to start userpd %d\n", ret);
+
+out:
+	if (ret && desc->tmelcom_support)
+		tmelcom_secboot_teardown(desc->pasid, 0);
 
 	return ret;
 }
@@ -248,7 +251,8 @@ static int load_userpd_info_to_bootargs(struct rproc *rproc,
 	memcpy_toio(boot_args->smem_elem_cnt_ptr, &cnt, sizeof(u16));
 
 	for (i = 0; i < num_userpds; i++) {
-		pr_err("fw_names[%d/%d] = %s\n", i, num_userpds, fw_names[i]);
+		dev_info(wcss->dev, "fw_names[%d/%d] = %s\n", i, num_userpds,
+			 fw_names[i]);
 
 		/* TYPE */
 		upd_bootargs.header.type = UPD_BOOTARGS_HEADER_TYPE;
@@ -349,27 +353,27 @@ static int share_bootargs_to_q6(struct rproc *rproc, struct device *dev)
 
 	ret = of_property_read_u32(np, key, &smem_id);
 	if (ret) {
-		pr_err("failed to get smem id\n");
+		dev_err(dev, "failed to get smem id\n");
 		return ret;
 	}
 
 	ret = qcom_smem_alloc(WCSS_SMEM_HOST, smem_id, Q6_BOOT_ARGS_SMEM_SIZE);
 	if (ret && ret != -EEXIST) {
-		pr_err("failed to allocate q6 bootargs smem segment\n");
+		dev_err(dev, "failed to allocate q6 bootargs smem segment\n");
 		return ret;
 	}
 
 	boot_args.smem_base_ptr = qcom_smem_get(WCSS_SMEM_HOST, smem_id, &size);
 	if (IS_ERR(boot_args.smem_base_ptr)) {
-		pr_err("Unable to acquire smp2p item(%d) ret:%ld\n",
-		       smem_id, PTR_ERR(boot_args.smem_base_ptr));
+		dev_err(dev, "Unable to acquire smp2p item(%d) ret:%ld\n",
+			smem_id, PTR_ERR(boot_args.smem_base_ptr));
 		return PTR_ERR(boot_args.smem_base_ptr);
 	}
 	ptr = boot_args.smem_base_ptr;
 
 	/*get physical address*/
-	pr_info("smem physical address:0x%lX\n",
-		(uintptr_t)qcom_smem_virt_to_phys(ptr));
+	dev_info(dev, "smem physical address:0x%lX\n",
+		 (uintptr_t)qcom_smem_virt_to_phys(ptr));
 
 	/*Version*/
 	version = desc->bootargs_version;
@@ -381,7 +385,7 @@ static int share_bootargs_to_q6(struct rproc *rproc, struct device *dev)
 	cnt = ret;
 	if (ret < 0) {
 		if (ret == -ENODATA) {
-			pr_err("failed to read boot args ret:%d\n", ret);
+			dev_err(dev, "failed to read boot args ret:%d\n", ret);
 			return ret;
 		}
 		cnt = 0;
@@ -398,7 +402,7 @@ static int share_bootargs_to_q6(struct rproc *rproc, struct device *dev)
 	for (tmp = 0; tmp < cnt; tmp++) {
 		ret = of_property_read_u32_index(np, "boot-args", tmp, &rd_val);
 		if (ret) {
-			pr_err("failed to read boot args\n");
+			dev_err(dev, "failed to read boot args\n");
 			kfree(bootargs_arr);
 			return ret;
 		}
@@ -415,13 +419,49 @@ static int share_bootargs_to_q6(struct rproc *rproc, struct device *dev)
 
 	ret = load_userpd_info_to_bootargs(rproc, &boot_args);
 	if (ret < 0) {
-		pr_err("failed to read userpd boot args ret:%d\n", ret);
+		dev_err(dev, "failed to read userpd boot args ret:%d\n", ret);
 		return ret;
 	}
 
 	load_license_params_to_bootargs(dev, &boot_args);
 
 	return 0;
+}
+
+static int load_m3_firmware(struct q6v5_wcss_sec *wcss)
+{
+	int ret;
+	const struct firmware *m3_fw;
+	const char *m3_fw_name;
+	struct device_node *np = wcss->dev->of_node;
+
+	ret = of_property_read_string(np, "m3_firmware", &m3_fw_name);
+	if (ret == -EINVAL) {
+		return 0;
+	} else if (ret) {
+		dev_err(wcss->dev, "m3_firmware load failed ret:%d\n", ret);
+		return ret;
+	}
+
+	ret = request_firmware(&m3_fw, m3_fw_name, wcss->dev);
+	if (ret) {
+		dev_err(wcss->dev, "request_firmware failed %s ret:%d\n", m3_fw_name, ret);
+		return 0;
+	}
+
+	ret = qcom_mdt_load_no_init(wcss->dev, m3_fw,
+				    m3_fw_name, 0,
+				    wcss->mem_region, wcss->mem_phys,
+				    wcss->mem_size, &wcss->mem_reloc);
+	release_firmware(m3_fw);
+
+	if (ret) {
+		dev_err(wcss->dev, "can't load %s ret:%d\n", m3_fw_name, ret);
+		return ret;
+	}
+
+	dev_info(wcss->dev, "m3 firmware %s loaded to DDR\n", m3_fw_name);
+	return ret;
 }
 
 static int q6v5_wcss_sec_load(struct rproc *rproc, const struct firmware *fw)
@@ -487,6 +527,10 @@ static int q6v5_wcss_sec_load(struct rproc *rproc, const struct firmware *fw)
 		release_firmware(textpd_fw);
 	}
 
+	ret = load_m3_firmware(wcss);
+	if (ret)
+		return ret;
+
 	return ret;
 }
 
@@ -504,17 +548,26 @@ void q6v5_wcss_sec_copy_segment(struct rproc *rproc,
 {
 	struct q6v5_wcss_sec *wcss = rproc->priv;
 	struct device *dev = wcss->dev;
-	void *ptr;
 
-	ptr = devm_ioremap_wc(dev, segment->da, segment->size);
-	if (!ptr) {
+	if (!segment->io_ptr) {
+		segment->io_ptr = devm_ioremap_wc(dev, segment->da, segment->size);
+		dev_dbg(dev, "ioremap region io_ptr:0x%px da:0x%pad size:%zx\n",
+			segment->io_ptr, &segment->da, segment->size);
+	}
+
+	if (!segment->io_ptr) {
 		dev_err(dev, "Failed to ioremap segment %pad size %zx\n",
 			&segment->da, segment->size);
 		return;
 	}
 
-	memcpy(dest, ptr + offset, size);
-	devm_iounmap(dev, ptr);
+	memcpy(dest, segment->io_ptr + offset, size);
+	if (offset + size >= segment->size) {
+		dev_dbg(dev, "iounmap region io_ptr:0x%px da:0x%pad size:%zx\n",
+			segment->io_ptr, &segment->da, segment->size);
+		devm_iounmap(dev, segment->io_ptr);
+		segment->io_ptr = NULL;
+	}
 }
 
 static int q6v5_wcss_sec_dump_segments(struct rproc *rproc,

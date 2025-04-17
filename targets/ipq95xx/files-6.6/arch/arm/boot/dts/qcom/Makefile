@@ -17,19 +17,18 @@ dtb-$(CONFIG_ARCH_QCOM) += \
 	qcom-apq8074-dragonboard.dtb \
 	qcom-apq8084-ifc6540.dtb \
 	qcom-apq8084-mtp.dtb \
-	ipq5424-emulation.dtb \
-	ipq5424-emulation-ssoc.dtb \
-	ipq5424-emulation-fbc.dtb \
 	ipq5424-rdp464.dtb \
 	ipq5424-rdp464-c2.dtb \
 	ipq5424-rdp466.dtb \
 	ipq5424-rdp466-c2.dtb \
 	ipq5424-rdp466-rffe.dtb \
+	ipq5424-rdp466-c3.dtb \
 	ipq5424-rdp496.dtb \
 	ipq5424-rdp485.dtb \
 	ipq5424-rdp485-c2.dtb \
 	ipq5424-rdp485-rffe.dtb \
 	ipq5424-rdp485-rffe-c2.dtb \
+	ipq5424-rdp485-c3.dtb \
 	ipq5424-rdp487.dtb \
 	ipq5424-db-mr01.1.dtb \
 	qcom-ipq4018-ap120c-ac.dtb \
@@ -47,6 +46,7 @@ dtb-$(CONFIG_ARCH_QCOM) += \
 	ipq9574-rdp433.dtb \
 	ipq9574-rdp433-mht-phy.dtb \
 	ipq9574-rdp433-mht-switch.dtb \
+	ipq9574-rdp433-sfp.dtb \
 	ipq9574-rdp437.dtb \
 	ipq9574-rdp449.dtb \
 	ipq9574-rdp453.dtb \

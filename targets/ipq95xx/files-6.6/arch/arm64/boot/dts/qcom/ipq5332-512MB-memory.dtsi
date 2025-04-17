@@ -117,9 +117,5 @@
 			size = <0x0 0x00900000>;
 			status = "disabled";
 		};
-
-		minidump_mem: minidump_mem@0 {
-			no-map;
-		};
 	};
 };

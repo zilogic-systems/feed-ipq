@@ -225,6 +225,7 @@
 
 	ctx_save: ctx-save {
 		compatible = "qti,ctxt-save-ipq9574";
+		memory-region = <&minidump_mem>;
 	};
 
 	firmware {
@@ -354,6 +355,10 @@
 			hwlocks = <&tcsr_mutex 3>;
 			no-map;
 		};
+
+		minidump_mem: minidump_mem@0 {
+			no-map;
+		};
 	};
 
 	wcss: wcss-smp2p {
@@ -422,7 +427,6 @@
 			assigned-clock-rates = <100000000>,
 					       <100000000>;
 			status = "okay";
-			ubi_core_enable;
 		};
 
 		pcie0_phy: phy@84000 {
@@ -2686,6 +2690,8 @@
 			clocks = <&gcc GCC_BLSP1_QUP2_I2C_APPS_CLK>,
 				 <&gcc GCC_BLSP1_AHB_CLK>;
 			clock-names = "core", "iface";
+			assigned-clocks = <&gcc GCC_BLSP1_QUP2_I2C_APPS_CLK>;
+			assigned-clock-rates = <50000000>;
 			dmas = <&blsp_dma 14>, <&blsp_dma 15>;
 			dma-names = "tx", "rx";
 			status = "disabled";
@@ -2714,6 +2720,8 @@
 			clocks = <&gcc GCC_BLSP1_QUP3_I2C_APPS_CLK>,
 				 <&gcc GCC_BLSP1_AHB_CLK>;
 			clock-names = "core", "iface";
+			assigned-clocks = <&gcc GCC_BLSP1_QUP3_I2C_APPS_CLK>;
+			assigned-clock-rates = <50000000>;
 			dmas = <&blsp_dma 16>, <&blsp_dma 17>;
 			dma-names = "tx", "rx";
 			status = "disabled";
@@ -2742,6 +2750,8 @@
 			clocks = <&gcc GCC_BLSP1_QUP4_I2C_APPS_CLK>,
 				 <&gcc GCC_BLSP1_AHB_CLK>;
 			clock-names = "core", "iface";
+			assigned-clocks = <&gcc GCC_BLSP1_QUP4_I2C_APPS_CLK>;
+			assigned-clock-rates = <50000000>;
 			dmas = <&blsp_dma 18>, <&blsp_dma 19>;
 			dma-names = "tx", "rx";
 			status = "disabled";
@@ -2771,6 +2781,8 @@
 			clocks = <&gcc GCC_BLSP1_QUP5_I2C_APPS_CLK>,
 				 <&gcc GCC_BLSP1_AHB_CLK>;
 			clock-names = "core", "iface";
+			assigned-clocks = <&gcc GCC_BLSP1_QUP5_I2C_APPS_CLK>;
+			assigned-clock-rates = <50000000>;
 			dmas = <&blsp_dma 20>, <&blsp_dma 21>;
 			dma-names = "tx", "rx";
 			status = "disabled";
@@ -3342,7 +3354,8 @@
 		};
 
 		q6v5_wcss: remoteproc@cd00000 {
-			compatible = "qcom,ipq9574-q6-mpd";
+			compatible = "qcom,ipq9574-q6v5-wcss-sec";
+			m3_firmware = "IPQ9574/m3_fw.mdt";
 			#address-cells = <1>;
 			#size-cells = <1>;
 			ranges;
@@ -3454,11 +3467,6 @@
 				label = "rtr";
 				qcom,remote-pid = <1>;
 				mboxes = <&apcs_glb 8>;
-			};
-
-			q6_wcss_pd1: remoteproc_pd1 {
-				compatible = "qcom,ipq9574-wcss-ahb-mpd";
-				m3_firmware = "IPQ9574/m3_fw.mdt";
 			};
 		};
 

@@ -3,7 +3,7 @@
  * IPQ5332 RDP481 board device tree source
  *
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /dts-v1/;
@@ -200,35 +200,35 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 
 					port@1 {
 						reg = <1>;
 						label = "lan1";
 						phy-handle = <&phy0>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@2 {
 						reg = <2>;
 						label = "lan2";
 						phy-handle = <&phy1>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@3 {
 						reg = <3>;
 						label = "lan3";
 						phy-handle = <&phy2>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 
 					port@4 {
 						reg = <4>;
 						label = "lan4";
 						phy-handle = <&phy3>;
-						phy-mode = "usxgmii";
+						phy-mode = "internal";
 					};
 				};
 			};
@@ -470,7 +470,7 @@
 		};
 
 		q6v5_wcss: remoteproc@d100000 {
-			boot-args = <0x1 0x5 0x3 0x0 0x26 0x2 0x1>;
+			boot-args = <0x1 0x5 0x3 0x0 0x26 0x2 0x0>;
 			memory-region = <&q6_mem_regions>, <&mlo_global_mem0>;
 
 			upd-firmware-names = "IPQ5332/q6_fw1.mdt",

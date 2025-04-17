@@ -206,6 +206,7 @@
 
 	ctx-save {
 		compatible = "qti,ctxt-save-ipq5424";
+		memory-region = <&minidump_mem>;
 	};
 
 	firmware {
@@ -349,6 +350,10 @@
 		tmc_etr_region: tmc_etr_dump@0 {
 			no-map;
 			status = "disabled";
+		};
+
+		minidump_mem: minidump_mem@0 {
+			no-map;
 		};
 	};
 
@@ -760,7 +765,8 @@
 				 <&pcie30_phy1_pipe_clk>,
 				 <&pcie30_phy2_pipe_clk>,
 				 <&pcie30_phy3_pipe_clk>,
-				 <&usb_pcie_wrapper_pipe_clk>;
+				 <&usb_pcie_wrapper_pipe_clk>,
+				 <&cmn_pll_nss_clk_375m>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
 			#power-domain-cells = <1>;
@@ -1527,6 +1533,8 @@
 				<&gcc GCC_NSSCFG_CLK>,
 				<&gcc GCC_NSSNOC_ATB_CLK>,
 				<&gcc GCC_NSSNOC_NSSCC_CLK>,
+				<&gcc GCC_NSSNOC_MEMNOC_CLK>,
+				<&gcc GCC_NSSNOC_MEMNOC_1_CLK>,
 				<&gcc GCC_NSSNOC_PCNOC_1_CLK>,
 				<&gcc GCC_NSSNOC_QOSGEN_REF_CLK>,
 				<&gcc GCC_NSSNOC_SNOC_1_CLK>,
@@ -1536,9 +1544,9 @@
 			clock-names = "nss-csr-clk", "nss-nssnoc-csr-clk", "nss-ce-apb-clk",
 				"nss-ce-axi-clk", "nss-nssnoc-ce-apb-clk", "nss-nssnoc-ce-axi-clk", "nss-edma-clk",
 				"nss-ts-clk", "nss-nsscc-clk", "nss-nsscfg-clk", "nss-nssnoc-atb-clk",
-				"nss-nssnoc-nsscc-clk", "nss-nssnoc-pcnoc-1-clk", "nss-nssnoc-qosgen-ref-clk",
-				"nss-nssnoc-snoc-1-clk", "nss-nssnoc-snoc-clk", "nss-nssnoc-timeout-ref-clk",
-				"nss-nssnoc-xo-dcd-clk";
+				"nss-nssnoc-nsscc-clk", "nss-nssnoc-memnoc-clk", "nss-nssnoc-mem-noc-1-clk",
+				"nss-nssnoc-pcnoc-1-clk", "nss-nssnoc-qosgen-ref-clk", "nss-nssnoc-snoc-1-clk",
+				"nss-nssnoc-snoc-clk", "nss-nssnoc-timeout-ref-clk", "nss-nssnoc-xo-dcd-clk";
 
 #ifdef __CONFIG_IO_COHERENCY__
 			nss_noc {
@@ -1584,6 +1592,8 @@
 			clock-names = "eip_clk", "eip_nocclk";
 			clock-frequency = /bits/ 64 <375000000 375000000>;
 			status = "ok";
+			nvmem-cells = <&nss_disable>;
+
 			interrupts = <GIC_SPI 230 IRQ_TYPE_LEVEL_HIGH>,
 				   <GIC_SPI 231 IRQ_TYPE_LEVEL_HIGH>,
 				   <GIC_SPI 232 IRQ_TYPE_LEVEL_HIGH>,
@@ -1715,6 +1725,126 @@
 			trace_probe_extid_base = <0x4100>; /* BID=2: PID=0: MID=0 of APSS */
 			trace_probe_extid_mask = <0xff00>;
 			ec_ctl1_base_val = <0x472>;
+			status = "ok";
+		};
+
+		pcie1_lane0_comp {
+			compatible = "qcom,pcie1-lane0-comp-driver";
+			reg = <0x601200 0x1000>,<0x602000 0x1000>, <0x603000 0x1000>;
+			reg-names = "tenureprobe-base", "traceprobe-base", "eventcounter-base";
+			hist_bin_width = <0x8>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x4C00>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xff00>;
+			ec_ctl1_base_val = <0x404>;
+			status = "disabled";
+		};
+
+		pcie1_lane1_comp {
+			compatible = "qcom,pcie1-lane1-comp-driver";
+			reg = <0x601400 0x1000>,<0x602000 0x1000>, <0x603000 0x1000>;
+			reg-names = "tenureprobe-base", "traceprobe-base", "eventcounter-base";
+			hist_bin_width = <0x8>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x4E00>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xff00>;
+			ec_ctl1_base_val = <0x404>;
+			status = "disabled";
+		};
+
+		pcie2_lane0_comp {
+			compatible = "qcom,pcie2-lane0-comp-driver";
+			reg = <0x601600 0x1000>,<0x602000 0x1000>, <0x603000 0x1000>;
+			reg-names = "tenureprobe-base", "traceprobe-base", "eventcounter-base";
+			hist_bin_width = <0x8>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x4D00>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xff00>;
+			ec_ctl1_base_val = <0x404>;
+			status = "ok";
+		};
+
+		pcie2_lane1_comp {
+			compatible = "qcom,pcie2-lane1-comp-driver";
+			reg = <0x601800 0x1000>,<0x602000 0x1000>, <0x603000 0x1000>;
+			reg-names = "tenureprobe-base", "traceprobe-base", "eventcounter-base";
+			hist_bin_width = <0x8>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x4F00>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xff00>;
+			ec_ctl1_base_val = <0x404>;
+			status = "ok";
+		};
+
+		hist_apss_comp {
+			compatible = "qcom,hist-apss-comp-driver";
+			reg = <0xAC0C00 0x1000>, <0xACB800 0x1000>;
+			reg-names = "histprobe-base", "histctrl-base";
+			hist_bin_width = <0x8>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x4000>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xff00>;
+			ec_ctl1_base_val = <0x404>;
+			status = "ok";
+		};
+
+		llcc_be_apss_comp {
+			compatible = "qcom,llcc-be-apss-comp-driver";
+			reg = <0x836000 0x2000>, <0x860000 0x2000>, <0x83C000 0x2000>, <0x824000 0x2000>;
+			reg-names = "llcc-perfmon-base", "llcc-beac-base", "llcc-berc-base", "llcc-trp-prof-filter-base";
+			hist_bin_width = <0x8>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x4000>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xff00>;
+			ec_ctl1_base_val = <0x404>;
+			status = "ok";
+		};
+
+		sysnoc_ce_edpd_comp {
+			compatible = "qcom,sysnoc-ce-edpd-comp-driver";
+			reg = <0x581800 0x1000>,<0x584000 0x1000>, <0x585000 0x1000>;
+			reg-names = "tenureprobe-base", "traceprobe-base", "eventcounter-base";
+			hist_bin_width = <0x3200008>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0xE000>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xE000>;
+			ec_ctl1_base_val = <0x11>;
+			status = "ok";
+		};
+
+		sysnoc_wcss_comp {
+			compatible = "qcom,sysnoc-wcss-comp-driver";
+			reg = <0x581A00 0x1000>,<0x584000 0x1000>, <0x585000 0x1000>;
+			reg-names = "tenureprobe-base", "traceprobe-base", "eventcounter-base";
+			hist_bin_width = <0x3200008>;
+			ddr_addr_min_low = <0x80000000>;
+			ddr_addr_min_high = <0x00000000>;
+			ddr_addr_max_low = <0x80000000>;
+			ddr_addr_max_high = <0x00000009>;
+			trace_probe_extid_base = <0x8000>; /* BID=2: PID=0: MID=0 of APSS */
+			trace_probe_extid_mask = <0xE000>;
+			ec_ctl1_base_val = <0x11>;
 			status = "ok";
 		};
 
@@ -1866,8 +1996,10 @@
 
 			pcie3_rp {
 				qcom,mhi@3 {
-				secure-reg = <0x00610708 0x100>, /* pcie3 Main Ctl Low */
-						<0x00610738 0x44410>; /* pcie3 TrType LUT Low */
+				secure-reg = <0x00610708 0x130100>, /* pcie3 Main Ctl Low */
+						<0x00610738 0x44410>, /* pcie3 TrType LUT Low */
+						<0x00610748 0x100>, /* pci3 dynattr Alloc Low */
+						<0x00610750 0x7>; /*pci3 dynattr CacheIndexVal Low*/
 				};
 			};
 		};
@@ -1961,8 +2093,10 @@
 
 			pcie2_rp {
 				qcom,mhi@2 {
-				secure-reg = <0x00610608 0x100>, /* pcie2 Main Ctl Low */
-						<0x00610638 0x44410>; /* pcie2 TrType LUT Low */
+				secure-reg = <0x00610608 0x130100>, /* pcie2 Main Ctl Low */
+						<0x00610638 0x44410>, /* pcie2 TrType LUT Low */
+						<0x00610648 0x100>, /* pci2 dynattr Alloc Low */
+						<0x00610650 0x6>; /*pci2 dynattr CacheIndexVal Low*/
 				};
 			};
 		};
@@ -2056,8 +2190,10 @@
 
 			pcie1_rp {
 				qcom,mhi@1 {
-				secure-reg = <0x00610508 0x100>, /* pcie1 Main Ctl Low */
-						<0x00610538 0x44410>; /* pcie1 TrType LUT Low */
+				secure-reg = <0x00610508 0x130100>, /* pcie1 Main Ctl Low */
+						<0x00610538 0x44410>, /* pcie1 TrType LUT Low */
+						<0x00610548 0x100>, /* pci1 dynattr Alloc Low */
+						<0x00610550 0x7>; /*pci1 dynattr CacheIndexVal Low*/
 				};
 			};
 		};
@@ -2151,8 +2287,10 @@
 
 			pcie0_rp {
 				qcom,mhi@0 {
-				secure-reg = <0x00610408 0x100>, /* pcie0 Main Ctl Low */
-						<0x00610438 0x44410>; /* pcie0 TrType LUT Low */
+				secure-reg = <0x00610408 0x130100>, /* pcie0 Main Ctl Low */
+						<0x00610438 0x44410>, /* pcie0 TrType LUT Low */
+						<0x00610448 0x100>, /* pci0 dynattr Alloc Low */
+						<0x00610450 0x6>; /*pci0 dynattr CacheIndexVal Low*/
 				};
 			};
 		};
@@ -2609,8 +2747,10 @@
 				"mhi0",
 				"inta";
 
-			secure-reg = <0x00610408 0x100>, /* pcie0 Main Ctl Low */
-				     <0x00610438 0x44410>; /* pcie0 TrType LUT Low */
+			secure-reg = <0x00610408 0x130100>, /* pcie0 Main Ctl Low */
+				     <0x00610438 0x44410>, /* pcie0 TrType LUT Low */
+				     <0x00610448 0x100>, /* pci0 dynattr Alloc Low */
+				     <0x00610450 0x6>; /* pci0 dynattr CacheIndexVal Low */
 			status = "disabled";
 		};
 
@@ -2885,8 +3025,10 @@
 				"mhi0",
 				"inta";
 
-			secure-reg = <0x00610508 0x100>, /* pcie1 Main Ctl Low */
-				     <0x00610538 0x44410>; /* pcie1 TrType LUT Low */
+			secure-reg = <0x00610508 0x130100>, /* pcie1 Main Ctl Low */
+				     <0x00610538 0x44410>, /* pcie1 TrType LUT Low */
+				     <0x00610548 0x100>, /* pci1 dynattr Alloc Low */
+				     <0x00610550 0x7>; /* pci1 dynattr CacheIndexVal Low */
 			status = "disabled";
 		};
 
@@ -3161,8 +3303,10 @@
 				"mhi0",
 				"inta";
 
-			secure-reg = <0x00610608 0x100>, /* pcie2 Main Ctl Low */
-				     <0x00610638 0x44410>; /* pcie2 TrType LUT Low */
+			secure-reg = <0x00610608 0x130100>, /* pcie2 Main Ctl Low */
+				     <0x00610638 0x44410>, /* pcie2 TrType LUT Low */
+				     <0x00610648 0x100>, /* pci2 dynattr Alloc Low */
+				     <0x00610650 0x6>; /* pci2 dynattr CacheIndexVal Low */
 			status = "disabled";
 		};
 
@@ -3437,8 +3581,10 @@
 				"mhi0",
 				"inta";
 
-			secure-reg = <0x00610708 0x100>, /* pcie3 Main Ctl Low */
-				     <0x00610738 0x44410>; /* pcie3 TrType LUT Low */
+			secure-reg = <0x00610708 0x130100>, /* pcie3 Main Ctl Low */
+				     <0x00610738 0x44410>, /* pcie3 TrType LUT Low */
+				     <0x00610748 0x100>, /* pci3 dynattr Alloc Low */
+				     <0x00610750 0x7>; /* pci3 dynattr CacheIndexVal Low */
 			status = "disabled";
 		};
 
@@ -3913,14 +4059,12 @@
 			clocks = <&gcc GCC_USB1_MASTER_CLK>,
 				 <&gcc GCC_USB1_SLEEP_CLK>,
 				 <&gcc GCC_USB1_MOCK_UTMI_CLK>,
-				 <&gcc GCC_USB1_PHY_CFG_AHB_CLK>,
-				 <&gcc GCC_CNOC_USB_CLK>;
+				 <&gcc GCC_USB1_PHY_CFG_AHB_CLK>;
 
 			clock-names = "master",
 				      "sleep",
 				      "mock_utmi",
-				      "cfg_ahb_clk",
-				      "cnoc_usb_clk";
+				      "cfg_ahb_clk";
 
 			assigned-clocks = <&gcc GCC_USB1_MASTER_CLK>,
 					  <&gcc GCC_USB1_MOCK_UTMI_CLK>;
@@ -4000,14 +4144,16 @@
 				<&gcc GCC_USB0_MOCK_UTMI_CLK>,
 				<&gcc GCC_USB0_PHY_CFG_AHB_CLK>,
 				<&gcc GCC_USB0_AUX_CLK>,
-				<&gcc GCC_USB0_PIPE_CLK>;
+				<&gcc GCC_USB0_PIPE_CLK>,
+				<&gcc GCC_CNOC_USB_CLK>;
 
 			clock-names = "master",
 				"sleep",
 				"mock_utmi",
 				"cfg_ahb_clk",
 				"aux_clk",
-				"pipe_clk";
+				"pipe_clk",
+				"cnoc_usb_clk";
 
 			assigned-clocks = <&gcc GCC_USB0_MASTER_CLK>,
 					  <&gcc GCC_USB0_MOCK_UTMI_CLK>;

@@ -12,7 +12,6 @@
 #define GPLL2					2
 #define GPLL2_OUT_MAIN                          3
 #define GCC_SLEEP_CLK_SRC			4
-#define GCC_APSS_DBG_CLK                        5
 #define GCC_USB0_EUD_AT_CLK			6
 #define GCC_PCIE0_AXI_M_CLK_SRC			7
 #define GCC_PCIE0_AXI_M_CLK			8
@@ -152,10 +151,14 @@
 #define GCC_PCIE3_RCHNG_CLK_SRC			142
 #define GCC_PCIE3_RCHNG_CLK			143
 #define GCC_IM_SLEEP_CLK			144
+#define GCC_NSSNOC_MEMNOC_1_CLK			145
+#define GCC_NSSNOC_MEMNOC_BFDCD_CLK_SRC		146
+#define GCC_NSSNOC_MEMNOC_CLK			147
+#define GCC_NSSNOC_MEMNOC_DIV_CLK_SRC		148
 /* Add new clocks on top of q6 bring up clocks
  * and update MAX_GCC_CLOCKS macro
  */
-#define MAX_GCC_CLOCKS				144
+#define MAX_GCC_CLOCKS				148
 #if defined(CONFIG_QCOM_NON_SECURE_PIL) || defined(__QCOM_NON_SECURE_PIL__)
 #define GCC_Q6_TSCTR_1TO2_CLK			(MAX_GCC_CLOCKS + 1)
 #define GCC_Q6SS_TRIG_CLK			(MAX_GCC_CLOCKS + 2)

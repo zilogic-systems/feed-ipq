@@ -16,6 +16,7 @@
 #define NETSTANDBY_EXIT_TRIGGER_RULE_PROTOCOL_VALID 0x00000010	/**< Indicate if trigger rule uses L4 protocol */
 #define NETSTANDBY_EXIT_TRIGGER_RULE_IPV4 0x00000020		/**< Indicate if trigger rule used IP address is IPv4 */
 #define NETSTANDBY_EXIT_TRIGGER_RULE_IPV6 0x00000040		/**< Indicate if trigger rule used IP address is IPv6 */
+#define NETSTANDBY_EXIT_TRIGGER_RULE_WIFI_PROTOCOL_VALID 0x00000080	/**< Indicate if trigger rule uses Wi-Fi protocol bitmap */
 
 #define NETSTANDBY_ENTER_NSS_FLAG_VALID_PORT_NONE 0x00000001	/**< Indicate ALL MHT port to be shut down */
 #define NETSTANDBY_ENTER_NSS_FLAG_VALID_PORT_ALL 0x00000002	/**< Indicate ALL  MHT port be awake */

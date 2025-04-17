@@ -1,11 +1,10 @@
-From 24befe20c11ccdd3fdd46221e42c0733bd50360c Mon Sep 17 00:00:00 2001
+From 342034d1757363b0c5131f75e3e2c8c1de75413d Mon Sep 17 00:00:00 2001
 From: Manoharan Vijaya Raghavan <quic_mraghava@quicinc.com>
 Date: Thu, 5 Dec 2024 12:49:16 +0530
 Subject: [PATCH] LLC: Seperate partition for WiFi attaches are not needed
 
 Change-Id: I61a32a7a8eb0df7e798beb6d6cac3053388664c9
 Signed-off-by: Manoharan Vijaya Raghavan <quic_mraghava@quicinc.com>
-(cherry picked from commit 342034d1757363b0c5131f75e3e2c8c1de75413d)
 ---
  drivers/soc/qcom/llcc-qcom.c | 10 ++++------
  1 file changed, 4 insertions(+), 6 deletions(-)

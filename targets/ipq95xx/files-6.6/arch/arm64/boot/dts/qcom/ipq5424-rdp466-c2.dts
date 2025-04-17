@@ -152,7 +152,7 @@
 						reg = <0>;
 						label = "cpu";
 						ethernet = <&gmac2>;
-						dsa-tag-protocol = "qca_4b";
+						dsa-tag-protocol = "qca_8021q";
 					};
 				};
 			};
@@ -315,6 +315,11 @@
 					<0 313 4>;		/* MHT port Tx complete ring id #31 IRQ info */
 		};
 	};
+};
+
+&pwm {
+	pinctrl-0 = <&pwm_default_state>;
+	pinctrl-names = "default";
 };
 
 &pcm {
@@ -494,6 +499,12 @@
 			bias-pull-up;
 			output-low;
 		};
+	};
+
+	pwm_default_state: pwm-default-state {
+		pins = "gpio10";
+		function = "pwm0";
+		drive-strength = <8>;
 	};
 
 	qspi_default_state: qspi-default-state {

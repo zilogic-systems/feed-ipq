@@ -1,0 +1,110 @@
+From dc55897483bf0458dee4ff5b7bfd4e97e34a101a Mon Sep 17 00:00:00 2001
+From: Jouni Malinen <quic_jouni@quicinc.com>
+Date: Mon, 17 Feb 2025 11:45:12 +0530
+Subject: [PATCH] QSDK:PROTOCOL:HOSTAPD: Remove STA entries if association is
+ not completed in 60 seconds
+
+While the IEEE 802.11 standard allows STAs to authenticate with multiple
+APs and later associate with one such AP, it is not really good for an
+AP to maintain STA entries for not fully associated STA for significant
+amount of time. Time out such STA entries in hostapd to clean state and
+resources.
+
+Signed-off-by: Jouni Malinen <quic_jouni@quicinc.com>
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/hostapd.c  |  1 +
+ src/ap/sta_info.c | 30 ++++++++++++++++++++++++++++++
+ src/ap/sta_info.h |  2 ++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index 6b3b374..0f6079f 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -4677,6 +4677,7 @@ void hostapd_new_assoc_sta(struct hostapd_data *hapd, struct sta_info *sta,
+ #endif /* CONFIG_IEEE80211BE */
+ 
+ 	ap_sta_clear_disconnect_timeouts(hapd, sta);
++	ap_sta_clear_assoc_timeout(hapd, sta);
+ 	sta->post_csa_sa_query = 0;
+ 
+ #ifdef CONFIG_P2P
+diff --git a/src/ap/sta_info.c b/src/ap/sta_info.c
+index 38bcc76..ed7fe8b 100644
+--- a/src/ap/sta_info.c
++++ b/src/ap/sta_info.c
+@@ -405,6 +405,7 @@ void ap_free_sta(struct hostapd_data *hapd, struct sta_info *sta)
+ 	eloop_cancel_timeout(ap_handle_session_timer, hapd, sta);
+ 	eloop_cancel_timeout(ap_handle_session_warning_timer, hapd, sta);
+ 	ap_sta_clear_disconnect_timeouts(hapd, sta);
++	ap_sta_clear_assoc_timeout(hapd, sta);
+ 	sae_clear_retransmit_timer(hapd, sta);
+ 
+ 	ieee802_1x_free_station(hapd, sta);
+@@ -920,6 +921,25 @@ void ap_sta_session_warning_timeout(struct hostapd_data *hapd,
+ }
+ 
+ 
++static void ap_sta_assoc_timeout(void *eloop_ctx, void *timeout_ctx)
++{
++	struct hostapd_data *hapd = eloop_ctx;
++	struct sta_info *sta = timeout_ctx;
++
++	if (sta->flags & WLAN_STA_ASSOC)
++		return;
++
++	wpa_printf(MSG_DEBUG, "STA " MACSTR
++		   " did not complete association in time - remove it",
++		   MAC2STR(sta->addr));
++	if (sta->flags & WLAN_STA_AUTH)
++		ap_sta_deauthenticate(hapd, sta,
++				      WLAN_REASON_PREV_AUTH_NOT_VALID);
++	else
++		ap_free_sta(hapd, sta);
++}
++
++
+ struct sta_info * ap_sta_add(struct hostapd_data *hapd, const u8 *addr)
+ {
+ 	struct sta_info *sta;
+@@ -986,6 +1006,9 @@ struct sta_info * ap_sta_add(struct hostapd_data *hapd, const u8 *addr)
+ 				      &sta->probe_ie_taxonomy);
+ #endif /* CONFIG_TAXONOMY */
+ 
++	if (!(hapd->conf->mesh & MESH_ENABLED))
++		eloop_register_timeout(60, 0, ap_sta_assoc_timeout, hapd, sta);
++
+ 	return sta;
+ }
+ 
+@@ -1936,6 +1959,13 @@ void ap_sta_clear_disconnect_timeouts(struct hostapd_data *hapd,
+ }
+ 
+ 
++void ap_sta_clear_assoc_timeout(struct hostapd_data *hapd,
++				struct sta_info *sta)
++{
++	eloop_cancel_timeout(ap_sta_assoc_timeout, hapd, sta);
++}
++
++
+ int ap_sta_flags_txt(u32 flags, char *buf, size_t buflen)
+ {
+ 	int res;
+diff --git a/src/ap/sta_info.h b/src/ap/sta_info.h
+index b350f1f..29b3075 100644
+--- a/src/ap/sta_info.h
++++ b/src/ap/sta_info.h
+@@ -448,6 +448,8 @@ void ap_sta_deauth_cb(struct hostapd_data *hapd, struct sta_info *sta);
+ void ap_sta_disassoc_cb(struct hostapd_data *hapd, struct sta_info *sta);
+ void ap_sta_clear_disconnect_timeouts(struct hostapd_data *hapd,
+ 				      struct sta_info *sta);
++void ap_sta_clear_assoc_timeout(struct hostapd_data *hapd,
++				struct sta_info *sta);
+ 
+ int ap_sta_flags_txt(u32 flags, char *buf, size_t buflen);
+ void ap_sta_delayed_1x_auth_fail_disconnect(struct hostapd_data *hapd,
+-- 
+2.34.1
+

@@ -1,0 +1,68 @@
+From 364cae9078ec48d19efed59add1299e88ec90260 Mon Sep 17 00:00:00 2001
+From: Govindaraj Saminathan <quic_gsaminat@quicinc.com>
+Date: Wed, 29 Jan 2025 05:16:51 +0530
+Subject: [PATCH] UPSTREAM: HOTAPD: AP MLD: Skip over Extended MLD Capabilities
+ And Operations field
+
+Skip over the Extended MLD Capabilities And Operations field in the
+Common Info field of the Basic Multi-Link element so that processing of
+the information after the Common Info field can continue from the
+correct offset.
+
+Feature: MLO_BUG_FIX
+Patch-link: https://w1.fi/cgit/hostap/commit/?id=9e95f0d38e57b23b26acf1418cebace853e2cd4f
+
+Signed-off-by: Adil Saeed Musthafa <quic_adilm@quicinc.com>
+Signed-off-by: Govindaraj Saminathan <quic_gsaminat@quicinc.com>
+---
+ src/ap/ieee802_11_eht.c      | 10 ++++++++++
+ src/common/ieee802_11_defs.h |  5 +++--
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+--- a/src/ap/ieee802_11_eht.c
++++ b/src/ap/ieee802_11_eht.c
+@@ -1309,6 +1309,12 @@ u16 hostapd_process_ml_assoc_req(struct
+ 		goto out;
+ 	}
+ 
++	if (ml_control & BASIC_MULTI_LINK_CTRL_PRES_EXT_MLD_CAP) {
++		common_info_len += 2;
++	} else {
++		wpa_printf(MSG_DEBUG, "MLD: EXT ML capabilities not present");
++	}
++
+ 	wpa_printf(MSG_DEBUG, "MLD: expected_common_info_len=%zu",
+ 			   common_info_len);
+ 
+@@ -1339,6 +1345,10 @@ u16 hostapd_process_ml_assoc_req(struct
+ 	info->common_info.mld_capa = WPA_GET_LE16(pos);
+ 	pos += 2;
+ 
++	if (ml_control & BASIC_MULTI_LINK_CTRL_PRES_EXT_MLD_CAP) {
++		pos += 2;
++	}
++
+ 	wpa_printf(MSG_DEBUG, "MLD: addr=" MACSTR ", eml=0x%x, mld=0x%x",
+ 		   MAC2STR(info->common_info.mld_addr),
+ 		   info->common_info.eml_capa, info->common_info.mld_capa);
+--- a/src/common/ieee802_11_defs.h
++++ b/src/common/ieee802_11_defs.h
+@@ -2878,15 +2878,16 @@ struct ieee80211_eht_capabilities {
+ #define MULTI_LINK_SUB_ELEM_ID_VENDOR			221
+ #define MULTI_LINK_SUB_ELEM_ID_FRAGMENT			254
+ 
+-/* IEEE P802.11be/D2.2, 9.4.2.312.2 - Basic Multi-Link element */
++/* IEEE P802.11be/D7.0, 9.4.2.322.2 - Basic Multi-Link element */
+ 
+-/* Figure 9-1002g: Presence Bitmap subfield of the Basic Multi-Link element */
++/* Figure 9-1074o: Presence Bitmap subfield of the Basic Multi-Link element */
+ #define BASIC_MULTI_LINK_CTRL_PRES_LINK_ID		0x0010
+ #define BASIC_MULTI_LINK_CTRL_PRES_BSS_PARAM_CH_COUNT	0x0020
+ #define BASIC_MULTI_LINK_CTRL_PRES_MSD_INFO		0x0040
+ #define BASIC_MULTI_LINK_CTRL_PRES_EML_CAPA		0x0080
+ #define BASIC_MULTI_LINK_CTRL_PRES_MLD_CAPA		0x0100
+ #define BASIC_MULTI_LINK_CTRL_PRES_AP_MLD_ID		0x0200
++#define BASIC_MULTI_LINK_CTRL_PRES_EXT_MLD_CAP		0x0400
+ 
+ /*
+  * STA Control field definitions of Per-STA Profile subelement in Basic

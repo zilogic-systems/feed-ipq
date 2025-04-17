@@ -1,0 +1,39 @@
+From 1c2f873544f91df79a281bc27c414e8efb16417c Mon Sep 17 00:00:00 2001
+From: Sai Pratyusha Magam <quic_smagam@quicinc.com>
+Date: Tue, 3 Dec 2024 11:55:56 +0530
+Subject: [PATCH] QSDK:PROTOCOL:HOSTAPD: Handle (Re)Association Response
+frame if rsn_override_omit_rsnxe is set
+
+When rsn_override_omit_rsnxe is set, exclude the RSNXE from the IE
+template that is configured to the drivers that generate (Re)Association
+Response frame internally. This was previously done only for the case of
+hostapd generated (Re)Association Response frames.
+
+Signed-off-by: Sai Pratyusha Magam <quic_smagam@quicinc.com>
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/ap_drv_ops.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/ap/ap_drv_ops.c b/src/ap/ap_drv_ops.c
+index 866fa10..b55cf23 100644
+--- a/src/ap/ap_drv_ops.c
++++ b/src/ap/ap_drv_ops.c
+@@ -130,9 +130,11 @@ int hostapd_build_ap_extra_ies(struct hostapd_data *hapd,
+ 	}
+ #endif
+ 
+-	pos = hostapd_eid_rsnxe(hapd, buf, sizeof(buf));
+-	if (add_buf_data(&assocresp, buf, pos - buf) < 0)
+-		goto fail;
++	if (!hapd->conf->rsn_override_omit_rsnxe) {
++		pos = hostapd_eid_rsnxe(hapd, buf, sizeof(buf));
++		if (add_buf_data(&assocresp, buf, pos - buf) < 0)
++			goto fail;
++	}
+ 
+ 	if (add_buf(&beacon, hapd->wps_beacon_ie) < 0 ||
+ 	    add_buf(&proberesp, hapd->wps_probe_resp_ie) < 0)
+-- 
+2.34.1
+

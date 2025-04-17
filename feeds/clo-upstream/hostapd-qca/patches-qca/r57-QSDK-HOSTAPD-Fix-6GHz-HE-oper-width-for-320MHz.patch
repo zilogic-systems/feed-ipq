@@ -1,0 +1,50 @@
+From f92866bec00e9f15c6743ea8eaaca32a51235e0f Mon Sep 17 00:00:00 2001
+From: Mohan Kumar G <quic_mkumarg@quicinc.com>
+Date: Fri, 17 Jan 2025 16:03:23 +0530
+Subject: [PATCH] QSDK:HOSTAPD: Fix 6GHz HE oper width for 320MHz
+
+Currently, 6GHz HE operation chan width and center frequencies
+are updating incorrectly when configured in 320MHz.
+
+This is because, while calculating legacy bandwidth, we use
+HE bandwidth and center frequencies. So only puncturing bitmap
+of first 160MHz is considered during calculation. This causes
+wrong computation of legacy bandwidth and center frequencies.
+
+Fix this issue by using EHT bandwidth and center frequency to
+calculate legacy bandwidth when puncturing is enabled.
+
+ToDo: Instead of updating legacy bandwidth when puncturing is
+	enabled, update the HE and VHT bw and ccfs in iconf
+	immediately after puncturing is enabled, so no need to
+	check everytime for punct bitmap.
+
+Fixes: I5dc087c39fd ("UPSTREAM:HOSTAPD: Correct HE center frequency for EHT 320 MHz with puncturing")
+
+Feature: 320 Mhz
+
+Signed-off-by: Mohan Kumar G <quic_mkumarg@quicinc.com>
+---
+ src/ap/ieee802_11_he.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/ap/ieee802_11_he.c b/src/ap/ieee802_11_he.c
+index 4a23c41..2457f88 100644
+--- a/src/ap/ieee802_11_he.c
++++ b/src/ap/ieee802_11_he.c
+@@ -236,6 +236,12 @@ u8 * hostapd_eid_he_operation(struct hostapd_data *hapd, u8 *eid)
+ 		u16 punct_bitmap = hostapd_get_punct_bitmap(hapd);
+ 
+ 		if (punct_bitmap) {
++			/* Incase of 320MHz, punct_bitmap for first 160MHz bandwidth
++			 * only is considered if HE oper_chwidth and seg0 are given.
++			 * To avoid this, give EHT oper_chwidth and seg0 for legacy
++			 * bw calculation */
++			oper_chwidth = hostapd_get_oper_chwidth(hapd->iconf);
++			seg0 = hostapd_get_oper_centr_freq_seg0_idx(hapd->iconf);
+ 			punct_update_legacy_bw(punct_bitmap,
+ 					       hapd->iconf->channel,
+ 					       &oper_chwidth, &seg0, &seg1);
+-- 
+2.34.1
+

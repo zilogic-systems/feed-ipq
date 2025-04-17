@@ -1,0 +1,38 @@
+From 0e59302370a9d7e2b8d762e63c24584957c2c543 Mon Sep 17 00:00:00 2001
+From: Stone Zhang <quic_stonez@quicinc.com>
+Date: Thu, 13 Feb 2025 09:21:10 +0530
+Subject: [PATCH] UPSTREAM:PROTOCOL: hostapd: Fix clearing up settings for
+ color switch
+
+Settings for color switch (struct cca_settings settings)
+is used without zero clearing, which causes the member
+settings->ubpr->unsol_bcast_probe_resp_intervalettings
+to be a random value. It is againsts the NLA policy of
+NL80211_UNSOL_BCAST_PROBE_RESP_ATTR_INT and causes
+BSS color switch failure.
+
+Feature: HE BSS Color
+
+Patch-link: https://w1.fi/cgit/hostap/commit/?id=161327f91d956771996c96ea1b6e4e1cb8dc074c
+
+Signed-off-by: Stone Zhang <quic_stonez@quicinc.com>
+Signed-off-by: Mohan Kumar G <quic_mkumarg@quicinc.com>
+---
+ src/ap/hostapd.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index 05a3f5a..56df2e5 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -5617,6 +5617,7 @@ static void hostapd_switch_color_timeout_handler(void *eloop_data,
+ 		struct cca_settings settings;
+ 		int ret;
+ 
++		os_memset(&settings, 0, sizeof(settings));
+ 		hostapd_cleanup_cca_params(bss);
+ 		bss->cca_color = r;
+ 		bss->cca_count = 10;
+-- 
+2.34.1
+

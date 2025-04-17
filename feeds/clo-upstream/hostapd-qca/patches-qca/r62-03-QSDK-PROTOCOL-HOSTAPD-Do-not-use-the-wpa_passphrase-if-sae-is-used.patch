@@ -1,0 +1,41 @@
+From fb95f927767b4a480fa36850c0c1fd5942ce0db2 Mon Sep 17 00:00:00 2001
+From: Jouni Malinen <quic_jouni@quicinc.com>
+Date: Mon, 17 Feb 2025 11:46:54 +0530
+Subject: [PATCH] QSDK:PROTOCOL:HOSTAPD: Do not use the wpa_passphrase if SAE
+ password identifier was used
+
+Sharing of the WPA-PSK passphrase as the SAE password is only for the
+case where no SAE password identifiers are used. Do not consider that on
+an AP if a STA includes SAE password identifier in an SAE commit
+message. This avoids confusing cases where SAE would be allowed to
+continue with the AP and the STA using different password identifier
+which is going to fail in the end.
+
+Signed-off-by: Jouni Malinen <quic_jouni@quicinc.com>
+Signed-off-by: Arunpandi Kannan <quic_arunpand@quicinc.com>
+---
+ src/ap/ieee802_11.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/ap/ieee802_11.c b/src/ap/ieee802_11.c
+index 0008fde..09548e2 100644
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -612,12 +612,12 @@ const char * sae_get_password(struct hostapd_data *hapd,
+ 			pk = pw->pk;
+ 		break;
+ 	}
+-	if (!password) {
++	if (!password && !rx_id) {
+ 		password = hapd->conf->ssid.wpa_passphrase;
+ 		pt = hapd->conf->ssid.pt;
+ 	}
+ 
+-	if (!password && sta) {
++	if (!password && sta && !rx_id) {
+ 		for (psk = sta->psk; psk; psk = psk->next) {
+ 			if (psk->is_passphrase) {
+ 				password = psk->passphrase;
+-- 
+2.34.1
+

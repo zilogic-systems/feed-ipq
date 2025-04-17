@@ -33,8 +33,18 @@ function iface_start(wdev)
 	phydev.wdev_add(ifname, wdev_config);
 	wdev_set_up(ifname, true);
 	let htmode = wdev.htmode || "NOHT";
-	if (wdev.freq)
-		system(`iw dev ${ifname} set freq ${wdev.freq} ${htmode}`);
+	if (wdev.is_multi_radio != null) {
+		if (wdev.mode == "monitor") {
+			if (wdev.center_freq) {
+				system(`iw dev ${ifname} add freq ${wdev.freq} ${wdev.bw} ${wdev.center_freq}`);
+			} else {
+				system(`iw dev ${ifname} add freq ${wdev.freq} ${wdev.bw}`);
+			}
+		}
+	} else {
+		if (wdev.freq)
+			system(`iw dev ${ifname} set freq ${wdev.freq} ${wdev.htmode}`);
+	}
 	if (wdev.mode == "adhoc") {
 		let cmd = ["iw", "dev", ifname, "ibss", "join", wdev.ssid, wdev.freq, htmode, "fixed-freq" ];
 		if (wdev.bssid)
@@ -45,7 +55,7 @@ function iface_start(wdev)
 		system(cmd);
 	} else if (wdev.mode == "mesh") {
 		let cmd = [ "iw", "dev", ifname, "mesh", "join", wdev.ssid, "freq", wdev.freq, htmode ];
-		for (let key in [ "mcast-rate", "beacon-interval" ])
+		for (let key in [ "mcast-rate", "beacon-interval", "ru-puncturing-bitmap" ])
 			if (wdev[key])
 				push(cmd, key, wdev[key]);
 		system(cmd);

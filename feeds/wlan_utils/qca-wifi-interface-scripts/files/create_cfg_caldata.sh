@@ -189,3 +189,55 @@ do_ftm_conf_override()
                 }
         }' $ftm_conf_path/ftm.conf
 }
+
+#create_cfg_caldata_mr is the new api added for multi radio support
+#To call this API, ftm.conf entry should have DIR argument with the existing arguments 
+#while calling it should have 2 aruguments mtdblock and integrated radio
+#Ex : create_cfg_caldata_mr "${mtdblock}" "Integrated radio"
+
+create_cfg_caldata_mr()
+{
+    local brd_name=$(echo $(board_name) | awk -F '-' '{print $2}')
+    local brd=$brd_name$(echo $(board_name) | awk -F "$brd_name" '{print$2}')
+    local ftm_conf_path=$(get_config_file_path "caldata")
+    local grep_val=$(grep $brd $ftm_conf_path/ftm.conf)
+    local num_rows="$(grep -w -c $brd $ftm_conf_path/ftm.conf)"
+    local apdk="/tmp"
+
+    # Loop to process the output
+    for i in `seq 1 $num_rows`
+    do
+
+        #Parse the FTM.conf file and Get the Values
+        ROW_VAL=$(echo $grep_val | awk -v i=$i '{print $i}')
+        BOARD_ID=$(echo $ROW_VAL | awk -F ',' '{print $2}')
+        SLOT_ID=$(echo $ROW_VAL | awk -F ',' '{print $3}')
+        OFFSET=$(echo $ROW_VAL | awk -F ',' '{print $4}')
+        SIZE=$(echo $ROW_VAL | awk -F ',' '{print $5}')
+        IS_PCI=$(echo $ROW_VAL | awk -F ',' '{print $6}')
+        DIR_LIB=$(echo $ROW_VAL | awk -F ',' '{print $7}')
+
+        echo -e $brd "\t" $BOARD_ID "\t"  $SLOT_ID "\t" $OFFSET "\t" $SIZE "\t" $IS_PCI "\t" $DIR_LIB
+
+        #Get the BDF size
+        BDF_SIZE=$(stat -Lc%s /lib/firmware/"$DIR_LIB"/bdwlan.b"$BOARD_ID")
+
+        if [ -z $BDF_SIZE ]
+        then
+            BDF_SIZE=$SIZE
+        fi
+
+        echo "BDF_SIZE -" $BDF_SIZE
+
+        if [ $IS_PCI == "255" ]
+        then
+            cmd=$(dd if=$1 of="$apdk"/"$DIR_LIB"/caldata.bin bs=1 count="$BDF_SIZE" skip="$OFFSET")
+            cp -f "$apdk"/"$DIR_LIB"/caldata.bin /lib/firmware/"$DIR_LIB"/
+        else
+            cmd=$(dd if=$1 of="$apdk"/"$DIR_LIB"/caldata_"$SLOT_ID".b"$BOARD_ID" bs=1 count="$BDF_SIZE" skip="$OFFSET")
+            cp -f "$apdk"/"$DIR_LIB"/caldata_"$SLOT_ID".b"$BOARD_ID" /lib/firmware/"$DIR_LIB"/
+        fi
+
+        [ -f $ftm_conf_path/$2/caldata.bin ] || touch $ftm_conf_path/$2/caldata.bin
+    done
+}

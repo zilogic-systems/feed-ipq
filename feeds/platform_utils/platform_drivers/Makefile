@@ -173,20 +173,16 @@ $(eval $(call KernelPackage,crypto-qcrypto))
 define KernelPackage/crypto-qce
   TITLE:=QTI Crypto Engine (QCE)
   KCONFIG:= \
-	CONFIG_CRYPTO_DEV_QCE \
-	CONFIG_CRYPTO_DEV_QCE_ENABLE_ALL=y@ge5.4 \
+	CONFIG_CRYPTO_DEV_QCE=y \
+	CONFIG_CRYPTO_DEV_QCE_ENABLE_ALL=y \
 	CONFIG_CRYPTO_DEV_QCE_SKCIPHER=y \
 	CONFIG_CRYPTO_DEV_QCE_AEAD=y \
-	CONFIG_CRYPTO_DEV_QCE_ENABLE_SKCIPHER=n@ge5.4 \
-	CONFIG_CRYPTO_DEV_QCE_ENABLE_SHA=n@ge5.4 \
-	CONFIG_CRYPTO_DEV_QCE_SW_MAX_LEN=0@ge5.4 \
+	CONFIG_CRYPTO_DEV_QCE_ENABLE_SKCIPHER=n \
+	CONFIG_CRYPTO_DEV_QCE_ENABLE_SHA=n \
+	CONFIG_CRYPTO_DEV_QCE_SW_MAX_LEN=0 \
 	CONFIG_CRYPTO_DEV_QCE_ENABLE_AEAD=n \
 	CONFIG_CRYPTO_DEV_QCE_SHA=y
-  FILES:= \
-	$(LINUX_DIR)/drivers/crypto/qce/qcrypto.ko
-  AUTOLOAD:=$(call AutoLoad,09,qcrypto)
-  DEPENDS:=@TARGET_ipq807x||TARGET_ipq_ipq807x||TARGET_ipq_ipq807x_64||TARGET_ipq60xx||TARGET_ipq_ipq60xx||TARGET_ipq_ipq60xx_64||TARGET_ipq_ipq50xx||TARGET_ipq_ipq50xx_64||TARGET_ipq95xx||TARGET_ipq50xx||TARGET_ipq54xx +kmod-crypto-manager +LINUX_4_4:kmod-crypto-aes-internal +kmod-crypto-hash +LINUX_4_4:kmod-crypto-des +kmod-crypto-authenc
-  $(call AddPlatformDepends/crypto)
+  DEPENDS:=@TARGET_ipq95xx +kmod-crypto-manager +kmod-crypto-hash +kmod-crypto-authenc
 endef
 
 $(eval $(call KernelPackage,crypto-qce))

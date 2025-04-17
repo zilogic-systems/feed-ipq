@@ -67,12 +67,11 @@ get_partname() {
 	fi
 
 	local boot_set=$(grep "Boot-set" /tmp/bootconfig_members.txt | awk -F: '{print $2}')
-	local image_status_A=$(grep "Image-set-status-A" /tmp/bootconfig_members.txt | awk -F: '{print $2}')
-	local image_status_B=$(grep "Image-set-status-B" /tmp/bootconfig_members.txt | awk -F: '{print $2}')
+	local image_status=$(grep "Image-set-status" /tmp/bootconfig_members.txt | awk -F: '{print $2}')
 
-	if [ "$boot_set" -eq 0 ] && [ "$image_status_A" -ne 0 ]; then
+	if [ "$boot_set" -eq 0 ] && [ "$image_status" -eq 1 ]; then
 		part_name="1"
-	elif [ "$boot_set" -eq 1 ] && [ "$image_status_B" -eq 0 ]; then
+	elif [ "$boot_set" -eq 1 ] && [ "$image_status" -ne 2 ]; then
 		part_name="1"
 	fi
 
@@ -239,41 +238,41 @@ mount_wifi_fw (){
 	if [ -d /lib/firmware/$arch/WIFI_FW/qcn9000 ]; then
 		cd  $fwfolder && mkdir -p qcn9000 && mkdir -p /vendor/firmware/qcn9000
 		cd qcn9000 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9000/*.* .
-		cd /vendor/firmware/qcn9000 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9000/Data.msc .
+		cd /vendor/firmware/qcn9000 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9000/Data.msc .
 		mkdir -p /lib/firmware/qcn9000 && cd /lib/firmware/qcn9000 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9000/qdss* .
 	fi
 
 	if [ -d /lib/firmware/$arch/WIFI_FW/qcn9224 ]; then
 		cd  $fwfolder && mkdir -p qcn9224 && mkdir -p /vendor/firmware/qcn9224
 		cd qcn9224 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9224/*.* .
-		cd /vendor/firmware/qcn9224 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9224/Data.msc .
-		ln -s /lib/firmware/$arch/WIFI_FW/qcn9224/Data_dualmac.msc .
+		cd /vendor/firmware/qcn9224 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9224/Data.msc .
+		create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9224/Data_dualmac.msc .
 		mkdir -p /lib/firmware/qcn9224 && cd /lib/firmware/qcn9224 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9224/qdss* .
 	fi
 
 	if [ -d /lib/firmware/$arch/WIFI_FW/qcn9100 ]; then
 		cd $fwfolder && mkdir -p qcn9100 && mkdir -p /vendor/firmware/qcn9100
 		cd qcn9100 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9100/*.* . && ln -s /lib/firmware/$arch/WIFI_FW/q6_fw.* .
-		cd /vendor/firmware/qcn9100 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9100/Data.msc .
+		cd /vendor/firmware/qcn9100 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9100/Data.msc .
 		mkdir -p /lib/firmware/qcn9100 && cd /lib/firmware/qcn9100 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9100/qdss* .
 	fi
 
 	if [ -d /lib/firmware/$arch/WIFI_FW/qcn6122 ]; then
 		cd $fwfolder && mkdir -p qcn6122 && mkdir -p /vendor/firmware/qcn6122
 		cd qcn6122 && ln -s /lib/firmware/$arch/WIFI_FW/qcn6122/*.* . && ln -s /lib/firmware/$arch/WIFI_FW/q6_fw.* .
-		cd /vendor/firmware/qcn6122 && ln -s /lib/firmware/$arch/WIFI_FW/qcn6122/Data.msc .
+		cd /vendor/firmware/qcn6122 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn6122/Data.msc .
 		mkdir -p /lib/firmware/qcn6122 && cd /lib/firmware/qcn6122 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn6122/qdss* .
 	elif [ -d /lib/firmware/$arch/WIFI_FW/qcn9100 ]; then
 		cd $fwfolder && mkdir -p qcn6122 && mkdir -p /vendor/firmware/qcn6122
 		cd qcn6122 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9100/*.* . && ln -s /lib/firmware/$arch/WIFI_FW/q6_fw.* .
-		cd /vendor/firmware/qcn6122 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9100/Data.msc .
+		cd /vendor/firmware/qcn6122 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9100/Data.msc .
 		mkdir -p /lib/firmware/qcn6122 && cd /lib/firmware/qcn6122 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9100/qdss* .
 	fi
 
 	if [ -d /lib/firmware/$arch/WIFI_FW/qcn9160 ]; then
 		cd $fwfolder && mkdir -p qcn9160 && mkdir -p /vendor/firmware/qcn9160
 		cd qcn9160 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9160/*.* . && ln -s /lib/firmware/$arch/WIFI_FW/q6_fw.* .
-		cd /vendor/firmware/qcn9160 && ln -s /lib/firmware/$arch/WIFI_FW/qcn9160/Data.msc .
+		cd /vendor/firmware/qcn9160 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9160/Data.msc .
 		mkdir -p /lib/firmware/qcn9160 && cd /lib/firmware/qcn9160 && create_soft_link /lib/firmware/$arch/WIFI_FW/qcn9160/qdss* .
 	fi
 
@@ -349,9 +348,11 @@ mount_wifi_fw (){
 		esac
 
 		case $board_name in
-                        rdp466 |\
+                        rdp466* |\
 			rdp487 |\
-			rdp464)
+			rdp464* |\
+			rdp485* |\
+			rdp496)
                                 #caldata.bin --> ahb 2GHz
                                 if [ -e /lib/firmware/IPQ5424/caldata.bin ]; then
                                         ln -sf /lib/firmware/IPQ5424/caldata.bin cal-ahb-c000000.wifi.bin
@@ -521,14 +522,14 @@ mount_wifi_fw (){
 			esac
 
 			case $board_name in
-                                rdp466)
+                                rdp466* | rdp485* | rdp496)
                                         caldata_symlink_creation "$board_name" "2"
                                         caldata_symlink_creation "$board_name" "3"
 				;;
                                 rdp487)
                                         caldata_symlink_creation "$board_name" "2"
 				;;
-				rdp464)
+				rdp464*)
 					caldata_symlink_creation "$board_name" "2"
 					caldata_symlink_creation "$board_name" "3"
 					caldata_symlink_creation "$board_name" "4"
@@ -772,25 +773,25 @@ stop() {
 	local platform=$(grep -o "IPQ.*" /proc/device-tree/model | awk -F[' '/] '{print $1}')
 	local board=$(grep -o "IPQ.*" /proc/device-tree/model | awk -F/ '{print $2}')
 
-	if [ "$platform" == "IPQ807x" ]; then
+	if [[ "$platform" == *IPQ807x* ]]; then
 		stop_wifi_fw "IPQ8074"
-	elif [ "$platform" == "IPQ8074" ]; then
+	elif [[ "$platform" == *IPQ8074* ]]; then
 		stop_wifi_fw "IPQ8074"
-	elif [ "$platform" == "IPQ9574" ]; then
+	elif [[ "$platform" == *IPQ9574* ]]; then
 		stop_wifi_fw "IPQ9574"
-	elif [ "$platform" == "IPQ6018" ]; then
+	elif [[ "$platform" == *IPQ6018* ]]; then
 		stop_wifi_fw "IPQ6018"
 		case "$board" in
 			AP-CP01*)
 				stop_adsp_fw "IPQ6018"
 				;;
 		esac
-	elif [ "$platform" == "IPQ5018" ]; then
+	elif [[ "$platform" == *IPQ5018* ]]; then
 		stop_wifi_fw "IPQ5018"
 		stop_bt_fw "IPQ5018"
-	elif [ "$platform" == "IPQ5332" ]; then
+	elif [[ "$platform" == *IPQ5332* ]]; then
 		stop_wifi_fw "IPQ5332"
-	elif [ "$platform" == "IPQ5424" ]; then
+	elif [[ "$platform" == *IPQ5424* ]]; then
 		stop_wifi_fw "IPQ5424"
 	else
 		local emu=$(grep -o "EMULATION" /proc/device-tree/model)

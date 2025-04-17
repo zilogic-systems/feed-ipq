@@ -98,6 +98,18 @@
 			"app_name": "Data Transfer",
 			"priority": 60,
 			"tid": 0
+		},
+		{
+			"disable": 0,
+			"svc_id": 101,
+			"app_name": "UDP_Prioritization_BE",
+			"tid": 0
+		},
+		{
+			"disable": 0,
+			"svc_id": 102,
+			"app_name": "UDP_Prioritization_BK",
+			"tid": 3
 		}
 	]
 }

@@ -24,7 +24,7 @@ is_ftm_conf_supported() {
         local ftm_conf_path=$(get_config_file_path "caldata")
 
 	case "$board" in
-	ap-mi*|ap-al02-c4*|ap-al02-c6*|ap-al06*|ap-al05*|ap-al02-c7*|ap-al02-c8*|ap-al02-c9*|ap-al02-c10*|ap-al02-c11*|ap-al02-c12*|ap-al02-c14*|ap-al02-c15*|ap-al02-c16*|ap-al02-c20*|ap-al03-c1*|ap-al03-c2*|db-mi02.1*|ap-sdxpinn-qcn9224*|rdp466*|rdp485*|rdp487*|tb-mi03.1*|tb-mi05.1*|rdp496*)
+	ap-mi*|ap-al02-c4*|ap-al02-c6*|ap-al06*|ap-al05*|ap-al02-c7*|ap-al02-c8*|ap-al02-c9*|ap-al02-c10*|ap-al02-c11*|ap-al02-c12*|ap-al02-c14*|ap-al02-c15*|ap-al02-c16*|ap-al02-c20*|ap-al03-c1*|ap-al03-c2*|db-mi02.1*|ap-sdxpinn-qcn9224*|rdp466*|rdp485*|rdp487*|tb-mi03.1*|tb-mi05.1*|rdp496*|ap-al02-c13*)
 		ln -s $ftm_conf_path/ftm.conf /tmp/ftm.conf
 		;;
 	*)
@@ -319,7 +319,7 @@ do_load_ipq4019_board_bin()
                     mkdir -p ${apdk}/qcn9000
                     mkdir -p ${apdk}/qcn9224
 
-                    create_cfg_caldata "${mtdblock}" "IPQ9574" "qcn9000" "qcn9224"
+                    create_cfg_caldata_mr "${mtdblock}" "IPQ9574"
             ;;
             ap-al02-c4*|ap-al02-c6*|ap-al06*|ap-al05*|ap-al02-c7*|ap-al02-c8*|ap-al02-c9*|ap-al02-c10*|ap-al02-c11*|ap-al02-c12*|ap-al02-c14*|ap-al02-c15*|ap-al02-c16*|ap-al02-c20*|ap-al03-c1*|ap-al03-c2*)
                     [ -f /lib/firmware/IPQ9574/caldata.bin ] && return
@@ -366,7 +366,7 @@ do_load_ipq4019_board_bin()
                     mkdir -p ${apdk}/qcn6432
                     mkdir -p ${apdk}/qcn9224
 
-                    create_cfg_caldata "${mtdblock}" "IPQ5332" "qcn6432" "qcn9224"
+                    create_cfg_caldata_mr "${mtdblock}" "IPQ5332"
             ;;
             ap-mi01.13*|ap-mi01.14*)
                     [ -f /lib/firmware/IPQ5332/caldata.bin ] && return
@@ -375,7 +375,7 @@ do_load_ipq4019_board_bin()
                     mkdir -p ${apdk}/qcn9224
                     do_ftm_conf_override
 
-                    create_cfg_caldata "${mtdblock}" "IPQ5332" "qcn6432" "qcn9224"
+                    create_cfg_caldata_mr "${mtdblock}" "IPQ5332"
             ;;
             ap-mi01.1*|ap-mi01.2*|ap-mi01.4*|ap-mi01.6*|ap-mi01.9*|ap-mi02.1*)
                     [ -f /lib/firmware/IPQ5332/caldata.bin ] && return

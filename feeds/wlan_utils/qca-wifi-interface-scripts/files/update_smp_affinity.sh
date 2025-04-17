@@ -55,6 +55,16 @@ enable_smp_affinity_wifi() {
 	irq_affinity_num=`grep -E -m1 'host2tx-monitor-ring1' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
 	[ -n "$irq_affinity_num" ] && echo 1 > /proc/irq/$irq_affinity_num/smp_affinity
 
+	# Map RX error interrupts to CPU1
+	case "$board_name" in
+	ipq5424*)
+		if [ -f /sys/firmware/devicetree/base/MP_256 ] || [ -f /sys/firmware/devicetree/base/MP_512 ]; then
+			irq_affinity_num=`grep -E -m1 'wbm2host-rx-release' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$irq_affinity_num" ] && echo 2 > /proc/irq/$irq_affinity_num/smp_affinity
+		fi
+		;;
+	*)
+	esac
 # Enable smp affinity for PCIE attach
 
 	#pci 0
@@ -169,7 +179,7 @@ enable_smp_affinity_wifi() {
 	irq_affinity_num=`grep -E -m1 'pci3_wlan_grp_dp_9' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
 	[ -n "$irq_affinity_num" ] && echo 4 > /proc/irq/$irq_affinity_num/smp_affinity
 
-	# Map RX error interrupts to CPU2
+	# Map RX error interrupts
 	case "$board" in
 	ap-al02-c4 | ap-al02-c9 | ap-al02-c16 | ap-al05 | ap-al06)
 		#smp affinity for Rx release ring
@@ -179,6 +189,17 @@ enable_smp_affinity_wifi() {
 		[ -n "$irq_affinity_num" ] && echo 4 > /proc/irq/$irq_affinity_num/smp_affinity
 		irq_affinity_num=`grep -E -m1 'pci3_wlan_grp_dp_11' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
 		[ -n "$irq_affinity_num" ] && echo 4 > /proc/irq/$irq_affinity_num/smp_affinity
+		;;
+	ipq5424*)
+		if [ -f /sys/firmware/devicetree/base/MP_256 ] || [ -f /sys/firmware/devicetree/base/MP_512 ]; then
+		#smp affinity for Rx release ring
+		irq_affinity_num=`grep -E -m1 'pci1_wlan_grp_dp_11' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+		[ -n "$irq_affinity_num" ] && echo 2 > /proc/irq/$irq_affinity_num/smp_affinity
+		irq_affinity_num=`grep -E -m1 'pci2_wlan_grp_dp_11' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+		[ -n "$irq_affinity_num" ] && echo 2 > /proc/irq/$irq_affinity_num/smp_affinity
+		irq_affinity_num=`grep -E -m1 'pci3_wlan_grp_dp_11' /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+		[ -n "$irq_affinity_num" ] && echo 2 > /proc/irq/$irq_affinity_num/smp_affinity
+		fi
 		;;
 	*)
 	esac

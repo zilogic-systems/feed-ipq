@@ -6,9 +6,9 @@ PKG_RELEASE:=1
 
 PKG_SOURCE_URL:=https://git.codelinaro.org/clo/qsdk/wifi/qca-telemetry-agent-oss
 PKG_SOURCE_PROTO:=git
-PKG_BRANCH:=win_wlan_host.1.0.r24
+PKG_BRANCH:=win_wlan_host.1.0.r26
 PKG_MIRROR_HASH:=skip
-PKG_VERSION:=dd2bf482e4b0ed9040d13ac6bcd890ea869d7c78
+PKG_VERSION:=225f1680408d56b2c986846236281ab4c4a7e9da
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
@@ -29,7 +29,7 @@ endef
 MAKE_OPTS:= -C "$(PKG_BUILD_DIR)" \
 	CROSS_COMPILE="$(KERNEL_CROSS)" \
 	ARCH="$(LINUX_KARCH)" \
-	EXTRA_CFLAGS="-Wall -Wno-unused-variable" \
+	EXTRA_CFLAGS="-Wall -Werror -Wno-unused-variable" \
 	KERNEL_PATH="${LINUX_DIR}" \
 	BUILD_PROFILE="Open" \
 	PWD="$(PKG_BUILD_DIR)"

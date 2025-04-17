@@ -23,6 +23,10 @@ shift
 SSID=$@
 PASS=$@
 
+encryption=
+sae_require_mfp=
+ieee80211w=
+dpp_akm=
 i=0
 get_section() {
 	local config=$1
@@ -63,12 +67,31 @@ get_config_val() {
 	if [ "$key" == 'psk' ]; then
 		config_val=$(awk "BEGIN{FS=\"=\"} /[[:space:]]${key}=/ {print \$0}" "$conf" |grep "${key}=" |tail -n 1 | cut -f 2 -d= | sed -e 's/^"\(.*\)"/\1/')
 	fi
+	if [ "$key" == 'sae_pwe' ]; then
+		config_val=$(wpa_cli -i"$ifname" get "$1")
+	fi
 	if [ "$config_val" == "FAIL" ]; then
 		config_val=''
 	fi
 }
 
+is_mld() {
+        mld_group=$1
+        mld_iface=$(uci get wireless."$1".ifname)
+}
+
+apply_mld_config() {
+        local config=$1
+        local mld=
+
+        config_get mld "$config" mld
+        if [[ "$mld" = "$mld_group" ]]; then
+		update_wireless $config
+        fi
+}
+
 update_wireless() {
+	sect=$1
 	get_config_val 'ssid'
 	ssid=${config_val}
 
@@ -90,16 +113,25 @@ update_wireless() {
 	get_config_val 'dpp_netaccesskey'
 	dpp_netaccesskey=${config_val}
 
+	get_config_val 'sae_pwe'
+	sae_pwe=${config_val}
+
 	. /sbin/wifi config
 
-	sect=
-	config_foreach get_section wifi-iface "$ifname" sect
 	uci set wireless.${sect}.ssid=$ssid
+	[ -n "$mld_group" ] && uci set wireless.$mld_group.ssid=$ssid
 	uci set wireless.${sect}.dpp_connector=$dpp_connector
 	uci set wireless.${sect}.key=$psk
+	[ -n "$mld_group" ] && uci set wireless.$mld_group.key=$key
+	uci set wireless.${sect}.sae_pwe=$sae_pwe
 	uci set wireless.${sect}.dpp_csign=$dpp_csign
 	uci set wireless.${sect}.dpp_pp_key=$dpp_pp_key
 	uci set wireless.${sect}.dpp_netaccesskey=$dpp_netaccesskey
+	[ -n "$encryption" ] && uci set wireless.${sect}.encryption=$encryption
+	[ -n "$mld_group" ] && uci set wireless.$mld_group.encryption=$encryption
+	[ -n "$sae_require_mfp" ] && uci set wireless.${sect}.sae_require_mfp=$sae_require_mfp
+	[ -n "$dpp_akm" ] && uci set wireless.${sect}.dpp_akm=$dpp_akm
+	[ -n "$ieee80211w" ] && uci set wireless.${sect}.ieee80211w=$ieee80211w
 	uci commit wireless
 }
 
@@ -113,7 +145,7 @@ case "$CMD" in
 		;;
 	DPP-CONFOBJ-AKM)
 		encryption=
-		dpp=
+		dpp_akm=
 		sae_require_mfp=
 		ieee80211w=
 		key_mgmt=
@@ -121,7 +153,7 @@ case "$CMD" in
 			dpp+psk+sae|dpp-psk-sae)
 				key_mgmt="DPP SAE WPA-PSK"
 				encryption="sae-mixed"
-				dpp=1
+				dpp_akm=1
 				ieee80211w=1
 				sae_require_mfp=1
 				;;
@@ -129,45 +161,50 @@ case "$CMD" in
 				key_mgmt="DPP SAE"
 				encryption="sae"
 				ieee80211w=2
-				dpp=1
+				dpp_akm=1
 				;;
 			dpp)
 				key_mgmt="DPP"
 				encryption="dpp"
 				ieee80211w=2
-				dpp=1
+				dpp_akm=1
 				;;
 			sae)
 				key_mgmt="SAE"
 				encryption="sae"
 				ieee80211w=2
-				dpp=0
 				;;
 			psk+sae|psk-sae)
 				key_mgmt="SAE WPA-PSK"
 				encryption="sae-mixed"
 				ieee80211w=1
 				sae_require_mfp=1
-				dpp=0
 				;;
 			psk)
 				key_mgmt="WPA-PSK"
 				encryption="psk2"
 				ieee80211w=1
-				dpp=0
+				;;
+			sae-ext-key)
+				key_mgmt="SAE-EXT-KEY"
+				encryption="sae-ext-key"
+				ieee80211w=2
+				wpa_cli -i"$ifname" set_network 0 pairwise "GCMP-256"
+				wpa_cli -i"$ifname" set_network 0 group "GCMP-256"
 				;;
 		esac
 		wpa_cli -i"$ifname"  set_network 0 ieee80211w "$ieee80211w"
 		wpa_cli -i"$ifname"  set_network 0 key_mgmt "$key_mgmt"
 
 		. /sbin/wifi config
-		sect=
-		config_foreach get_section wifi-iface "$ifname" sect
-		uci set wireless.${sect}.encryption=$encryption
-		uci set wireless.${sect}.sae_require_mfp=$sae_require_mfp
-		uci set wireless.${sect}.dpp=$dpp
-		uci set wireless.${sect}.ieee80211w=$ieee80211w
-		uci commit wireless
+		config_foreach is_mld wifi-mld
+		if [ -n "$mld_iface" ]; then
+			config_foreach apply_mld_config wifi-iface
+		else
+			sect=
+			config_foreach get_section wifi-iface "$ifname" sect
+			update_wireless $sect
+		fi
 		;;
 	DPP-CONFOBJ-SSID)
 		wpa_cli -i"$ifname"  set_network 0 ssid \""$SSID"\"
@@ -180,16 +217,15 @@ case "$CMD" in
 		PASS_STR=$(hex2string "$PASS")
 
 		wpa_cli -i"$ifname" set_network 0 psk \""${PASS_STR}"\"
-		wpa_cli -i"$ifname" set_network 0 pairwise "CCMP"
-		wpa_cli -i"$ifname" dpp_bootstrap_remove \*
 		;;
 	DPP-CONFOBJ-PSK)
 		PASS_STR=$(hex2string "$CONFIG")
 		get_pairwise
 
 		wpa_cli -i"$ifname" set_network 0 psk "$PASS_STR"
-		wpa_cli -i"$ifname" set_network 0 pairwise "CCMP"
-		wpa_cli -i"$ifname" dpp_bootstrap_remove \*
+		;;
+	DPP-EVENT-SAE-PWE)
+		wpa_cli -i"$ifname" set sae_pwe $CONFIG
 		;;
 	DPP-C-SIGN-KEY)
 		wpa_cli -i"$ifname" set dpp_csign "$CONFIG"
@@ -217,7 +253,15 @@ case "$CMD" in
 		wpa_cli -i"$ifname" disable
 		wpa_cli -i"$ifname" enable
 
-		update_wireless
+		. /sbin/wifi config
+		config_foreach is_mld wifi-mld
+		if [ -n "$mld_iface" ]; then
+			config_foreach apply_mld_config wifi-iface
+		else
+			sect=
+			config_foreach get_section wifi-iface "$ifname" sect
+			update_wireless $sect
+		fi
 
 		;;
 esac

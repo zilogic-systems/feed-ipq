@@ -126,8 +126,6 @@ Signed-off-by: Adwait Nayak <quic_adwaitn@quicinc.com>
  telemetry.c  | 269 +++++++++++++++++++++++++++++++++++++++++++++++++++
  2 files changed, 283 insertions(+)
 
-diff --git a/sawf_stats.h b/sawf_stats.h
-index 99bd644..5d7d03c 100644
 --- a/sawf_stats.h
 +++ b/sawf_stats.h
 @@ -38,6 +38,17 @@
@@ -158,8 +156,6 @@ index 99bd644..5d7d03c 100644
  
  	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_AFTER_LAST,
  	QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MAX =
-diff --git a/telemetry.c b/telemetry.c
-index d7b5fe9..78e1b62 100644
 --- a/telemetry.c
 +++ b/telemetry.c
 @@ -29,6 +29,7 @@
@@ -188,7 +184,7 @@ index d7b5fe9..78e1b62 100644
  struct telemetry_sdwf_generic_param {
  	uint32_t moving_avg_pkt;
  	uint32_t moving_avg_win;
-@@ -329,3 +341,260 @@ err:
+@@ -329,3 +341,258 @@ err:
  }
  COMMAND(telemetry, sla_clear_stats, "<peer_mac>", NL80211_CMD_VENDOR, 0, CIB_NETDEV,
  	handle_telemetry_sla_clear_stats, ".");
@@ -201,7 +197,6 @@ index d7b5fe9..78e1b62 100644
 +{
 +	struct nlattr *tb_msg[NL80211_ATTR_MAX + 1];
 +	char *stats_buf = NULL;
-+	int len;
 +	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
 +	struct nlattr *attrs[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MAX + 1];
 +	static struct nla_policy
@@ -221,13 +216,12 @@ index d7b5fe9..78e1b62 100644
 +	else
 +		return NL_STOP;
 +
-+	if (attrs[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA]) {
++	if (attrs[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA])
 +		stats_buf =
 +			(char *) nla_data(attrs[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA]);
-+		len = nla_len(attrs[QCA_WLAN_VENDOR_ATTR_TELEMETRIC_MULTI_STATS_DATA]);
-+	}
 +
-+	printf("%s\n", stats_buf);
++	if (stats_buf)
++		printf("%s\n", stats_buf);
 +
 +	return NL_SKIP;
 +}
@@ -237,7 +231,7 @@ index d7b5fe9..78e1b62 100644
 +				int argc, char **argv,
 +				enum id_input id)
 +{
-+	int stats_type;
++	int stats_type = 0;
 +	uint8_t link_id = 0xF, index = 0;
 +	struct nlattr *attr;
 +	unsigned long stats = 0;
@@ -449,6 +443,3 @@ index d7b5fe9..78e1b62 100644
 +COMMAND(get, fwstats, "[-l] <link_id> <fwstats pdev|vdev|beacon>",
 +	NL80211_CMD_VENDOR, 0, CIB_NETDEV, handle_get_fwstats,
 +	"get fwstats value.");
--- 
-2.34.1
-

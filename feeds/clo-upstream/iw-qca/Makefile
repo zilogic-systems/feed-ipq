@@ -64,6 +64,7 @@ TARGET_CPPFLAGS:= \
 
 ifeq ($(BUILD_VARIANT),full)
   TARGET_CPPFLAGS += -DIW_FULL
+  TARGET_CFLAGS += -Wall -Werror
   MAKE_FLAGS += IW_FULL=1
 endif
 

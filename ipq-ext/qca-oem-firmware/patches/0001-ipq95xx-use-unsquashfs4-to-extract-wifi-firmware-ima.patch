@@ -1,0 +1,154 @@
+From ce57e991fb075accdc30e9bf1f011599408bc2fa Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Mon, 5 May 2025 18:55:07 +0530
+Subject: [PATCH 1/4] ipq95xx: use unsquashfs4 to extract wifi firmware image
+
+Replace unsquashfs with unsquashfs4 in update_common_info.py
+to extract wifi firmware images during single image generation
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ .../common/build/update_common_info.py        | 64 +++++++++----------
+ 1 file changed, 32 insertions(+), 32 deletions(-)
+
+diff --git a/IPQ9574.ATH.13.0/common/build/update_common_info.py b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+index a1da237..3c6c2fa 100755
+--- a/IPQ9574.ATH.13.0/common/build/update_common_info.py
++++ b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+@@ -592,50 +592,50 @@ if FIT_tool:
+                     os.chdir(ipq_dir)
+                     lg.log("changed to ipq_dir")
+                     lg.log(os.getcwd())
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk", "wifi_fw_qcn9224_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk", "wifi_fw_qcn9224_squashfs.img"])
+                     os.system("cp -rf tmp_wkk/* ./tmp_final")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final", "wifi_fw_ipq9574_qcn9224_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 										
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_1", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_1", "wifi_fw_qcn9224_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_1", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_1", "wifi_fw_qcn9224_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_1/* ./tmp_final_1")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_1", "wifi_fw_ipq9574_qcn9224_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_2", "wifi_fw_qcn9224_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_2", "wifi_fw_qcn9224_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_2/* ./tmp_final_2")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_2", "wifi_fw_ipq9574_qcn9000_qcn9224_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_3", "wifi_fw_qcn9224_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_3", "wifi_fw_qcn9224_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_3/* ./tmp_final_3")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_3", "wifi_fw_ipq9574_qcn9000_qcn9224_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2", "wifi_fw_qcn9224_v2_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2", "wifi_fw_qcn9224_v2_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2/* ./tmp_final_v2")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2", "wifi_fw_ipq9574_qcn9224_v2_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2_1", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2_1", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2_1", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2_1", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2_1/* ./tmp_final_v2_1")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2_1", "wifi_fw_ipq9574_qcn9224_v2_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2_2", "wifi_fw_qcn9224_v2_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2_2", "wifi_fw_qcn9224_v2_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2_2/* ./tmp_final_v2_2")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2_2", "wifi_fw_ipq9574_qcn9000_qcn9224_v2_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2_3", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2_3", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2_3/* ./tmp_final_v2_3")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2_3", "wifi_fw_ipq9574_qcn9000_qcn9224_v2_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+@@ -757,50 +757,50 @@ if FIT_tool:
+                     os.chdir(ipq_dir_x64)
+                     lg.log("changed to ipq_dir_x64")
+                     lg.log(os.getcwd())
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk", "wifi_fw_qcn9224_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk", "wifi_fw_qcn9224_squashfs.img"])
+                     os.system("cp -rf tmp_wkk/* ./tmp_final")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final", "wifi_fw_ipq9574_qcn9224_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 										
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_1", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_1", "wifi_fw_qcn9224_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_1", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_1", "wifi_fw_qcn9224_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_1/* ./tmp_final_1")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_1", "wifi_fw_ipq9574_qcn9224_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_2", "wifi_fw_qcn9224_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_2", "wifi_fw_qcn9224_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_2/* ./tmp_final_2")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_2", "wifi_fw_ipq9574_qcn9000_qcn9224_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_3", "wifi_fw_qcn9224_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_3", "wifi_fw_qcn9224_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_3/* ./tmp_final_3")
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_3", "wifi_fw_ipq9574_qcn9000_qcn9224_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2", "wifi_fw_qcn9224_v2_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2", "wifi_fw_qcn9224_v2_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2/* ./tmp_final_v2")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2", "wifi_fw_ipq9574_qcn9224_v2_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2_1", "wifi_fw_ipq9574_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2_1", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2_1", "wifi_fw_ipq9574_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2_1", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2_1/* ./tmp_final_v2_1")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2_1", "wifi_fw_ipq9574_qcn9224_v2_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2_2", "wifi_fw_qcn9224_v2_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2_2", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2_2", "wifi_fw_qcn9224_v2_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2_2/* ./tmp_final_v2_2")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2_2", "wifi_fw_ipq9574_qcn9000_qcn9224_v2_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+ 					
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_final_v2_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
+-                    lg.log_exec(["unsquashfs", "-d", "tmp_wkk_v2_3", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_final_v2_3", "wifi_fw_ipq9574_qcn9000_squashfs.img"])
++                    lg.log_exec(["unsquashfs4", "-d", "tmp_wkk_v2_3", "wifi_fw_qcn9224_v2_dualmac_squashfs.img"])
+                     os.system("cp -rf tmp_wkk_v2_3/* ./tmp_final_v2_3")                    
+                     check_mksquashfs4=lg.log_exec(["./mksquashfs4", "tmp_final_v2_3", "wifi_fw_ipq9574_qcn9000_qcn9224_v2_dualmac_squashfs.img", "-noappend", "-root-owned", "-comp", "xz", "-Xpreset", "9", "-Xe", "-Xlc", "0", "-Xlp", "2", "-Xpb", "2", "-Xbcj", "arm", "-b", "256k", "-processors", "1"])
+                     lg.log(str(check_mksquashfs4))
+-- 
+2.43.0
+

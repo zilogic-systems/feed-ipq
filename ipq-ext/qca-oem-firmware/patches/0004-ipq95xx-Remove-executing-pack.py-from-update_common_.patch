@@ -1,0 +1,60 @@
+From e2afccb8093363b5bf708938d91f12915ab84fa8 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Tue, 6 May 2025 16:34:36 +0530
+Subject: [PATCH 4/4] ipq95xx: Remove executing pack.py from
+ update_common_info.py
+
+Added the support to pack the image components into single image
+as IPQ Target Makefile rules
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ .../common/build/update_common_info.py        | 30 +------------------
+ 1 file changed, 1 insertion(+), 29 deletions(-)
+
+diff --git a/IPQ9574.ATH.13.0/common/build/update_common_info.py b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+index a75338d..cd5f0f9 100755
+--- a/IPQ9574.ATH.13.0/common/build/update_common_info.py
++++ b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+@@ -810,37 +810,9 @@ if FIT_tool:
+                     lg.log("Changed to current dir")
+                     lg.log(os.getcwd())
+ 					
+-                    lg.log("update_common_info: Executing prepareSingleImage.py and pack command for 64 bit")
++                    lg.log("update_common_info: Executing prepareSingleImage.py for 64 bit")
+                     for i in fltype:
+                         ret_prep_64image = lg.log_exec(['python', ipq_dir_x64+'/prepareSingleImage.py',"--arch","ipq9574_64","--fltype","nor,nand,norplusnand,emmc,norplusemmc","--in", ipq_dir_x64,"--gencdt", "--genbootconf", "--genpart","--genmbn"],verbose=0)
+-                        ret_pack_64image = lg.log_exec(['python', ipq_dir_x64+"/scripts/pack.py",  '--arch', "ipq9574_64",'--fltype', i , '--srcPath', ipq_dir_x64, '--inImage', ipq_dir_x64 ,'--outImage', bin_dir, "--multi_wifi_fw"],verbose=0)
+-                        if (ret_pack_64image==0):
+-                            list_out_64_single.append(ret_pack_64image)
+-                        else:
+-                            list_out_64_single.append(ret_pack_64image)
+-                        ret_pack_apps_64image = lg.log_exec(['python', ipq_dir_x64+"/scripts/pack.py",  '--arch', "ipq9574_64",'--fltype', i , '--srcPath', ipq_dir_x64, '--inImage', ipq_dir_x64 ,'--outImage', bin_dir,'--image_type', "hlos", "--multi_wifi_fw" ],verbose=0)
+-                        if (ret_pack_apps_64image==0):
+-                            list_out_64_apps.append(ret_pack_apps_64image)
+-                        else:
+-                            list_out_64_apps.append(ret_pack_apps_64image)
+-
+-                    lg.log("Image creation summary: \n")
+-                    n=0
+-                    for i in list_out_64_single:
+-                        if list_out_64_single[n]==0:
+-                            lg.log("Generation of 64 bit single " + str(dict_64_bit_single[str(fltype[n])]) +' '+ "Passed")
+-                            n=n+1
+-                        else:
+-                            lg.log("Generation of 64 bit single " + str(dict_64_bit_single[str(fltype[n])]) +' '+ "Failed")
+-                            n=n+1
+-                    n=0
+-                    for i in list_out_64_apps:
+-                        if list_out_64_apps[n]==0:
+-                            lg.log("Generation of 64 bit apps "+ str(dict_64_bit_apps[str(fltype[n])]) + ' '+ "Passed")
+-                            n=n+1
+-                        else:
+-                            lg.log("Generation of 64 bit apps "+ str(dict_64_bit_apps[str(fltype[n])])+' '+ "Failed")
+-                            n=n+1
+ 
+                     lg.log("update_common_info.py:============ UPDATE COMMON INFO COMPLETE====================",verbose=0)
+                 elif ((profile=="LM512") or (profile=="LM512E") or (profile=="TestLM512") or (profile=="TestLM512E") or (profile=="PrmLM512") or (profile=="PrmLM512E")):
+-- 
+2.43.0
+

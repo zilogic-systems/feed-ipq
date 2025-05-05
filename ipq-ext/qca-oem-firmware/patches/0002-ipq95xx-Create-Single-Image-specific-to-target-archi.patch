@@ -1,0 +1,55 @@
+From acabe306ec33f5a690998387b9ded49a994145c2 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Tue, 6 May 2025 14:30:07 +0530
+Subject: [PATCH 2/4] ipq95xx: Create Single Image specific to target
+ architecture
+
+--target - Newly added argument
+
+Default Single Image will be generated for 64-bit architecture.
+optional --target argument can be used to generate image for
+32-bit architecture
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ IPQ9574.ATH.13.0/common/build/update_common_info.py | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/IPQ9574.ATH.13.0/common/build/update_common_info.py b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+index 3c6c2fa..eb4c4c5 100755
+--- a/IPQ9574.ATH.13.0/common/build/update_common_info.py
++++ b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+@@ -231,8 +231,9 @@ def   use_fat_add ():
+          lg.log_exec(['python',fatadd_tool,'-n',fat_file_dest,'-f' + fat_file,'-d'+ fat_dest_dir],verbose=0)
+ #-----------------------------------------------------------End of use_fat_add function--------------------------------------------------------------#
+ parser = OptionParser()
+-parser.add_option("--nonhlos",action="store_true",dest="non_hlos",help="NON HLOS",default=False)
++parser.add_option("--nonhlos",action="store_true",dest="non_hlos",help="NON HLOS",default=True)
+ parser.add_option("--hlos",action="store_true",dest="hlos",help="HLOS",default=False)
++parser.add_option("--target",dest="profile_target",help="PROFILE_TARGET", default="64")
+ (options, args) = parser.parse_args()
+ 
+ FIT_tool = mi.get_tool_build('create_FIT_image')
+@@ -539,6 +540,7 @@ if FIT_tool:
+    #skales_tools = mi.get_build_path(SKALES_tools)
+    #skales_tools += mi.get_tool_path('skales')
+    fltype=['nor','nand','norplusnand','emmc','norplusemmc']
++   target=[options.profile_target]
+    list_out_64_single=[]
+    list_out_32_single=[]
+    list_out_64_apps=[]
+@@ -549,9 +551,8 @@ if FIT_tool:
+        os.makedirs(bin_dir,mode = 0o755)
+ 
+    print("Total arguments passed in build.py to called script update_common_info.py",sys.argv)
+-   if len(sys.argv)>1:
+-        #skipping the script name
+-        for profile_target in sys.argv[1:]:
++   if options.profile_target:
++        for profile_target in target:
+             print(profile_target)
+             if profile_target == "32" :
+                 ipq_dir = './ipq'
+-- 
+2.43.0
+

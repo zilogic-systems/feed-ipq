@@ -1,0 +1,33 @@
+diff --git a/pack.py b/pack.py
+index aa24dc6..72362e1 100644
+--- a/pack.py
++++ b/pack.py
+@@ -2460,22 +2460,24 @@ class Pack(object):
+                         rootfs_pos = 9 if MODE == "64" else 8
+                         UBI_IMG_NAME = section[rootfs_pos].text
+ 
++                root_ubi_file = os.path.join(self.images_dname, "root.ubi")
++
+                 if ftype in ["nand-4k", "nand-audio-4k", "norplusnand-4k"]:
+-                    cmd = '%s -m 4096 -p 256KiB -o root.ubi %s' % ((SRC_DIR + "/ubinize") ,UBINIZE_CFG_NAME)
++                    cmd = '%s -m 4096 -p 256KiB -o %s %s' % ((SRC_DIR + "/ubinize") , root_ubi_file, UBINIZE_CFG_NAME)
+                     ret = subprocess.call(cmd, shell=True)
+                     if ret != 0:
+                         error("ubinization got failed")
+-                    cmd = 'dd if=root.ubi of=%s bs=4k conv=sync' % (SRC_DIR + "/" + UBI_IMG_NAME)
++                    cmd = 'dd if=%s of=%s bs=4k conv=sync' % (root_ubi_file, (SRC_DIR + "/" + UBI_IMG_NAME))
+                     ret = subprocess.call(cmd, shell=True)
+                     if ret != 0:
+                         error("ubi image copy operation failed")
+ 
+                 elif ftype in ["nand", "nand-audio", "norplusnand"]:
+-                    cmd = '%s -m 2048 -p 128KiB -o root.ubi %s' % ((SRC_DIR + "/ubinize") ,UBINIZE_CFG_NAME)
++                    cmd = '%s -m 2048 -p 128KiB -o %s %s' % ((SRC_DIR + "/ubinize") ,root_ubi_file, UBINIZE_CFG_NAME)
+                     ret = subprocess.call(cmd, shell=True)
+                     if ret != 0:
+                         error("ubinization got failed")
+-                    cmd = 'dd if=root.ubi of=%s bs=2k conv=sync' % (SRC_DIR + "/" + UBI_IMG_NAME)
++                    cmd = 'dd if=%s of=%s bs=2k conv=sync' % (root_ubi_file, (SRC_DIR + "/" + UBI_IMG_NAME))
+                     ret = subprocess.call(cmd, shell=True)
+                     if ret != 0:
+                         error("ubi image copy operation failed")

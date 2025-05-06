@@ -7,9 +7,10 @@ define Device/Default
 	DEVICE_DTS = $$(SOC)-$(lastword $(subst _, ,$(1)))
 	DEVICE_DTS_CONFIG := config@1
 	DTS_DIR := $(DTS_DIR)/qcom
-	IMAGES := sysupgrade.bin
+	IMAGES := single.img sysupgrade.bin
 	IMAGE/sysupgrade.bin = sysupgrade-tar | append-metadata
 	IMAGE/sysupgrade.bin/squashfs :=
+	IMAGE/single.img := gen-single-image
 endef
 
 include $(SUBTARGET).mk

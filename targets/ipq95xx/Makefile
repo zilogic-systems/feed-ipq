@@ -28,7 +28,8 @@ DEFAULT_PACKAGES += \
 	kmod-qca8084 kmod-qca81xx kmod-qca8xxx-phc kmod-qca8k kmod-aqr-phy \
 	kmod-telemetry-agent kmod-ath12k-qca wpad-qca-mesh-openssl iwinfo \
 	qca-wifi-scripts ath-wifi-scripts wififw_mount_script \
-	hostapd-qca-utils wpa-qca-cli
+	hostapd-qca-utils wpa-qca-cli \
+	meta-tools-ipq qca-oem-firmware
 
 GENERIC_LINUX_CONFIG = $(PLATFORM_DIR)/generic/config-$(KERNEL_PATCHVER)-platform
 

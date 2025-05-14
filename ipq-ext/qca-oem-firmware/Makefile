@@ -3,6 +3,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=qca-oem-firmware
 PKG_RELEASE:=1
 
+# Update PKG_SOURCE_URL with the internal chipcode release's  mirror repo
 PKG_SOURCE_URL:=qca-networking-2025-ath-spf-13-0_qca_oem.git
 PKG_SOURCE_PROTO:=git
 PKG_MIRROR_HASH:=skip

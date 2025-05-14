@@ -1,0 +1,30 @@
+From 726b101cd9f82c306a046cb9856fd067f4574c22 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Tue, 6 May 2025 15:38:41 +0530
+Subject: [PATCH 3/4] ipq95xx: Remove Single Image generation for 256M flash
+ size
+
+Removed the support to prepare and pack the image components
+into single image for Open profile
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ IPQ9574.ATH.13.0/common/build/update_common_info.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/IPQ9574.ATH.13.0/common/build/update_common_info.py b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+index eb4c4c5..a75338d 100755
+--- a/IPQ9574.ATH.13.0/common/build/update_common_info.py
++++ b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+@@ -811,8 +811,6 @@ if FIT_tool:
+                     lg.log(os.getcwd())
+ 					
+                     lg.log("update_common_info: Executing prepareSingleImage.py and pack command for 64 bit")
+-                    ret_prep_64image = lg.log_exec(['python', ipq_dir_x64+'/prepareSingleImage.py', "--arch", "ipq9574_64", '--fltype', "nand,norplusnand", "--in", ipq_dir_x64, "--gencdt", "--genbootconf", "--genpart", "--genmbn", "--flash_size","256M"], verbose=0)
+-                    ret_pack_64image = lg.log_exec(['python', pack_tool,  '--arch', "ipq9574_64", '--fltype', 'nand,norplusnand', '--srcPath', ipq_dir_x64, '--inImage', ipq_dir_x64, '--outImage', bin_dir, "--multi_wifi_fw", '--flash_size','256M'], verbose=0)
+                     for i in fltype:
+                         ret_prep_64image = lg.log_exec(['python', ipq_dir_x64+'/prepareSingleImage.py',"--arch","ipq9574_64","--fltype","nor,nand,norplusnand,emmc,norplusemmc","--in", ipq_dir_x64,"--gencdt", "--genbootconf", "--genpart","--genmbn"],verbose=0)
+                         ret_pack_64image = lg.log_exec(['python', ipq_dir_x64+"/scripts/pack.py",  '--arch', "ipq9574_64",'--fltype', i , '--srcPath', ipq_dir_x64, '--inImage', ipq_dir_x64 ,'--outImage', bin_dir, "--multi_wifi_fw"],verbose=0)
+-- 
+2.43.0
+

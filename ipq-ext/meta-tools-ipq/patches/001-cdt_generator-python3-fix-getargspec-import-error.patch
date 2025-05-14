@@ -1,0 +1,13 @@
+diff --git a/scripts/cdt_generator.py b/scripts/cdt_generator.py
+index 8b5b8cb..26c0b51 100644
+--- a/scripts/cdt_generator.py
++++ b/scripts/cdt_generator.py
+@@ -10,7 +10,7 @@ from xml.dom import minidom
+ #import common
+ from time import sleep, time
+ import time
+-from inspect import getargspec
++from inspect import getfullargspec as getargspec
+ from os.path import getsize
+ import struct, sys
+ import logging

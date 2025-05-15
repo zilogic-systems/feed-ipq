@@ -1,3 +1,5 @@
+# DEVICE_FLASH_TYPE supported values - nor, nand, norplusnand, emmc, norplusemmc
+
 DEVICE_VARS += DEVICE_FLASH_TYPE
 
 include ipq95xx-gen-single-image.mk
@@ -30,7 +32,7 @@ define prepare_single_image
 
 	cd $(CHIPCODE_DEVICE_DIR)/common/build && \
 			export BLD_ENV_BUILD_ID=O && \
-			python update_common_info.py
+			python update_common_info.py --fltype $(DEVICE_FLASH_TYPE)
 endef
 
 define Build/gen-single-image

@@ -1,0 +1,47 @@
+From 2c1c92afb20869856a6ad2bb225cb48acc05f293 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Thu, 15 May 2025 17:08:36 +0530
+Subject: [PATCH] ipq95xx: Prepare single image components specific to flash
+ type
+
+--fltype argument can be used to generate image for specific flash type
+instead of generating image components for all flash types
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ IPQ9574.ATH.13.0/common/build/update_common_info.py | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/IPQ9574.ATH.13.0/common/build/update_common_info.py b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+index cd5f0f9..0ab59dc 100755
+--- a/IPQ9574.ATH.13.0/common/build/update_common_info.py
++++ b/IPQ9574.ATH.13.0/common/build/update_common_info.py
+@@ -234,6 +234,7 @@ parser = OptionParser()
+ parser.add_option("--nonhlos",action="store_true",dest="non_hlos",help="NON HLOS",default=True)
+ parser.add_option("--hlos",action="store_true",dest="hlos",help="HLOS",default=False)
+ parser.add_option("--target",dest="profile_target",help="PROFILE_TARGET", default="64")
++parser.add_option("--fltype",dest="flash_type",help="FLASH_TYPE")
+ (options, args) = parser.parse_args()
+ 
+ FIT_tool = mi.get_tool_build('create_FIT_image')
+@@ -539,7 +540,7 @@ if FIT_tool:
+    jtag_scripts += mi.get_tool_path('jtag-scripts')
+    #skales_tools = mi.get_build_path(SKALES_tools)
+    #skales_tools += mi.get_tool_path('skales')
+-   fltype=['nor','nand','norplusnand','emmc','norplusemmc']
++   fltype=[options.flash_type]
+    target=[options.profile_target]
+    list_out_64_single=[]
+    list_out_32_single=[]
+@@ -812,7 +813,7 @@ if FIT_tool:
+ 					
+                     lg.log("update_common_info: Executing prepareSingleImage.py for 64 bit")
+                     for i in fltype:
+-                        ret_prep_64image = lg.log_exec(['python', ipq_dir_x64+'/prepareSingleImage.py',"--arch","ipq9574_64","--fltype","nor,nand,norplusnand,emmc,norplusemmc","--in", ipq_dir_x64,"--gencdt", "--genbootconf", "--genpart","--genmbn"],verbose=0)
++                        ret_prep_64image = lg.log_exec(['python', ipq_dir_x64+'/prepareSingleImage.py',"--arch","ipq9574_64","--fltype", i ,"--in", ipq_dir_x64,"--gencdt", "--genbootconf", "--genpart","--genmbn"],verbose=0)
+ 
+                     lg.log("update_common_info.py:============ UPDATE COMMON INFO COMPLETE====================",verbose=0)
+                 elif ((profile=="LM512") or (profile=="LM512E") or (profile=="TestLM512") or (profile=="TestLM512E") or (profile=="PrmLM512") or (profile=="PrmLM512E")):
+-- 
+2.43.0
+

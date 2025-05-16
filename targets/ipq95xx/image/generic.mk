@@ -58,6 +58,7 @@ define Device/qcom_rdp433
 	DEVICE_DTS_CONFIG := config-rdp433
 	DEVICE_FLASH_TYPE := norplusnand
 	SOC := ipq9574
+	DEVICE_PACKAGES := uboot-ipq9574-norplusnand
 endef
 TARGET_DEVICES += qcom_rdp433
 
@@ -69,5 +70,6 @@ define Device/qcom_rdp433-mht-phy
 	DEVICE_DTS_CONFIG := config-rdp433-mht-phy
 	DEVICE_FLASH_TYPE := emmc
 	SOC := ipq9574
+	DEVICE_PACKAGES := uboot-ipq9574-mmc
 endef
 TARGET_DEVICES += qcom_rdp433-mht-phy

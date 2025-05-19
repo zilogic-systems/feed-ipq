@@ -1,6 +1,8 @@
 # DEVICE_FLASH_TYPE supported values - nor, nand, norplusnand, emmc, norplusemmc
+# DEVICE_BOARD_CONFIG points to directory name containing the DDR and Flash related config details
 
-DEVICE_VARS += DEVICE_FLASH_TYPE
+DEVICE_VARS += DEVICE_FLASH_TYPE \
+		DEVICE_BOARD_CONFIG
 
 include ipq95xx-gen-single-image.mk
 
@@ -22,6 +24,11 @@ define pack_single_image
 	$(CP) -fpv $(CHIPCODE_DEVICE_BUILD_DIR)/bin/$(DEVICE_FLASH_TYPE)-ipq9574_64-single.img $@
 endef
 
+define update_board_config
+	rm -rf $(CHIPCODE_DEVICE_DIR)/apss_proc/out/meta-tools/ipq9574
+	cp -rf $(STAGING_DIR_IMAGE)/$(DEVICE_BOARD_CONFIG) $(CHIPCODE_DEVICE_DIR)/apss_proc/out/meta-tools/ipq9574
+endef
+
 define prepare_single_image
 	@echo Single Image : Generate IPQ Image Components for Single Image
 
@@ -29,6 +36,7 @@ define prepare_single_image
 	$(eval CHIPCODE_DEVICE_DIR=$(CHIPCODE_PROFILE_DIR)/$(TARGET_DEVICE_NAME))
 
 	$(call image_generation_prerequisites)
+	$(call update_board_config)
 
 	cd $(CHIPCODE_DEVICE_DIR)/common/build && \
 			export BLD_ENV_BUILD_ID=O && \
@@ -59,8 +67,9 @@ define Device/qcom_rdp433
 	DEVICE_MODEL := IPQ9574-RDP433
 	DEVICE_DTS_CONFIG := config-rdp433
 	DEVICE_FLASH_TYPE := norplusnand
+	DEVICE_BOARD_CONFIG := board-cfg-ipq9574
 	SOC := ipq9574
-	DEVICE_PACKAGES := uboot-ipq9574-norplusnand
+	DEVICE_PACKAGES := uboot-ipq9574-norplusnand board-cfg-ipq95xx
 endef
 TARGET_DEVICES += qcom_rdp433
 
@@ -71,7 +80,8 @@ define Device/qcom_rdp433-mht-phy
 	DEVICE_MODEL := IPQ9574-RDP433-MHT-PHY
 	DEVICE_DTS_CONFIG := config-rdp433-mht-phy
 	DEVICE_FLASH_TYPE := emmc
+	DEVICE_BOARD_CONFIG := board-cfg-ipq9574
 	SOC := ipq9574
-	DEVICE_PACKAGES := uboot-ipq9574-mmc
+	DEVICE_PACKAGES := uboot-ipq9574-mmc board-cfg-ipq95xx
 endef
 TARGET_DEVICES += qcom_rdp433-mht-phy

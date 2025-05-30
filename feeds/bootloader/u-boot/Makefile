@@ -39,6 +39,17 @@ define Build/Configure/debug
 	echo "CONFIG_SKIP_RESET=y" >> $(PKG_BUILD_DIR)/configs/$(CONFIG_NAME)_defconfig;
 endef
 
+EXTERNAL_PATCH_DIR:=$(CURDIR)
+
+define Build/Prepare
+	$(call Build/Prepare/Default)
+
+ifeq ($(CONFIG_TARGET_BUILD_PRPL),y)
+	$(call PatchDir,$(PKG_BUILD_DIR),$(EXTERNAL_PATCH_DIR)/patches-prpl,)
+endif
+
+endef
+
 define Build/Configure
 	$(call Build/Configure/$(DEBUG_NAME))
 	$(MAKE) -C $(PKG_BUILD_DIR) $(CONFIG_NAME)_defconfig CROSS_COMPILE=$(TARGET_CROSS) TARGETCC=$(TARGET_CC);

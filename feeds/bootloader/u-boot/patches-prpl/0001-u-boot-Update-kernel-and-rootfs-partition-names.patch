@@ -1,0 +1,102 @@
+From b2a0c121d98af0d020f03f8ee7675e93634ee971 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Tue, 27 May 2025 15:17:40 +0530
+Subject: [PATCH] u-boot: Update kernel and rootfs partition names
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ board/qti/common/cmd_bootipq.c | 14 +++++++-------
+ board/qti/common/common.c      | 14 +++++++-------
+ 2 files changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/board/qti/common/cmd_bootipq.c b/board/qti/common/cmd_bootipq.c
+index 06f364e9..4ad3b55c 100644
+--- a/board/qti/common/cmd_bootipq.c
++++ b/board/qti/common/cmd_bootipq.c
+@@ -353,10 +353,10 @@ int set_bootargs(void)
+ 		gpt_flag = false;
+ 
+ 	if (active_part == 1)
+-		ret  = set_mmc_bootargs(runcmd, "rootfs_1",
++		ret  = set_mmc_bootargs(runcmd, "rootfs-inactive",
+ 				MAX_BOOT_ARGS_SIZE, gpt_flag);
+ 	else if (!active_part)
+-		ret  = set_mmc_bootargs(runcmd, "rootfs",
++		ret  = set_mmc_bootargs(runcmd, "rootfs-active",
+ 				MAX_BOOT_ARGS_SIZE, gpt_flag );
+ 	else
+ 		return -EBADFD;
+@@ -473,9 +473,9 @@ static int boot_mmc(void)
+ 		return CMD_RET_FAILURE;
+ 
+ 	if ((sfi->ipq_smem_bootconfig_info != NULL) && (1 == active_part)) {
+-		bpart_info.name = "0:HLOS_1";
++		bpart_info.name = "kernel-inactive";
+ 	} else if (0 == active_part) {
+-		bpart_info.name = "0:HLOS";
++		bpart_info.name = "kernel-active";
+ 	} else
+ 		return -EBADFD;
+ 
+@@ -779,13 +779,13 @@ static int copy_rootfs(uint32_t request, uint32_t size)
+ 
+ 		if (sfi->ipq_smem_bootconfig_info != NULL) {
+ 			if (1 == active_part) {
+-				bpart_info.name = "rootfs_1";
++				bpart_info.name = "rootfs-inactive";
+ 			} else if (0 == active_part ){
+-				bpart_info.name = "rootfs";
++				bpart_info.name = "rootfs-active";
+ 			} else
+ 				return -EBADFD;
+ 		} else {
+-			bpart_info.name = "rootfs";
++			bpart_info.name = "rootfs-active";
+ 		}
+ 
+ 		if(boot_info.debug)
+diff --git a/board/qti/common/common.c b/board/qti/common/common.c
+index 1bb21a4d..4a0f797b 100644
+--- a/board/qti/common/common.c
++++ b/board/qti/common/common.c
+@@ -857,11 +857,11 @@ void get_kernel_fs_part_details(int flash_type)
+ 
+ 	struct { char *name; ipq_part_entry_t *part; } entries[] = {
+ #ifdef CONFIG_BOOTCONFIG_V3
+-		{ active_part == 1 ? "0:HLOS_1" : "0:HLOS", &smem->hlos },
+-		{ active_part == 1 ? "rootfs_1" : "rootfs", &smem->rootfs },
++		{ active_part == 1 ? "kernel-inactive" : "kernel-active", &smem->hlos },
++		{ active_part == 1 ? "rootfs-inactive" : "rootfs-active", &smem->rootfs },
+ #else
+-		{ "0:HLOS", &smem->hlos },
+-		{ "rootfs", &smem->rootfs },
++		{ "kernel-active", &smem->hlos },
++		{ "rootfs-active", &smem->rootfs },
+ #endif
+ 	};
+ 
+@@ -871,10 +871,10 @@ void get_kernel_fs_part_details(int flash_type)
+ 		if (flash_type == SMEM_BOOT_NORGPT_FLASH) {
+ #if CONFIG_BOOTCONFIG_V3
+ 		if (!strncmp(entries[i].name,
+-			active_part ? "0:HLOS_1" : "0:HLOS",
++			active_part ? "kernel-inactive" : "kernel-active",
+ 			active_part ? 8 :6))
+ #else
+-		if (!strncmp(entries[i].name, "0:HLOS", 6)
++		if (!strncmp(entries[i].name, "kernel-active", 6)
+ #endif
+ 				continue;
+ 
+@@ -1281,7 +1281,7 @@ int get_rootfs_active_partition(ipq_smem_flash_info_t *sfi)
+ 
+ #ifdef CONFIG_BOOTCONFIG_V2
+ 	for (int i = 0; i < binfo->numaltpart; i++) {
+-		if (strncmp("rootfs", binfo->per_part_entry[i].name,
++		if (strncmp("rootfs-active", binfo->per_part_entry[i].name,
+ 			CONFIG_RAM_PART_NAME_LENGTH) == 0) {
+ 
+ 			ret = binfo->per_part_entry[i].primaryboot;
+-- 
+2.43.0
+

@@ -1,0 +1,758 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+===========================================================================
+Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+SPDX-License-Identifier: ISC
+===========================================================================
+-->
+
+<configuration>
+	<parser_instructions>
+		<!-- NOTE: entries here are used by the parser when generating output -->
+		<!-- NOTE: each filename must be on it's own line as in variable=value-->
+		WRITE_PROTECT_BOUNDARY_IN_KB    = 65536
+		GROW_LAST_PARTITION_TO_FILL_DISK= false
+	</parser_instructions>
+
+<!-- NOTE: "physical_partition" are listed in order and apply to devices such as eMMC cards that have (for example) 3 physical partitions -->
+<!-- This is physical partition 0 -->
+	<physical_partition ref="emmc">
+	<!-- NOTE: Define information for each partition, which will be created in order listed here -->
+	<!-- NOTE: Place all "readonly=true" partitions side by side for optimum space usage -->
+	<!-- NOTE: If OPTIMIZE_READONLY_PARTITIONS=true, then partitions won't be in the order listed here -->
+	<!--       they will instead be placed side by side at the beginning of the disk -->
+	<partition
+		label="0:SBL1"
+		size_in_kb="1024"
+		type="DEA0BA2C-CBDD-4805-B4F9-F428251C3E98"
+		bootable="false"
+		readonly="false"
+		filename="xbl.elf"
+		/>
+	<partition
+		label="0:SBL1_1"
+		size_in_kb="1024"
+		type="7A3DF1A3-A31A-454D-BD78-DF259ED486BE"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:BOOTCONFIG"
+		size_in_kb="256"
+		type="2B7D04FF-31F0-4E6A-BE9A-DA50314DAD58"
+		bootable="false"
+		readonly="false"
+		bootconfig_type_max="2"
+		filename_img1="bootconfig.bin"
+		filename_img2="bootconfig0-try.bin"
+		/>
+	<partition
+		label="0:BOOTCONFIG1"
+		size_in_kb="256"
+		type="7BD25378-5C39-11E5-8A77-40A8F05F1418"
+		bootable="false"
+		readonly="false"
+		bootconfig_type_max="2"
+		filename_img1="bootconfig.bin"
+		filename_img2="bootconfig1-try.bin"
+		/>
+	<partition
+		label="0:QSEE"
+		size_in_kb="1792"
+		type="A053AA7F-40B8-4B1C-BA08-2F68AC71A4F4"
+		bootable="false"
+		readonly="false"
+		filename="tz.mbn"
+		/>
+	<partition
+		label="0:QSEE_1"
+		size_in_kb="1792"
+		type="A6DD74A1-C8BF-4DBC-AE39-62B8E78C4038"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:DEVCFG"
+		size_in_kb="256"
+		type="F65D4B16-343D-4E25-AAFC-BE99B6556A6D"
+		bootable="false"
+		readonly="false"
+		filename="devcfg.mbn"
+		/>
+	<partition
+		label="0:DEVCFG_1"
+		size_in_kb="256"
+		type="48BFA451-9443-46F7-B400-892A6B1BFC16"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:APDP"
+		size_in_kb="256"
+		type="318B7C50-A113-0FC1-F3A2-59E76A68F3F7"
+		bootable="false"
+		readonly="false"
+		filename="apdp.mbn"
+		/>
+	<partition
+		label="0:APDP_1"
+		size_in_kb="256"
+		type="BC4386C7-B38D-BA64-A4EC-127D57C3F24B"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:TME"
+		size_in_kb="512"
+		type="0833175E-AF8F-BACC-F2A2-5B70354B1A0A"
+		bootable="false"
+		readonly="false"
+		filename="tmel-ipq95xx-firmware.elf"
+		/>
+	<partition
+		label="0:TME_1"
+		size_in_kb="512"
+		type="66A49874-13D3-66EA-B0B7-3F61C7E405CD"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:RPM"
+		size_in_kb="256"
+		type="098DF793-D712-413D-9D4E-89D711772228"
+		bootable="false"
+		readonly="false"
+		filename="rpm.mbn"
+		/>
+	<partition
+		label="0:RPM_1"
+		size_in_kb="256"
+		type="2D2BE762-890B-11E5-AAF3-40A8F05F1418"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:CDT"
+		size_in_kb="256"
+		type="A19F205F-CCD8-4B6D-8F1E-2D9BC24CFFB1"
+		bootable="false"
+		readonly="false"
+		filename="cdt.bin"
+		/>
+	<partition
+		label="0:CDT_1"
+		size_in_kb="256"
+		type="7A795379-C250-4282-A2C7-FC4E13F4A43D"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:APPSBLENV"
+		size_in_kb="256"
+		type="300FFDCD-22E0-47E7-9A23-F16ED9382387"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:APPSBL"
+		size_in_kb="768"
+		type="400FFDCD-22E0-47E7-9A23-F16ED9382388"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		filename_32="openwrt-ipq9574-ipq95xx_32-mmc32-u-boot_compressed.mbn"
+		filename_64="openwrt-ipq9574-generic-mmc-u-boot_compressed.mbn"
+		/>
+	<partition
+		label="0:APPSBL_1"
+		size_in_kb="768"
+		type="C126787D-3EEF-444C-9E43-FEFF3F103E22"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:ART"
+		size_in_kb="512"
+		type="A72E50C1-D37C-429D-9620-35FCA612B9A8"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:ETHPHYFW"
+		size_in_kb="512"
+		type="C1DC4CAB-430B-4CDC-A8C5-7115912B74FE"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:WIFIFW"
+		size_in_kb="6144"
+		type="888d8069-8d27-40a8-95a9-6006e1ce9b3b"
+		bootable="false"
+		readonly="false"
+		image_type = "hlos"
+		optional="true"
+		filename="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		skip_size_check = "2"
+		wififw_type_min = "1"
+		wififw_type_max = "2"
+		filename_img1="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		filename_img2="wifi_fw_ipq9574_qcn9224_v2_dualmac_squashfs.img"
+		filename_img3="wifi_fw_ipq9574_qcn9000_qcn9224_v2_squashfs.img"
+		/>
+	<partition
+		label="0:WIFIFW_1"
+		size_in_kb="6144"
+		type="981476f5-5cd7-42db-9ce9-87b3a31aadbd"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="mfgdata"
+		size_in_kb="1024"
+		type="575C6774-0E78-4295-961C-A5BE0EED125F"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="kernel-active"
+		size_in_kb="7168"
+		type="B51F2982-3EBE-46DE-8721-EE641E1F9997"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-qcom_alxx-fit-uImage.itb"
+		filename_64="openwrt-ipq95xx-generic-qcom_alxx-fit-uImage.itb"
+		/>
+	<partition
+		label="kernel-inactive"
+		size_in_kb="7168"
+		type="A71DA577-7F81-4626-B4A2-E377F9174525"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs-active"
+		size_in_kb="125952"
+		type="98D2248D-7140-449F-A954-39D67BD6C3B4"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-squashfs-root.img"
+		filename_64="openwrt-ipq95xx-generic-squashfs-root.img"
+		/>
+	<partition
+		label="rootfs-inactive"
+		size_in_kb="125952"
+		type="5647B280-DC2A-485D-9913-CF53AC40FA32"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs_data"
+		size_in_kb="32768"
+		type="52943F0D-D98B-4497-9CCA-92902A5B177E"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="NVRAM"
+		size_in_kb="1536"
+		type="E3F3F58B-597F-BA6F-EFB5-96C5CE76D468"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="securestore"
+		size_in_kb="16384"
+		type="53D16500-05C7-4954-A014-0C310E19AE4D"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="lcm_data"
+		size_in_kb="1048576"
+		type="5A9DA2D6-D796-4938-8615-062AF0EE639A"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	</physical_partition>
+
+<!-- This is physical partition 1 -->
+	<physical_partition ref="norplusemmc">
+	<!-- NOTE: Define information for each partition, which will be created in order listed here -->
+	<!-- NOTE: Place all "readonly=true" partitions side by side for optimum space usage -->
+	<!-- NOTE: If OPTIMIZE_READONLY_PARTITIONS=true, then partitions won't be in the order listed here -->
+	<!--       they will instead be placed side by side at the beginning of the disk -->
+	<partition
+		label="0:WIFIFW"
+		size_in_kb="6144"
+		type="5911fd72-35be-424e-975d-69c957ad3a43"
+		bootable="false"
+		readonly="false"
+		image_type = "hlos"
+		optional="true"
+		filename="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		skip_size_check = "2"
+		wififw_type_min = "1"
+		wififw_type_max = "2"
+		filename_img1="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		filename_img2="wifi_fw_ipq9574_qcn9224_v2_dualmac_squashfs.img"
+		filename_img3="wifi_fw_ipq9574_qcn9000_qcn9224_v2_squashfs.img"
+		/>
+	<partition
+		label="0:WIFIFW_1"
+		size_in_kb="6144"
+		type="a640a4e3-6aeb-4d83-81a0-dfeae6b7d1a5"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:HLOS"
+		size_in_kb="7168"
+		type="B51F2982-3EBE-46DE-8721-EE641E1F9997"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-qcom_alxx-fit-uImage.itb"
+		filename_64="openwrt-ipq95xx-generic-qcom_alxx-fit-uImage.itb"
+		/>
+	<partition
+		label="0:HLOS_1"
+		size_in_kb="7168"
+		type="A71DA577-7F81-4626-B4A2-E377F9174525"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs"
+		size_in_kb="125952"
+		type="98D2248D-7140-449F-A954-39D67BD6C3B4"
+		bootable="false"
+		readonly="false"
+		diff_files="true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-squashfs-root.img"
+		filename_64="openwrt-ipq95xx-generic-squashfs-root.img"
+		/>
+	<partition
+		label="rootfs_1"
+		size_in_kb="125952"
+		type="5647B280-DC2A-485D-9913-CF53AC40FA32"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="NVRAM"
+		size_in_kb="1536"
+		type="E3F3F58B-597F-BA6F-EFB5-96C5CE76D468"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	</physical_partition>
+
+<!-- This is physical partition 2 -->
+	<physical_partition ref="emmc_qcn9224">
+	<!-- NOTE: Define information for each partition, which will be created in order listed here -->
+	<!-- NOTE: Place all "readonly=true" partitions side by side for optimum space usage -->
+	<!-- NOTE: If OPTIMIZE_READONLY_PARTITIONS=true, then partitions won't be in the order listed here -->
+	<!--       they will instead be placed side by side at the beginning of the disk -->
+	<partition
+		label="0:SBL1"
+		size_in_kb="1024"
+		type="DEA0BA2C-CBDD-4805-B4F9-F428251C3E98"
+		bootable="false"
+		readonly="false"
+		filename="xbl.elf"
+		/>
+	<partition
+		label="0:SBL1_1"
+		size_in_kb="1024"
+		type="7A3DF1A3-A31A-454D-BD78-DF259ED486BE"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:BOOTCONFIG"
+		size_in_kb="256"
+		type="2B7D04FF-31F0-4E6A-BE9A-DA50314DAD58"
+		bootable="false"
+		readonly="false"
+		bootconfig_type_max="2"
+		filename_img1="bootconfig.bin"
+		filename_img2="bootconfig0-try.bin"
+		/>
+	<partition
+		label="0:BOOTCONFIG1"
+		size_in_kb="256"
+		type="7BD25378-5C39-11E5-8A77-40A8F05F1418"
+		bootable="false"
+		readonly="false"
+		bootconfig_type_max="2"
+		filename_img1="bootconfig.bin"
+		filename_img2="bootconfig1-try.bin"
+		/>
+	<partition
+		label="0:QSEE"
+		size_in_kb="1792"
+		type="A053AA7F-40B8-4B1C-BA08-2F68AC71A4F4"
+		bootable="false"
+		readonly="false"
+		filename="tz.mbn"
+		/>
+	<partition
+		label="0:QSEE_1"
+		size_in_kb="1792"
+		type="A6DD74A1-C8BF-4DBC-AE39-62B8E78C4038"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:DEVCFG"
+		size_in_kb="256"
+		type="F65D4B16-343D-4E25-AAFC-BE99B6556A6D"
+		bootable="false"
+		readonly="false"
+		filename="devcfg.mbn"
+		/>
+	<partition
+		label="0:DEVCFG_1"
+		size_in_kb="256"
+		type="48BFA451-9443-46F7-B400-892A6B1BFC16"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:APDP"
+		size_in_kb="256"
+		type="318B7C50-A113-0FC1-F3A2-59E76A68F3F7"
+		bootable="false"
+		readonly="false"
+		filename="apdp.mbn"
+		/>
+	<partition
+		label="0:APDP_1"
+		size_in_kb="256"
+		type="BC4386C7-B38D-BA64-A4EC-127D57C3F24B"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:TME"
+		size_in_kb="512"
+		type="0833175E-AF8F-BACC-F2A2-5B70354B1A0A"
+		bootable="false"
+		readonly="false"
+		filename="tmel-ipq95xx-firmware.elf"
+		/>
+	<partition
+		label="0:TME_1"
+		size_in_kb="512"
+		type="66A49874-13D3-66EA-B0B7-3F61C7E405CD"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:RPM"
+		size_in_kb="256"
+		type="098DF793-D712-413D-9D4E-89D711772228"
+		bootable="false"
+		readonly="false"
+		filename="rpm.mbn"
+		/>
+	<partition
+		label="0:RPM_1"
+		size_in_kb="256"
+		type="2D2BE762-890B-11E5-AAF3-40A8F05F1418"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:CDT"
+		size_in_kb="256"
+		type="A19F205F-CCD8-4B6D-8F1E-2D9BC24CFFB1"
+		bootable="false"
+		readonly="false"
+		filename="cdt.bin"
+		/>
+	<partition
+		label="0:CDT_1"
+		size_in_kb="256"
+		type="7A795379-C250-4282-A2C7-FC4E13F4A43D"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:APPSBLENV"
+		size_in_kb="256"
+		type="300FFDCD-22E0-47E7-9A23-F16ED9382387"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:APPSBL"
+		size_in_kb="768"
+		type="400FFDCD-22E0-47E7-9A23-F16ED9382388"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		filename_32="openwrt-ipq9574-ipq95xx_32-mmc32-u-boot_compressed.mbn"
+		filename_64="openwrt-ipq9574-generic-mmc-u-boot_compressed.mbn"
+		/>
+	<partition
+		label="0:APPSBL_1"
+		size_in_kb="768"
+		type="C126787D-3EEF-444C-9E43-FEFF3F103E22"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:ART"
+		size_in_kb="1024"
+		type="A72E50C1-D37C-429D-9620-35FCA612B9A8"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:ETHPHYFW"
+		size_in_kb="512"
+		type="C1DC4CAB-430B-4CDC-A8C5-7115912B74FE"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:LICENSE"
+		size_in_kb="256"
+		type="a7a81a61-66ce-c908-f4a2-82d39d2aff57"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:WIFIFW"
+		size_in_kb="10240"
+		type="888d8069-8d27-40a8-95a9-6006e1ce9b3b"
+		bootable="false"
+		readonly="false"
+		image_type = "hlos"
+		optional="true"
+		filename="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		wififw_type_min = "1"
+		wififw_type_max = "2"
+		filename_img1="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		filename_img2="wifi_fw_ipq9574_qcn9224_v2_dualmac_squashfs.img"
+		filename_img3="wifi_fw_ipq9574_qcn9000_qcn9224_v2_squashfs.img"
+		/>
+	<partition
+		label="0:WIFIFW_1"
+		size_in_kb="10240"
+		type="981476f5-5cd7-42db-9ce9-87b3a31aadbd"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="mfgdata"
+		size_in_kb="1024"
+		type="575C6774-0E78-4295-961C-A5BE0EED125F"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="kernel-active"
+		size_in_kb="7168"
+		type="B51F2982-3EBE-46DE-8721-EE641E1F9997"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-qcom_alxx-fit-uImage.itb"
+		filename_64="openwrt-ipq95xx-generic-qcom_alxx-fit-uImage.itb"
+		/>
+	<partition
+		label="kernel-inactive"
+		size_in_kb="7168"
+		type="A71DA577-7F81-4626-B4A2-E377F9174525"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs-active"
+		size_in_kb="124928"
+		type="98D2248D-7140-449F-A954-39D67BD6C3B4"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-squashfs-root.img"
+		filename_64="openwrt-ipq95xx-generic-squashfs-root.img"
+		/>
+	<partition
+		label="rootfs-inactive"
+		size_in_kb="124928"
+		type="5647B280-DC2A-485D-9913-CF53AC40FA32"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs_data"
+		size_in_kb="32768"
+		type="52943F0D-D98B-4497-9CCA-92902A5B177E"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="NVRAM"
+		size_in_kb="1536"
+		type="E3F3F58B-597F-BA6F-EFB5-96C5CE76D468"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="securestore"
+		size_in_kb="16384"
+		type="53D16500-05C7-4954-A014-0C310E19AE4D"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="lcm_data"
+		size_in_kb="1048576"
+		type="5A9DA2D6-D796-4938-8615-062AF0EE639A"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	</physical_partition>
+
+<!-- This is physical partition 3 -->
+	<physical_partition ref="norplusemmc_qcn9224">
+	<!-- NOTE: Define information for each partition, which will be created in order listed here -->
+	<!-- NOTE: Place all "readonly=true" partitions side by side for optimum space usage -->
+	<!-- NOTE: If OPTIMIZE_READONLY_PARTITIONS=true, then partitions won't be in the order listed here -->
+	<!--       they will instead be placed side by side at the beginning of the disk -->
+	<partition
+		label="0:LICENSE"
+		size_in_kb="256"
+		type="a7a81a61-66ce-c908-f4a2-82d39d2aff57"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:WIFIFW"
+		size_in_kb="10240"
+		type="5911fd72-35be-424e-975d-69c957ad3a43"
+		bootable="false"
+		readonly="false"
+		image_type = "hlos"
+		optional="true"
+		filename="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		wififw_type_min = "1"
+		wififw_type_max = "2"
+		filename_img1="wifi_fw_ipq9574_qcn9000_squashfs.img"
+		filename_img2="wifi_fw_ipq9574_qcn9224_v2_dualmac_squashfs.img"
+		filename_img3="wifi_fw_ipq9574_qcn9000_qcn9224_v2_squashfs.img"
+		/>
+	<partition
+		label="0:WIFIFW_1"
+		size_in_kb="10240"
+		type="a640a4e3-6aeb-4d83-81a0-dfeae6b7d1a5"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="0:HLOS"
+		size_in_kb="7168"
+		type="B51F2982-3EBE-46DE-8721-EE641E1F9997"
+		bootable="false"
+		readonly="false"
+		diff_files = "true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-qcom_alxx-fit-uImage.itb"
+		filename_64="openwrt-ipq95xx-generic-qcom_alxx-fit-uImage.itb"
+		/>
+	<partition
+		label="0:HLOS_1"
+		size_in_kb="7168"
+		type="A71DA577-7F81-4626-B4A2-E377F9174525"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs"
+		size_in_kb="124928"
+		type="98D2248D-7140-449F-A954-39D67BD6C3B4"
+		bootable="false"
+		readonly="false"
+		diff_files="true"
+		image_type = "hlos"
+		filename_32="openwrt-ipq95xx-ipq95xx_32-squashfs-root.img"
+		filename_64="openwrt-ipq95xx-generic-squashfs-root.img"
+		/>
+	<partition
+		label="rootfs_1"
+		size_in_kb="124928"
+		type="5647B280-DC2A-485D-9913-CF53AC40FA32"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="NVRAM"
+		size_in_kb="1536"
+		type="E3F3F58B-597F-BA6F-EFB5-96C5CE76D468"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	</physical_partition>
+
+
+</configuration>
+

@@ -1,0 +1,29 @@
+From 32e563fa5b10f11fd9888b2925c6ae4f7dd02022 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Mon, 19 May 2025 18:13:14 +0530
+Subject: [PATCH] include: Override default kernel details file
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ include/kernel-version.mk | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/include/kernel-version.mk b/include/kernel-version.mk
+index 958ed9be0c..ebdd568e9f 100644
+--- a/include/kernel-version.mk
++++ b/include/kernel-version.mk
+@@ -7,6 +7,11 @@ ifdef CONFIG_TESTING_KERNEL
+ endif
+ 
+ KERNEL_DETAILS_FILE=$(INCLUDE_DIR)/kernel-$(KERNEL_PATCHVER)
++
++ifneq ($(KERNEL_DETAILS_FILE_CUSTOM),)
++  KERNEL_DETAILS_FILE=$(KERNEL_DETAILS_FILE_CUSTOM)
++endif
++
+ ifeq ($(wildcard $(KERNEL_DETAILS_FILE)),)
+   $(error Missing kernel version/hash file for $(KERNEL_PATCHVER). Please create $(KERNEL_DETAILS_FILE))
+ endif
+-- 
+2.43.0
+

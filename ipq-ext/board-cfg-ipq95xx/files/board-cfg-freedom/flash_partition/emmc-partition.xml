@@ -220,7 +220,15 @@ SPDX-License-Identifier: ISC
 		filename=""
 		/>
 	<partition
-		label="0:HLOS"
+		label="mfgdata"
+		size_in_kb="1024"
+		type="575C6774-0E78-4295-961C-A5BE0EED125F"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="kernel-active"
 		size_in_kb="7168"
 		type="B51F2982-3EBE-46DE-8721-EE641E1F9997"
 		bootable="false"
@@ -231,7 +239,7 @@ SPDX-License-Identifier: ISC
 		filename_64="openwrt-ipq95xx-generic-qcom_alxx-fit-uImage.itb"
 		/>
 	<partition
-		label="0:HLOS_1"
+		label="kernel-inactive"
 		size_in_kb="7168"
 		type="A71DA577-7F81-4626-B4A2-E377F9174525"
 		bootable="false"
@@ -239,7 +247,7 @@ SPDX-License-Identifier: ISC
 		filename=""
 		/>
 	<partition
-		label="rootfs"
+		label="rootfs-active"
 		size_in_kb="125952"
 		type="98D2248D-7140-449F-A954-39D67BD6C3B4"
 		bootable="false"
@@ -250,9 +258,17 @@ SPDX-License-Identifier: ISC
 		filename_64="openwrt-ipq95xx-generic-squashfs-root.img"
 		/>
 	<partition
-		label="rootfs_1"
+		label="rootfs-inactive"
 		size_in_kb="125952"
 		type="5647B280-DC2A-485D-9913-CF53AC40FA32"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs_data"
+		size_in_kb="32768"
+		type="52943F0D-D98B-4497-9CCA-92902A5B177E"
 		bootable="false"
 		readonly="false"
 		filename=""
@@ -261,6 +277,22 @@ SPDX-License-Identifier: ISC
 		label="NVRAM"
 		size_in_kb="1536"
 		type="E3F3F58B-597F-BA6F-EFB5-96C5CE76D468"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="securestore"
+		size_in_kb="16384"
+		type="53D16500-05C7-4954-A014-0C310E19AE4D"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="lcm_data"
+		size_in_kb="1048576"
+		type="5A9DA2D6-D796-4938-8615-062AF0EE639A"
 		bootable="false"
 		readonly="false"
 		filename=""
@@ -557,7 +589,15 @@ SPDX-License-Identifier: ISC
 		filename=""
 		/>
 	<partition
-		label="0:HLOS"
+		label="mfgdata"
+		size_in_kb="1024"
+		type="575C6774-0E78-4295-961C-A5BE0EED125F"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="kernel-active"
 		size_in_kb="7168"
 		type="B51F2982-3EBE-46DE-8721-EE641E1F9997"
 		bootable="false"
@@ -568,7 +608,7 @@ SPDX-License-Identifier: ISC
 		filename_64="openwrt-ipq95xx-generic-qcom_alxx-fit-uImage.itb"
 		/>
 	<partition
-		label="0:HLOS_1"
+		label="kernel-inactive"
 		size_in_kb="7168"
 		type="A71DA577-7F81-4626-B4A2-E377F9174525"
 		bootable="false"
@@ -576,7 +616,7 @@ SPDX-License-Identifier: ISC
 		filename=""
 		/>
 	<partition
-		label="rootfs"
+		label="rootfs-active"
 		size_in_kb="124928"
 		type="98D2248D-7140-449F-A954-39D67BD6C3B4"
 		bootable="false"
@@ -587,9 +627,17 @@ SPDX-License-Identifier: ISC
 		filename_64="openwrt-ipq95xx-generic-squashfs-root.img"
 		/>
 	<partition
-		label="rootfs_1"
+		label="rootfs-inactive"
 		size_in_kb="124928"
 		type="5647B280-DC2A-485D-9913-CF53AC40FA32"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="rootfs_data"
+		size_in_kb="32768"
+		type="52943F0D-D98B-4497-9CCA-92902A5B177E"
 		bootable="false"
 		readonly="false"
 		filename=""
@@ -598,6 +646,22 @@ SPDX-License-Identifier: ISC
 		label="NVRAM"
 		size_in_kb="1536"
 		type="E3F3F58B-597F-BA6F-EFB5-96C5CE76D468"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="securestore"
+		size_in_kb="16384"
+		type="53D16500-05C7-4954-A014-0C310E19AE4D"
+		bootable="false"
+		readonly="false"
+		filename=""
+		/>
+	<partition
+		label="lcm_data"
+		size_in_kb="1048576"
+		type="5A9DA2D6-D796-4938-8615-062AF0EE639A"
 		bootable="false"
 		readonly="false"
 		filename=""

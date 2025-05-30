@@ -40,11 +40,11 @@ SPDX-License-Identifier: ISC
 			<primary_boot length="4">0</primary_boot>
 		</partition>
 		<partition>
-			<name length="16" type="string">0:HLOS</name>
+			<name length="16" type="string">kernel-active</name>
 			<primary_boot length="4">0</primary_boot>
 		</partition>
 		<partition>
-			<name length="16" type="string">rootfs</name>
+			<name length="16" type="string">rootfs-active</name>
 			<primary_boot length="4">0</primary_boot>
 		</partition>
 		<partition>

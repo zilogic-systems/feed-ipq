@@ -1,0 +1,5 @@
+config TARGET_BUILD_PRPL
+	bool "Target Build - PRPL"
+	depends on TARGET_ipq95xx
+	default n
+

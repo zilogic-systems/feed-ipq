@@ -21,7 +21,7 @@ Build/Compile=true
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)/
-	$(CP) -rf ./files/board-cfg-ipq9574 $(STAGING_DIR_IMAGE)/
+	$(CP) -rf ./files/* $(STAGING_DIR_IMAGE)/
 endef
 
 $(eval $(call BuildPackage,$(PKG_NAME)))

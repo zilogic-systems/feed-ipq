@@ -20,7 +20,7 @@ define Package/$(PKG_NAME)
   SECTION:=Firmware
   CATEGORY:=ipq-ext
   TITLE:=qca-oem-firmware
-  DEPENDS:=@TARGET_ipq95xx||TARGET_ipq53xx||TARGET_ipq54xx
+  DEPENDS:=@TARGET_ENABLE_SINGLE_IMAGE @TARGET_ipq95xx||TARGET_ipq53xx||TARGET_ipq54xx
 endef
 
 define Package/$(PKG_NAME)/description

@@ -3,3 +3,7 @@ config TARGET_BUILD_PRPL
 	depends on TARGET_ipq95xx
 	default n
 
+config TARGET_ENABLE_SINGLE_IMAGE
+	bool "Enable Single Image Generation"
+	depends on TARGET_ipq95xx
+	default n

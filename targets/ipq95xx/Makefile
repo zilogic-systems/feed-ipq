@@ -14,23 +14,21 @@ KERNEL_PATCHVER:=6.6
 KERNEL_DETAILS_FILE_CUSTOM=$(PLATFORM_DIR)/kernel-$(KERNEL_PATCHVER)
 
 include $(INCLUDE_DIR)/target.mk
+include $(PLATFORM_DIR)/profiles/ipq-ath.mk
 
 DEFAULT_PACKAGES += \
 	e2fsprogs uboot-envtools kmod-leds-gpio kmod-gpio-button-hotplug kmod-button-hotplug \
 	kmod-ata-core kmod-ata-ahci kmod-ata-ahci-platform kmod-usb3 \
-	kmod-usb-phy-ipq807x kmod-usb-dwc3-qcom-internal \
-	kmod-fs-ext4 losetup mkf2fs f2fsck kmod-fs-f2fs kmod-fs-vfat \
-	kmod-usb-phy-ipq807x kmod-usb-dwc3-internal kmod-usb-dwc3-qcom-internal \
-	kmod-usb-storage kmod-usb-storage-extras kmod-usb-storage-uas \
-	kmod-leds-gpio swconfig ethtool tcpdump taskset \
-	kmod-qca-nss-ppe kmod-qca-nss-ppe-ds kmod-qca-nss-ppe-vp \
-	kmod-qca-nss-ppe-bridge-mgr kmod-qca-nss-ppe-vlan-mgr kmod-qca-ovsmgr \
-	kmod-qca-ssdk-qca-nohnat kmod-qca-nss-dp-qca kmod-bonding qca-ssdk-shell \
-	kmod-qca8084 kmod-qca81xx kmod-qca8xxx-phc kmod-qca8k kmod-aqr-phy \
-	kmod-telemetry-agent kmod-ath12k-qca wpad-qca-mesh-openssl iwinfo \
-	qca-wifi-scripts ath-wifi-scripts wififw_mount_script \
-	hostapd-qca-utils wpa-qca-cli \
+	kmod-usb-phy-ipq807x kmod-usb-dwc3-qcom-internal kmod-usb-dwc3-internal \
+	kmod-fs-ext4 mkf2fs f2fsck kmod-fs-f2fs \
+	kmod-leds-gpio taskset
+
+IPQ_EXT_PROFILE_PACKAGES := \
 	meta-tools-ipq qca-oem-firmware
+
+DEFAULT_PACKAGES += \
+	$(IPQ_ATH_PROFILE_PACKAGES) \
+	$(IPQ_EXT_PROFILE_PACKAGES)
 
 GENERIC_LINUX_CONFIG = $(PLATFORM_DIR)/generic/config-$(KERNEL_PATCHVER)-platform
 

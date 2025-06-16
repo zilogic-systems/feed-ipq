@@ -69,7 +69,7 @@ define Device/qcom_rdp433
 	DEVICE_FLASH_TYPE := norplusnand
 	DEVICE_BOARD_CONFIG := board-cfg-ipq9574
 	SOC := ipq9574
-	DEVICE_PACKAGES := uboot-ipq9574-norplusnand board-cfg-ipq95xx
+	DEVICE_PACKAGES += uboot-ipq9574-norplusnand board-cfg-ipq95xx
 endef
 TARGET_DEVICES += qcom_rdp433
 
@@ -82,6 +82,6 @@ define Device/qcom_rdp433-mht-phy
 	DEVICE_FLASH_TYPE := emmc
 	DEVICE_BOARD_CONFIG := board-cfg-ipq9574
 	SOC := ipq9574
-	DEVICE_PACKAGES := uboot-ipq9574-mmc board-cfg-ipq95xx
+	DEVICE_PACKAGES += uboot-ipq9574-mmc board-cfg-ipq95xx
 endef
 TARGET_DEVICES += qcom_rdp433-mht-phy

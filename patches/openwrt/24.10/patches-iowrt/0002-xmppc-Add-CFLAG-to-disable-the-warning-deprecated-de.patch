@@ -1,0 +1,27 @@
+From c875bdfaeed882655660d14a0ac4b59182c2bedf Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Wed, 18 Jun 2025 12:46:42 +0530
+Subject: [PATCH 2/3] xmppc: Add CFLAG to disable the warning
+ deprecated-declarations
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ xmppc/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/xmppc/Makefile b/xmppc/Makefile
+index e87f36dd0..52fd94f62 100755
+--- a/xmppc/Makefile
++++ b/xmppc/Makefile
+@@ -51,7 +51,7 @@ endif
+ 
+ TARGET_CFLAGS += \
+ 	-D_GNU_SOURCE \
+-	-Wall -Werror
++	-Wall -Werror -Wno-deprecated-declarations
+ 
+ define Package/$(PKG_NAME)/install
+ 	$(INSTALL_DIR) $(1)/etc/icwmpd/plugins
+-- 
+2.43.0
+

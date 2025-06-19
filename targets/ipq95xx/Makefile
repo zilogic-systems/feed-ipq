@@ -15,13 +15,15 @@ KERNEL_DETAILS_FILE_CUSTOM=$(PLATFORM_DIR)/kernel-$(KERNEL_PATCHVER)
 
 include $(INCLUDE_DIR)/target.mk
 include $(PLATFORM_DIR)/profiles/ipq-ath.mk
+include $(PLATFORM_DIR)/profiles/iowrt.mk
 
 DEFAULT_PACKAGES += \
 	e2fsprogs uboot-envtools kmod-leds-gpio kmod-gpio-button-hotplug kmod-button-hotplug \
 	kmod-ata-core kmod-ata-ahci kmod-ata-ahci-platform kmod-usb3 \
 	kmod-usb-phy-ipq807x kmod-usb-dwc3-qcom-internal kmod-usb-dwc3-internal \
 	kmod-fs-ext4 mkf2fs f2fsck kmod-fs-f2fs \
-	kmod-leds-gpio taskset
+	kmod-leds-gpio taskset \
+	rpcd libuci-lua
 
 IPQ_EXT_PROFILE_PACKAGES := \
 	meta-tools-ipq qca-oem-firmware
@@ -29,6 +31,10 @@ IPQ_EXT_PROFILE_PACKAGES := \
 DEFAULT_PACKAGES += \
 	$(IPQ_ATH_PROFILE_PACKAGES) \
 	$(IPQ_EXT_PROFILE_PACKAGES)
+
+# Uncomment to enable TR-x69 packages
+# DEFAULT_PACKAGES += \
+# 	$(IOWRT_PROFILE_PACKAGES) -odhcpd-ipv6only
 
 GENERIC_LINUX_CONFIG = $(PLATFORM_DIR)/generic/config-$(KERNEL_PATCHVER)-platform
 

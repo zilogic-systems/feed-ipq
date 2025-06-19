@@ -1,0 +1,32 @@
+From f8f1f6fa3e65cbba2aa80768df88d1e40a540873 Mon Sep 17 00:00:00 2001
+From: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+Date: Wed, 18 Jun 2025 12:47:22 +0530
+Subject: [PATCH 3/3] sysmngr: Include libgen.h to fix compilation issue
+
+Signed-off-by: Dineshkumar Loganathan <dineshloganathan395@gmail.com>
+---
+ sysmngr/patches/0001_add_libgen_header_file.patch | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+ create mode 100644 sysmngr/patches/0001_add_libgen_header_file.patch
+
+diff --git a/sysmngr/patches/0001_add_libgen_header_file.patch b/sysmngr/patches/0001_add_libgen_header_file.patch
+new file mode 100644
+index 000000000..791040405
+--- /dev/null
++++ b/sysmngr/patches/0001_add_libgen_header_file.patch
+@@ -0,0 +1,12 @@
++diff --git a/src/processes.c b/src/processes.c
++index 0690671..40e44e7 100644
++--- a/src/processes.c
+++++ b/src/processes.c
++@@ -11,6 +11,7 @@
++ 
++ #include "utils.h"
++ #include "processes.h"
+++#include <libgen.h>
++ 
++ #include <libbbfdm-api/bbfdm_api.h>
++ 
+-- 
+2.43.0
+
